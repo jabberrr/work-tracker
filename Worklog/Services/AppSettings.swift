@@ -49,6 +49,15 @@ final class AppSettings {
     var weekStartsOnMonday: Bool { didSet { write(weekStartsOnMonday, "weekStartsOnMonday") } }
     /// Applies at next launch (PersistenceController reads it once).
     var iCloudSyncEnabled: Bool { didSet { write(iCloudSyncEnabled, "iCloudSyncEnabled") } }
+    /// true: a takeaway is shown only during the next session after it was written, and retired when that session's
+    /// review completes. false: shown until a newer takeaway replaces it (or it is dismissed).
+    var takeawayNextSessionOnly: Bool { didSet { write(takeawayNextSessionOnly, "takeawayNextSessionOnly") } }
+    /// Switch to an accessory app (no Dock icon) while the main window is closed; the menu bar extra stays.
+    var hideDockIconWhenClosed: Bool { didSet { write(hideDockIconWhenClosed, "hideDockIconWhenClosed") } }
+    /// The local-only storage reason whose banner the user dismissed ("" = none). A different reason shows again.
+    var dismissedLocalOnlyBannerReason: String {
+        didSet { write(dismissedLocalOnlyBannerReason, "dismissedLocalOnlyBannerReason") }
+    }
 
     // MARK: Overlay
     /// Source of truth for overlay visibility.
@@ -103,6 +112,9 @@ final class AppSettings {
         dailyGoalHours = Self.double(defaults, "dailyGoalHours", 4)
         weekStartsOnMonday = Self.bool(defaults, "weekStartsOnMonday", true)
         iCloudSyncEnabled = Self.bool(defaults, "iCloudSyncEnabled", true)
+        takeawayNextSessionOnly = Self.bool(defaults, "takeawayNextSessionOnly", true)
+        hideDockIconWhenClosed = Self.bool(defaults, "hideDockIconWhenClosed", false)
+        dismissedLocalOnlyBannerReason = defaults.string(forKey: Self.key("dismissedLocalOnlyBannerReason")) ?? ""
 
         overlayEnabled = Self.bool(defaults, "overlayEnabled", false)
         overlayShowTimer = Self.bool(defaults, "overlayShowTimer", true)

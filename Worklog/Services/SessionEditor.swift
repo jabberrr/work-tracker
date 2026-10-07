@@ -23,7 +23,7 @@ enum SessionEditError: LocalizedError {
 /// After-the-fact edits to sessions (used by History/Detail; the engine reuses `normalize` and `endSession`).
 /// Every mutating call touches the session, recomputes its stored duration, normalizes it and saves.
 @MainActor enum SessionEditor {
-    static let minimumSegmentLength: TimeInterval = 1
+    nonisolated static let minimumSegmentLength: TimeInterval = 1
 
     // MARK: - Segments
 

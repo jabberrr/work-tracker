@@ -9,6 +9,12 @@ final class OverlayPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+/// The overlay's SwiftUI host. `mouseDownCanMoveWindow` lets a drag on any non-interactive area move the panel
+/// (`isMovableByWindowBackground`); SwiftUI controls and the note field still receive their clicks.
+final class OverlayHostingView<Content: View>: NSHostingView<Content> {
+    override var mouseDownCanMoveWindow: Bool { true }
+}
+
 /// Owns the floating overlay panel. `settings.overlayEnabled` is the source of truth for visibility.
 @MainActor @Observable
 final class OverlayPanelController {
@@ -113,8 +119,10 @@ final class OverlayPanelController {
 
     private func buildPanel() {
         guard let services else { return }
-        let hosting = NSHostingController(rootView: OverlayView().withAppServices(services))
-        hosting.sizingOptions = [.preferredContentSize]
+        // OverlayView has a fixed width and a fixed (intrinsic) height, so the hosting view's min/max-size
+        // constraints pin the panel's content size to the SwiftUI content as sections appear and disappear.
+        let hostingView = OverlayHostingView(rootView: OverlayView().withAppServices(services))
+        hostingView.sizingOptions = [.minSize, .intrinsicContentSize, .maxSize]
 
         let panel = OverlayPanel(
             contentRect: NSRect(x: 0, y: 0, width: 300, height: 160),
@@ -132,7 +140,11 @@ final class OverlayPanelController {
         panel.becomesKeyOnlyIfNeeded = true
         panel.animationBehavior = .utilityWindow
         panel.title = "Worklog Overlay"
-        panel.contentViewController = hosting
+        panel.contentView = hostingView
+        let fitting = hostingView.fittingSize
+        if fitting.width > 0, fitting.height > 0 {
+            panel.setContentSize(fitting)
+        }
 
         if !panel.setFrameUsingName(Self.autosaveName) {
             positionTopRight(panel)

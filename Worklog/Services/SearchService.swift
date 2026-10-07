@@ -89,18 +89,40 @@ enum SearchService {
 
     /// Snippet fields in priority order (title excluded).
     private static func fieldTexts(of session: WorkSession) -> [(SearchSnippet.Field, [String])] {
-        let segments = session.sortedSegments
-        let points = session.sortedLearningPoints
-        let attachments = session.sortedAttachments
-        return [
-            (.label, [session.label?.name].compactMap { $0 } + segments.compactMap { $0.label?.name }),
-            (.tag, session.tagList.map(\.name) + segments.flatMap { $0.tagList.map(\.name) }),
-            (.segmentFocus, segments.map(\.focus).filter { !$0.isEmpty }),
-            (.note, session.sortedNotes.map(\.text)),
-            (.learning, [session.learningText, session.overlaySummary].filter { !$0.isEmpty }),
-            (.learningPoint, points.map(\.text) + points.flatMap { $0.tagList.map(\.name) }),
-            (.attachmentCaption, attachments.map(\.caption).filter { !$0.isEmpty } + attachments.map(\.filename)),
-        ]
+        // Typed locals keep the type checker fast (one big heterogeneous literal can time out).
+        let segments: [Segment] = session.sortedSegments
+        let points: [LearningPoint] = session.sortedLearningPoints
+        let attachments: [Attachment] = session.sortedAttachments
+
+        let sessionLabelNames: [String] = session.label.map { [$0.name] } ?? []
+        let segmentLabelNames: [String] = segments.compactMap { $0.label?.name }
+        let labelNames: [String] = sessionLabelNames + segmentLabelNames
+
+        let sessionTagNames: [String] = session.tagList.map { $0.name }
+        let segmentTagNames: [String] = segments.flatMap { segment -> [String] in segment.tagList.map { $0.name } }
+        let tagNames: [String] = sessionTagNames + segmentTagNames
+
+        let focusTexts: [String] = segments.map { $0.focus }.filter { !$0.isEmpty }
+        let noteTexts: [String] = session.sortedNotes.map { $0.text }
+        let learningTexts: [String] = [session.learningText, session.overlaySummary].filter { !$0.isEmpty }
+
+        let pointTexts: [String] = points.map { $0.text }
+        let pointTagNames: [String] = points.flatMap { point -> [String] in point.tagList.map { $0.name } }
+        let learningPointTexts: [String] = pointTexts + pointTagNames
+
+        let captions: [String] = attachments.map { $0.caption }.filter { !$0.isEmpty }
+        let filenames: [String] = attachments.map { $0.filename }
+        let attachmentTexts: [String] = captions + filenames
+
+        var result: [(SearchSnippet.Field, [String])] = []
+        result.append((.label, labelNames))
+        result.append((.tag, tagNames))
+        result.append((.segmentFocus, focusTexts))
+        result.append((.note, noteTexts))
+        result.append((.learning, learningTexts))
+        result.append((.learningPoint, learningPointTexts))
+        result.append((.attachmentCaption, attachmentTexts))
+        return result
     }
 
     /// ≤ `snippetLength` characters (ellipses included), centered on `range`; newlines collapsed to spaces.

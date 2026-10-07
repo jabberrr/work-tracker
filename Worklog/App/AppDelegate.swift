@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import Observation
 
 /// App lifecycle hooks: launch wiring, quit handling (auto-pause + backup) and reopen.
 @MainActor
@@ -14,6 +15,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let auth = services.auth
         Task { await auth.checkCredentialState() }
         services.overlay.applicationDidFinishLaunching()   // shows the overlay if settings.overlayEnabled
+        observeDockIconSetting()
+    }
+
+    /// Applies "Hide Dock icon when main window closed" as soon as it is toggled. RootView applies it when the main
+    /// window opens/closes, so nothing is applied at launch (avoids a Dock icon flicker before the window appears).
+    private func observeDockIconSetting() {
+        let settings = services.settings
+        withObservationTracking {
+            _ = settings.hideDockIconWhenClosed
+        } onChange: { [weak self] in
+            Task { @MainActor [weak self] in
+                guard let self else { return }
+                self.services.router.applyActivationPolicy(hideDockIconWhenClosed: self.services.settings.hideDockIconWhenClosed)
+                self.observeDockIconSetting()
+            }
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

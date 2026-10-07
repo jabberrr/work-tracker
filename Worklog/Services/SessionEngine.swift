@@ -44,15 +44,30 @@ final class SessionEngine {
     /// every other view uses TimelineView(.periodic(from: .now, by: 1)).
     private(set) var tick: Date = .now
     var lastError: String? = nil
+    /// Set when reconcile stopped an older session because a newer one was started (typically on another Mac).
+    /// RootView shows it as a dismissible info banner; `clearHandoffNotice()` hides it.
+    private(set) var handoffNotice: String? = nil
+
+    /// Stable per-install identifier (UserDefaults "engine.deviceID") stamped on sessions this Mac controls.
+    let deviceID: String
 
     var isActive: Bool { activeSession != nil }
     var isPaused: Bool { activeSession?.isPaused ?? false }
     var isRunning: Bool { isActive && !isPaused }
     var currentSegment: Segment? { activeSession?.currentSegment }
     var currentLabel: WorkLabel? { currentSegment?.effectiveLabel ?? activeSession?.label }
+    /// The active session was last controlled from another Mac (its owner is set and isn't this install).
+    var isActiveSessionOnAnotherMac: Bool {
+        guard let owner = activeSession?.ownerDeviceID, !owner.isEmpty else { return false }
+        return owner != deviceID
+    }
 
     // MARK: Private
     private static let autoPauseKey = "engine.autoPauseReason"
+    private static let deviceIDKey = "engine.deviceID"
+    /// The session that was started while a takeaway was showing ("consumer") and that takeaway's session ("source").
+    private static let takeawayConsumerKey = "engine.takeawayConsumerUUID"
+    private static let takeawaySourceKey = "engine.takeawaySourceUUID"
 
     private let context: ModelContext
     private let settings: AppSettings
@@ -65,15 +80,28 @@ final class SessionEngine {
     @ObservationIgnored private var workspaceObserverTokens: [NSObjectProtocol] = []
     @ObservationIgnored private var isObservingSystemEvents = false
     @ObservationIgnored private var remoteChangeTask: Task<Void, Never>?
+    @ObservationIgnored private var didSaveTask: Task<Void, Never>?
+    /// Sessions that were discarded but not deleted yet (two-phase discard). Never adopted, never shown as takeaway.
+    @ObservationIgnored private var discardingUUIDs: Set<UUID> = []
+    /// The pending (ended) session discarded from the end sheet; deleted by `finishPendingDiscard()`.
+    @ObservationIgnored private var pendingDiscardUUID: UUID?
 
     init(context: ModelContext, settings: AppSettings) {
         self.context = context
         self.settings = settings
+        if let stored = settings.defaults.string(forKey: Self.deviceIDKey), !stored.isEmpty {
+            deviceID = stored
+        } else {
+            let fresh = UUID().uuidString
+            settings.defaults.set(fresh, forKey: Self.deviceIDKey)
+            deviceID = fresh
+        }
     }
 
     // MARK: - Lifecycle
 
-    /// Fetch sessions with endedAt == nil; adopt the most recent as active (end any others at lastActivityDate);
+    /// Fetch sessions with endedAt == nil; adopt the most recent as active (end any others at the handoff — see
+    /// `handoffEnd`); set `handoffNotice` when that happens;
     /// restore autoPauseReason; refreshTakeaway(); start/stop tick timer. Called once by AppServices.
     func restoreActiveSession() {
         autoPauseReason = defaults.string(forKey: Self.autoPauseKey).flatMap(AutoPauseReason.init(rawValue:))
@@ -90,8 +118,20 @@ final class SessionEngine {
         var changed = false
         if let newest = actives.first {
             for extra in actives.dropFirst() {
-                SessionEditor.endSession(extra, at: extra.lastActivityDate)
+                let end = handoffEnd(of: extra, newest: newest)
+                let extraOwner = extra.ownerDeviceID
+                let newestOwner = newest.ownerDeviceID
+                SessionEditor.endSession(extra, at: end)
                 changed = true
+                let time = (extra.endedAt ?? end).shortTime
+                if extraOwner == deviceID && newestOwner != deviceID {
+                    handoffNotice = "A newer session started on another Mac, so this Mac's session was stopped at \(time)."
+                } else if !extraOwner.isEmpty && extraOwner != deviceID {
+                    handoffNotice = "A session from another Mac was stopped at \(time)."
+                } else {
+                    handoffNotice = "An older running session was stopped at \(time)."
+                }
+                Log.engine.info("Reconcile: ended an older active session (handoff)")
             }
             if activeSession !== newest { activeSession = newest }
         } else if activeSession != nil {
@@ -150,11 +190,18 @@ final class SessionEngine {
         ) { [weak self] _ in
             MainActor.assumeIsolated { () -> Void in self?.scheduleRemoteChangeReconcile() }
         })
+        observerTokens.append(center.addObserver(
+            forName: ModelContext.didSave, object: nil, queue: .main
+        ) { [weak self] _ in
+            MainActor.assumeIsolated { () -> Void in self?.scheduleTakeawayRefresh() }
+        })
     }
 
-    /// On quit: if settings.pauseOnQuit && isRunning → pause(), autoPauseReason = .quit. Always saves.
+    /// On quit: if settings.pauseOnQuit && isRunning (and this Mac owns the session) → pause(), autoPauseReason = .quit.
+    /// Finishes any pending discard. Always saves.
     func prepareForTermination() {
-        if settings.pauseOnQuit && isRunning {
+        flushDiscards()
+        if settings.pauseOnQuit && isRunning && isOwnedByThisDevice(activeSession) {
             pause()
             autoPauseReason = .quit
         }
@@ -222,8 +269,10 @@ final class SessionEngine {
 
         let session = WorkSession(startedAt: date)
         context.insert(session)
+        session.ownerDeviceID = deviceID
         session.label = label
         session.tags = tags
+        rememberTakeawaySource(for: session)
 
         let segment = Segment(startedAt: date, endedAt: nil, sortIndex: 0, focus: focus.trimmed)
         context.insert(segment)
@@ -246,6 +295,7 @@ final class SessionEngine {
         let lowerBound = max(session.startedAt, pauses.last?.end ?? session.startedAt)
         pauses.append(PauseInterval(start: max(date, lowerBound)))
         session.pauseIntervals = pauses
+        stampOwner(session)
         session.touch()
         save()
         updateTickTimer()
@@ -258,6 +308,7 @@ final class SessionEngine {
         guard let lastIndex = pauses.indices.last else { return }
         pauses[lastIndex].end = max(date, pauses[lastIndex].start)
         session.pauseIntervals = pauses
+        stampOwner(session)
         session.touch()
         autoPauseReason = nil
         save()
@@ -280,30 +331,41 @@ final class SessionEngine {
     @discardableResult
     func stop(at date: Date = .now) -> WorkSession? {
         guard let session = activeSession else { return nil }
+        stampOwner(session)
         SessionEditor.endSession(session, at: date)
         activeSession = nil
         autoPauseReason = nil
-        save()
-        updateTickTimer()
         if settings.showEndSessionSheet {
+            save()
             pendingEndSession = session
         } else {
+            // No review sheet: the review is complete right away.
+            consumeTakeawayIfNeeded(reviewed: session)
+            save()
             refreshTakeaway()
         }
+        updateTickTimer()
         Log.engine.info("Stopped session (\(session.storedActiveDuration, privacy: .public)s active)")
         return session
     }
 
     /// Deletes the active session (cascade). Callers confirm first if settings.confirmBeforeDiscard.
-    func discard() {
-        guard let session = activeSession else { return }
+    /// Safe to call while views still show the session: `activeSession` becomes nil immediately (views switch away),
+    /// the delete + save happen on the next main-actor turn. The returned task completes after the delete
+    /// (tests can `await engine.discard()?.value`); nil when there was no active session.
+    @discardableResult
+    func discard() -> Task<Void, Never>? {
+        guard let session = activeSession else { return nil }
+        let uuid = session.uuid
+        discardingUUIDs.insert(uuid)
         activeSession = nil
         autoPauseReason = nil
-        context.delete(session)
-        save()
         updateTickTimer()
-        refreshTakeaway()
         Log.engine.info("Discarded active session")
+        return Task { @MainActor [weak self] in
+            await Task.yield()
+            self?.finishDiscard(uuid: uuid)
+        }
     }
 
     /// Live split. Closes current segment at `date` and opens Segment(startedAt: date, sortIndex: max+1,
@@ -313,6 +375,7 @@ final class SessionEngine {
     @discardableResult
     func split(label: WorkLabel?, tags: [WorkTag] = [], focus: String = "", at date: Date = .now) -> Segment? {
         guard let session = activeSession else { return nil }
+        stampOwner(session)
         let resolvedLabel = label ?? currentLabel
         let segments = session.sortedSegments
         let current = session.currentSegment ?? segments.last
@@ -343,6 +406,7 @@ final class SessionEngine {
     /// Edit the current segment in place (no split). If the session has exactly one segment, session.label follows.
     func updateCurrentSegment(label: WorkLabel?, tags: [WorkTag], focus: String) {
         guard let session = activeSession, let segment = session.currentSegment else { return }
+        stampOwner(session)
         segment.label = label
         segment.tags = tags
         segment.focus = focus.trimmed
@@ -362,6 +426,7 @@ final class SessionEngine {
         context.insert(note)
         note.session = session
         note.segment = session.currentSegment ?? session.segment(containing: date)
+        stampOwner(session)
         session.touch()
         save()
         return note
@@ -370,24 +435,46 @@ final class SessionEngine {
     // MARK: - End-of-session review
 
     /// Save pending session (touch, recomputeStoredDuration), pendingEndSession = nil, refreshTakeaway().
+    /// With `settings.takeawayNextSessionOnly`, the takeaway that was showing when this session started is retired.
     /// Idempotent: safe to call again from the sheet's dismissal binding.
     func completeReview() {
         if let session = pendingEndSession {
             pendingEndSession = nil
-            session.recomputeStoredDuration()
-            session.touch()
+            if !session.isDeleted {
+                session.recomputeStoredDuration()
+                session.touch()
+                consumeTakeawayIfNeeded(reviewed: session)
+            }
             save()
         }
         refreshTakeaway()
     }
 
-    /// Delete pending session; pendingEndSession = nil.
+    /// Phase 1 of discarding the pending (ended) session: remembers it and sets pendingEndSession = nil so the
+    /// end sheet closes. Nothing is deleted yet — RootView's sheet `onDismiss` calls `finishPendingDiscard()` once
+    /// the sheet's views are gone (a fallback finishes it after 2 s if no sheet was on screen).
     func discardPendingSession() {
         guard let session = pendingEndSession else { return }
+        let uuid = session.uuid
+        if let previous = pendingDiscardUUID, previous != uuid {
+            finishDiscard(uuid: previous)
+        }
+        pendingDiscardUUID = uuid
+        discardingUUIDs.insert(uuid)
         pendingEndSession = nil
-        context.delete(session)
-        save()
         refreshTakeaway()
+        Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(2))
+            guard let self, self.pendingDiscardUUID == uuid else { return }
+            self.finishPendingDiscard()
+        }
+    }
+
+    /// Phase 2: deletes the session recorded by `discardPendingSession()`, saves, refreshTakeaway(). No-op otherwise.
+    func finishPendingDiscard() {
+        guard let uuid = pendingDiscardUUID else { return }
+        pendingDiscardUUID = nil
+        finishDiscard(uuid: uuid)
     }
 
     /// Re-open pending session (only if no active session): endedAt = nil, last segment endedAt = nil,
@@ -403,6 +490,7 @@ final class SessionEngine {
         session.pauseIntervals = pauses
         session.endedAt = nil
         session.sortedSegments.last?.endedAt = nil
+        stampOwner(session)
         SessionEditor.normalize(session)
         session.recomputeStoredDuration(now: now)
         session.touch()
@@ -423,7 +511,8 @@ final class SessionEngine {
         descriptor.fetchLimit = 50
         let candidates = (try? context.fetch(descriptor)) ?? []
         var newValue: SessionTakeaway?
-        for session in candidates where session !== pendingEndSession && !session.isDeleted {
+        for session in candidates where session !== pendingEndSession && !session.isDeleted
+            && !discardingUUIDs.contains(session.uuid) {
             guard let text = session.takeawayText else { continue }
             newValue = SessionTakeaway(sessionUUID: session.uuid, title: session.displayTitle,
                                        date: session.startedAt, text: text, labelName: session.label?.name)
@@ -432,8 +521,27 @@ final class SessionEngine {
         if newValue != lastTakeaway { lastTakeaway = newValue }
     }
 
+    /// "Done" on a takeaway: turns off showInOverlay on the shown takeaway's session (and on older sessions that would
+    /// otherwise resurface in its place), saves, refreshTakeaway().
+    func dismissTakeaway() {
+        guard let takeaway = lastTakeaway else { return }
+        if let source = fetchSession(uuid: takeaway.sessionUUID) {
+            retireTakeaways(through: source)
+            source.touch()
+        }
+        if defaults.string(forKey: Self.takeawaySourceKey) == takeaway.sessionUUID.uuidString {
+            clearTakeawayLink()   // already retired; nothing left for the next review to consume
+        }
+        save()
+        refreshTakeaway()
+    }
+
     func clearAutoPauseReason() {
         autoPauseReason = nil
+    }
+
+    func clearHandoffNotice() {
+        handoffNotice = nil
     }
 
     // MARK: - Private
@@ -444,7 +552,8 @@ final class SessionEngine {
             sortBy: [SortDescriptor(\WorkSession.startedAt, order: .reverse)]
         )
         do {
-            return try context.fetch(descriptor).filter { !$0.isDeleted }
+            let excluded = discardingUUIDs
+            return try context.fetch(descriptor).filter { !$0.isDeleted && !excluded.contains($0.uuid) }
         } catch {
             Log.engine.error("Fetching active sessions failed: \(error.localizedDescription, privacy: .public)")
             return []
@@ -457,8 +566,104 @@ final class SessionEngine {
         return (try? context.fetch(descriptor))?.first(where: { !$0.isDeleted })
     }
 
+    // MARK: Ownership
+
+    /// Sessions with no owner (created before ownership existed, or imported) count as this Mac's.
+    private func isOwnedByThisDevice(_ session: WorkSession?) -> Bool {
+        guard let session else { return false }
+        return session.ownerDeviceID.isEmpty || session.ownerDeviceID == deviceID
+    }
+
+    /// Manual control from this Mac makes it the session's owner.
+    private func stampOwner(_ session: WorkSession) {
+        if session.ownerDeviceID != deviceID { session.ownerDeviceID = deviceID }
+    }
+
+    /// When two Macs each started a session, the older one ends where the newer one began (the handoff), unless
+    /// the older one had been idle for longer than the long-session threshold — then it ends at its last activity.
+    private func handoffEnd(of extra: WorkSession, newest: WorkSession) -> Date {
+        let lastActivity = extra.lastActivityDate
+        let handoff = newest.startedAt
+        guard handoff > lastActivity else { return lastActivity }
+        let threshold = max(settings.longSessionWarningHours, 0) * 3600
+        return handoff.timeIntervalSince(lastActivity) <= threshold ? handoff : lastActivity
+    }
+
+    // MARK: Discard
+
+    private func finishDiscard(uuid: UUID) {
+        defer { discardingUUIDs.remove(uuid) }
+        if pendingDiscardUUID == uuid { pendingDiscardUUID = nil }
+        if let session = fetchSession(uuid: uuid) {
+            if activeSession === session { activeSession = nil }
+            if pendingEndSession === session { pendingEndSession = nil }
+            context.delete(session)
+            save()
+        }
+        if defaults.string(forKey: Self.takeawayConsumerKey) == uuid.uuidString {
+            clearTakeawayLink()
+        }
+        refreshTakeaway()
+        updateTickTimer()
+    }
+
+    /// Completes every outstanding discard synchronously (quit).
+    private func flushDiscards() {
+        pendingDiscardUUID = nil
+        for uuid in discardingUUIDs {
+            finishDiscard(uuid: uuid)
+        }
+    }
+
+    // MARK: Takeaway lifecycle
+
+    /// Records which takeaway was on screen when `session` started, so its review can retire it.
+    private func rememberTakeawaySource(for session: WorkSession) {
+        refreshTakeaway()
+        if let source = lastTakeaway?.sessionUUID {
+            defaults.set(session.uuid.uuidString, forKey: Self.takeawayConsumerKey)
+            defaults.set(source.uuidString, forKey: Self.takeawaySourceKey)
+        } else {
+            clearTakeawayLink()
+        }
+    }
+
+    /// Next-session-only mode: once the session that followed a takeaway is reviewed, that takeaway is retired.
+    private func consumeTakeawayIfNeeded(reviewed session: WorkSession) {
+        guard defaults.string(forKey: Self.takeawayConsumerKey) == session.uuid.uuidString else { return }
+        let sourceString = defaults.string(forKey: Self.takeawaySourceKey)
+        clearTakeawayLink()
+        guard settings.takeawayNextSessionOnly,
+              let sourceUUID = sourceString.flatMap(UUID.init(uuidString:)),
+              sourceUUID != session.uuid,
+              let source = fetchSession(uuid: sourceUUID) else { return }
+        retireTakeaways(through: source)
+    }
+
+    /// showInOverlay = false on `source` and on every older ended session that still has it on (so dismissing or
+    /// retiring a takeaway never brings back an older one).
+    private func retireTakeaways(through source: WorkSession) {
+        if source.showInOverlay { source.showInOverlay = false }
+        let cutoff = source.startedAt
+        var descriptor = FetchDescriptor<WorkSession>(
+            predicate: #Predicate<WorkSession> { $0.endedAt != nil && $0.showInOverlay == true && $0.startedAt <= cutoff }
+        )
+        descriptor.fetchLimit = 500
+        let older = (try? context.fetch(descriptor)) ?? []
+        for session in older where !session.isDeleted && session !== pendingEndSession {
+            session.showInOverlay = false
+        }
+    }
+
+    private func clearTakeawayLink() {
+        defaults.removeObject(forKey: Self.takeawayConsumerKey)
+        defaults.removeObject(forKey: Self.takeawaySourceKey)
+    }
+
+    // MARK: System events
+
     private func handleWillSleep() {
-        guard settings.pauseOnSleep, isRunning else { return }
+        guard settings.pauseOnSleep, isRunning, isOwnedByThisDevice(activeSession) else { return }
         pause(at: .now)
         autoPauseReason = .sleep
         Log.engine.info("Auto-paused for sleep")
@@ -479,10 +684,20 @@ final class SessionEngine {
     private func scheduleRemoteChangeReconcile() {
         remoteChangeTask?.cancel()
         remoteChangeTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(nanoseconds: 1_500_000_000)
+            try? await Task.sleep(for: .milliseconds(1500))
             guard !Task.isCancelled, let self else { return }
             SeedData.deduplicate(in: self.context)
             self.reconcile()
+        }
+    }
+
+    /// Any save (History/Detail edits and deletions, imports) may change which takeaway applies; coalesce them.
+    private func scheduleTakeawayRefresh() {
+        didSaveTask?.cancel()
+        didSaveTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .milliseconds(500))
+            guard !Task.isCancelled, let self else { return }
+            self.refreshTakeaway()
         }
     }
 

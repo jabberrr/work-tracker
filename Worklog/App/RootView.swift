@@ -1,16 +1,21 @@
 import SwiftData
 import SwiftUI
 
-/// Main window content: Welcome gate, sidebar navigation, storage banners and the end-of-session sheet.
+/// Main window content: Welcome gate, sidebar navigation, storage/sync banners and the end-of-session sheet.
+@MainActor
 struct RootView: View {
     @Environment(AuthService.self) private var auth
     @Environment(WindowRouter.self) private var router
     @Environment(SessionEngine.self) private var engine
     @Environment(PersistenceController.self) private var persistence
+    @Environment(AppSettings.self) private var settings
+    @Environment(SyncMonitor.self) private var sync
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @Environment(\.theme) private var theme
 
-    @State private var localStoreBannerDismissed = false
+    /// The sync error text the user dismissed (or that timed out); a different error shows again.
+    @State private var dismissedSyncError: String?
 
     var body: some View {
         Group {
@@ -23,7 +28,10 @@ struct RootView: View {
         .sheet(item: Binding(
             get: { engine.pendingEndSession },
             set: { if $0 == nil { engine.completeReview() } }
-        )) { session in
+        ), onDismiss: {
+            // Phase 2 of discarding from the end sheet: delete only once the sheet's views are gone.
+            engine.finishPendingDiscard()
+        }) { session in
             EndSessionSheet(session: session)
         }
         .alert("Something went wrong", isPresented: Binding(
@@ -34,7 +42,20 @@ struct RootView: View {
         } message: {
             Text(engine.lastError ?? "")
         }
-        .onAppear { router.register(openWindow: openWindow) }
+        .onAppear {
+            router.register(openWindow: openWindow, openSettings: openSettings)
+            router.mainWindowDidOpen(hideDockIconWhenClosed: settings.hideDockIconWhenClosed)
+        }
+        .onDisappear {
+            router.mainWindowDidClose(hideDockIconWhenClosed: settings.hideDockIconWhenClosed)
+        }
+        .task(id: sync.lastErrorDescription) {
+            // Sync errors are often transient: show the banner briefly, then hide it (Settings ▸ Account keeps it).
+            guard let error = sync.lastErrorDescription else { return }
+            try? await Task.sleep(for: .seconds(15))
+            guard !Task.isCancelled else { return }
+            dismissedSyncError = error
+        }
     }
 
     // MARK: - Split view
@@ -45,7 +66,7 @@ struct RootView: View {
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
         } detail: {
             VStack(spacing: 0) {
-                storageBanner
+                bannerStack
                 detail
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
             }
@@ -98,6 +119,13 @@ struct RootView: View {
                     .accessibilityHidden(true)
                 miniTimer
                 Spacer(minLength: theme.spacingXS)
+                if engine.isActiveSessionOnAnotherMac {
+                    Image(systemName: "laptopcomputer")
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textSecondary)
+                        .help("Running on another Mac")
+                        .accessibilityLabel("Running on another Mac")
+                }
                 LabelBadge(label: engine.currentLabel, size: .small)
             }
             .padding(.horizontal, theme.spacingS)
@@ -176,32 +204,117 @@ struct RootView: View {
         }
     }
 
-    @ViewBuilder
-    private var storageBanner: some View {
-        switch persistence.storeMode {
-        case .cloudKit:
-            EmptyView()
-        case .localOnly(let reason):
-            if !localStoreBannerDismissed {
+    // MARK: - Banners
+
+    private struct BannerItem: Identifiable {
+        let id: String
+        let message: String
+        let systemImage: String
+        let style: BannerStyle
+        var help: String? = nil
+        var actionTitle: String? = nil
+        var action: (() -> Void)? = nil
+        var onDismiss: (() -> Void)? = nil
+    }
+
+    /// At most two banners (DESIGN §8), most important first.
+    private var bannerStack: some View {
+        let items = Array(banners.prefix(2))
+        return VStack(spacing: theme.spacingS) {
+            ForEach(items) { item in
                 InlineBanner(
-                    "iCloud sync is off (\(reason)). Your data is stored on this Mac only.",
-                    systemImage: "icloud.slash",
-                    style: .info,
-                    onDismiss: { localStoreBannerDismissed = true }
+                    item.message,
+                    systemImage: item.systemImage,
+                    style: item.style,
+                    actionTitle: item.actionTitle,
+                    action: item.action,
+                    onDismiss: item.onDismiss
                 )
-                .padding([.horizontal, .top], theme.spacingL)
-            }
-        case .inMemory(let reason):
-            if reason != "Preview" {
-                InlineBanner(
-                    "Worklog couldn't open its data store, so changes won't be saved. \(reason)",
-                    systemImage: "exclamationmark.triangle.fill",
-                    style: .error,
-                    actionTitle: "Restore from backup…",
-                    action: { router.showSettings() }
-                )
-                .padding([.horizontal, .top], theme.spacingL)
+                .help(item.help ?? "")
             }
         }
+        .padding([.horizontal, .top], items.isEmpty ? 0 : theme.spacingL)
+    }
+
+    private var banners: [BannerItem] {
+        var items: [BannerItem] = []
+
+        if case .inMemory(let reason) = persistence.storeMode, reason != "Preview" {
+            items.append(BannerItem(
+                id: "inMemory",
+                message: "Your data couldn\u{2019}t be opened. Changes in this session won\u{2019}t be saved.",
+                systemImage: "exclamationmark.triangle.fill",
+                style: .error,
+                help: reason,
+                actionTitle: "Restore from backup\u{2026}",
+                action: { router.showSettings(tab: "data") }
+            ))
+        }
+
+        if let error = sync.lastErrorDescription, error != dismissedSyncError {
+            items.append(BannerItem(
+                id: "syncError",
+                message: "iCloud sync ran into a problem. Your changes are still saved on this Mac.",
+                systemImage: "exclamationmark.icloud",
+                style: .warning,
+                help: error,
+                actionTitle: "Details\u{2026}",
+                action: { router.showSettings(tab: "account") },
+                onDismiss: { dismissedSyncError = error }
+            ))
+        }
+
+        if let notice = persistence.launchNotice {
+            items.append(BannerItem(
+                id: "launchNotice",
+                message: notice,
+                systemImage: "info.circle.fill",
+                style: .info,
+                onDismiss: { persistence.launchNotice = nil }
+            ))
+        }
+
+        if let notice = engine.handoffNotice {
+            items.append(BannerItem(
+                id: "handoff",
+                message: notice,
+                systemImage: "arrow.left.arrow.right",
+                style: .info,
+                onDismiss: { engine.clearHandoffNotice() }
+            ))
+        }
+
+        if case .localOnly(let reason) = persistence.storeMode,
+           persistence.cloudSyncRequestedAtLaunch,                 // not shown when the user turned sync off
+           settings.dismissedLocalOnlyBannerReason != reason {
+            items.append(BannerItem(
+                id: "localOnly",
+                message: "Saving to this Mac only \u{2014} \(Self.bannerReason(reason)).",
+                systemImage: "icloud.slash",
+                style: .info,
+                help: reason,
+                actionTitle: "Details\u{2026}",
+                action: { router.showSettings(tab: "account") },
+                onDismiss: { settings.dismissedLocalOnlyBannerReason = reason }
+            ))
+        }
+        return items
+    }
+
+    /// The reason as a sentence fragment: raw error text after ":" goes to the tooltip / Account tab, a trailing
+    /// period is dropped, and a plain first word is lowercased ("Not signed in to iCloud" → "not signed in to iCloud").
+    private static func bannerReason(_ reason: String) -> String {
+        var text = reason.trimmed
+        if let colon = text.firstIndex(of: ":") {
+            text = String(text[..<colon]).trimmed
+        }
+        while text.hasSuffix(".") { text.removeLast() }
+        guard !text.isEmpty else { return "iCloud isn\u{2019}t available" }
+        let firstWord = text.prefix(while: { !$0.isWhitespace })
+        let isPlainWord = firstWord.dropFirst().allSatisfy { !$0.isUppercase }
+        if isPlainWord, let first = text.first, first.isUppercase {
+            text = first.lowercased() + text.dropFirst()
+        }
+        return text
     }
 }
