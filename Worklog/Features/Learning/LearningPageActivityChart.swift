@@ -66,17 +66,17 @@ struct LearningPageActivityChart: View {
 
         var buckets: [Bucket] = []
         var cursor = start(of: first)
-        let end = start(of: last)
+        let lastStart = start(of: last)
         var guardCount = 0
-        while cursor <= end && guardCount < 1_000 {
+        while cursor <= lastStart && guardCount < 1_000 {
             guardCount += 1
             buckets.append(byStart[cursor] ?? Bucket(start: cursor, end: end(of: cursor), count: 0, masterySum: 0,
                                                      ratedCount: 0))
             guard let next = calendar.date(byAdding: unit, value: 1, to: cursor), next > cursor else { break }
             cursor = next
         }
-        let domainEnd = calendar.date(byAdding: unit, value: 1, to: buckets.last?.start ?? end) ?? now
-        let domainStart = buckets.first?.start ?? end
+        let domainEnd = calendar.date(byAdding: unit, value: 1, to: buckets.last?.start ?? lastStart) ?? now
+        let domainStart = buckets.first?.start ?? lastStart
         return Model(
             unit: unit,
             calendar: calendar,
