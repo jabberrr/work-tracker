@@ -7,6 +7,7 @@ import SwiftUI
 /// All aggregation lives in `StatsCalculator` and runs off the main actor (`StatsModel`). The body only reads the
 /// cached `StatsResult`. Recomputation is triggered by: range/bucket/goal/week-start changes, a cheap fingerprint of
 /// the queried sessions/labels/tags, `ModelContext.didSave`, imports, and once a minute while a session is running.
+@MainActor
 struct StatsView: View {
     @Environment(\.theme) private var theme
     @Environment(AppSettings.self) private var settings
@@ -181,9 +182,12 @@ struct StatsView: View {
     private func loadedContent(_ result: StatsResult) -> some View {
         tiles(result)
 
+        // The calculator may coarsen the bucket for very long windows ("All" over years): offer only buckets it will
+        // honor and show the one it actually used, so the picker never says "Day" over weekly bars.
         StatsTimeChartCard(result: result,
-                           allowedBuckets: range.allowedBuckets,
-                           bucket: Binding(get: { effectiveBucket }, set: { bucketChoice = $0 }),
+                           allowedBuckets: StatsCalculator.allowedBuckets(for: result.options.range,
+                                                                          dayCount: result.dayCount),
+                           bucket: Binding(get: { result.bucket }, set: { bucketChoice = $0 }),
                            dailyGoalHours: settings.dailyGoalHours)
 
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: theme.spacingL, alignment: .top)],
@@ -219,13 +223,14 @@ struct StatsView: View {
         }
     }
 
-    static func decimal(_ value: Double) -> String {
+    /// Nonisolated: also used by chart axis labels and file-scope helpers.
+    nonisolated static func decimal(_ value: Double) -> String {
         guard value.isFinite else { return "0" }
         return value.formatted(.number.precision(.fractionLength(0...1)))
     }
 
     /// "4h", "1.5h".
-    static func hoursText(_ hours: Double) -> String {
+    nonisolated static func hoursText(_ hours: Double) -> String {
         guard hours.isFinite else { return "0h" }
         if abs(hours - hours.rounded()) < 0.05 { return "\(Int(hours.rounded()))h" }
         return hours.formatted(.number.precision(.fractionLength(1))) + "h"

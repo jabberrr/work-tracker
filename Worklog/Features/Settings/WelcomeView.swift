@@ -3,8 +3,11 @@ import SwiftUI
 
 /// First-launch / signed-out gate shown full-window by RootView while `auth.needsWelcome` (state == .signedOut).
 /// Sign in with Apple, or continue as a guest; both keep local storage and iCloud sync working.
+/// Also offers a first pick of the visual theme (the same swatches as Settings ▸ Appearance).
+@MainActor
 struct WelcomeView: View {
     @Environment(AuthService.self) private var auth
+    @Environment(PersistenceController.self) private var persistence
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
 
@@ -49,8 +52,10 @@ struct WelcomeView: View {
                     .help("Use Worklog as a guest. You can sign in later in Settings ▸ Account.")
             }
 
+            themePicker
+
             VStack(spacing: theme.spacingS) {
-                Text("Your data syncs with iCloud on this Mac’s Apple Account either way.")
+                Text(storageLine)
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textTertiary)
                     .multilineTextAlignment(.center)
@@ -69,6 +74,43 @@ struct WelcomeView: View {
                 InlineBanner(error, style: .error, onDismiss: { auth.lastError = nil })
                     .frame(maxWidth: 460)
             }
+        }
+    }
+
+    // MARK: Storage copy
+
+    /// Where data goes, derived from how the store actually opened at this launch.
+    private var storageLine: String {
+        switch persistence.storeMode {
+        case .cloudKit:
+            return "Your data syncs with iCloud on this Mac’s Apple Account either way."
+        case .localOnly:
+            if !Entitlements.hasCloudKit {
+                return "Your data is saved on this Mac."
+            }
+            return persistence.cloudSyncRequestedAtLaunch
+                ? "iCloud isn’t available right now, so your data is saved on this Mac. See Settings ▸ Account."
+                : "Your data is saved on this Mac. You can turn on iCloud sync in Settings ▸ Account."
+        case .inMemory(let reason):
+            return reason == "Preview"
+                ? "Preview — nothing is saved."
+                : "Worklog couldn’t open its data store. You can recover it in Settings ▸ Data."
+        }
+    }
+
+    // MARK: Theme
+
+    /// Compact first pick of the theme; changes apply immediately and can be revisited in Settings ▸ Appearance.
+    private var themePicker: some View {
+        VStack(spacing: theme.spacingS) {
+            Text("Pick a look")
+                .font(theme.sectionHeaderFont)
+                .foregroundStyle(theme.textSecondary)
+                .accessibilityAddTraits(.isHeader)
+            ThemeSwatchRow()
+            Text("You can change it any time in Settings ▸ Appearance.")
+                .font(theme.captionFont)
+                .foregroundStyle(theme.textTertiary)
         }
     }
 }

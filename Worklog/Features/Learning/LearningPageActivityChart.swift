@@ -20,6 +20,8 @@ struct LearningPageActivityChart: View {
 
     private struct Model {
         let unit: Calendar.Component
+        /// Same week start as the buckets, so Charts bins each bar into the right week.
+        let calendar: Calendar
         let buckets: [Bucket]
         let maxCount: Int
         let hasMastery: Bool
@@ -70,6 +72,7 @@ struct LearningPageActivityChart: View {
         let domainStart = buckets.first?.start ?? end
         return Model(
             unit: unit,
+            calendar: calendar,
             buckets: buckets,
             maxCount: max(1, buckets.map(\.count).max() ?? 1),
             hasMastery: buckets.contains { $0.ratedCount > 0 },
@@ -119,8 +122,8 @@ struct LearningPageActivityChart: View {
         return Chart {
             ForEach(model.buckets) { bucket in
                 BarMark(
-                    x: .value("Period", bucket.start, unit: model.unit),
-                    y: .value("Points", bucket.count),
+                    x: .value("Period", bucket.start, unit: model.unit, calendar: model.calendar),
+                    y: .value("Points", Double(bucket.count)),
                     width: .ratio(0.6)
                 )
                 .foregroundStyle(theme.accent)
@@ -131,7 +134,7 @@ struct LearningPageActivityChart: View {
             if model.hasMastery {
                 ForEach(model.buckets.filter { $0.masteryAverage != nil }) { bucket in
                     LineMark(
-                        x: .value("Period", bucket.start, unit: model.unit),
+                        x: .value("Period", bucket.start, unit: model.unit, calendar: model.calendar),
                         y: .value("Mastery", (bucket.masteryAverage ?? 0) * scale)
                     )
                     .foregroundStyle(theme.textSecondary)

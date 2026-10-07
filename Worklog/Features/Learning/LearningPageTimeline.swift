@@ -40,6 +40,7 @@ struct LearningPageTimeline: View {
 }
 
 /// One learning point (or a session's free-text learning) on the timeline.
+@MainActor
 struct LearningPageRow: View {
     @Environment(\.theme) private var theme
     @Environment(WindowRouter.self) private var router

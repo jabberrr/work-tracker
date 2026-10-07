@@ -1,76 +1,50 @@
 import SwiftData
 import SwiftUI
 
-/// Review sheet shown by RootView while `engine.pendingEndSession` is set: title, primary label, session tags,
-/// a read-only review of segments and notes, and learnings (B's `LearningsEditor`, which also holds the
-/// "Takeaway for next time" summary and the "Show in overlay & menu bar" toggle).
+/// Review sheet shown by RootView while `engine.pendingEndSession` is set. Built to be done in ~10 seconds:
+/// title, primary label, session tags and the "takeaway for next time" up front; the segment review is one
+/// proportion bar with the rows behind a disclosure; notes and learnings (B's `LearningsEditor`) are disclosures.
 ///
 /// Save (⌘↩, also Esc = save as-is) → `engine.completeReview()`; Resume → `engine.resumePendingSession()`;
 /// Discard (confirmed) → `engine.discardPendingSession()`.
 ///
-/// Discard deletes the session. To never read a destroyed model (SwiftData traps), the sheet first swaps its
-/// content for a placeholder of the same size — removing every view bound to the session, including the
-/// LearningsEditor and the focused title field — and deletes on a later run-loop turn.
+/// Discard is two-phase: `discardPendingSession()` only clears `pendingEndSession` (the sheet starts closing while
+/// the session is still alive, so nothing here reads a destroyed model); RootView's sheet `onDismiss` then calls
+/// `engine.finishPendingDiscard()`, which deletes it.
+@MainActor
 struct EndSessionSheet: View {
     @Environment(SessionEngine.self) private var engine
-    @Environment(\.theme) private var theme
 
     private let session: WorkSession
-
-    @State private var isClosing = false
-    @State private var lastSize: CGSize = .zero
 
     init(session: WorkSession) {
         self.session = session
     }
 
     var body: some View {
-        Group {
-            if !isClosing && LiveModelGuard.isUsable(session) {
-                EndSessionForm(session: session, onDiscard: discard)
-                    .background(GeometryReader { geo in
-                        Color.clear
-                            .onAppear { lastSize = geo.size }
-                            .onChange(of: geo.size) { _, newSize in lastSize = newSize }
-                    })
-            } else {
-                closingPlaceholder
-            }
+        if LiveModelGuard.isUsable(session) {
+            EndSessionForm(session: session, onDiscard: discard)
+        } else {
+            // Deleted elsewhere (e.g. replaced by an import) while the sheet was up.
+            Color.clear
+                .frame(width: 520, height: 200)
+                .onAppear { engine.completeReview() }
         }
-    }
-
-    private var closingPlaceholder: some View {
-        VStack(spacing: theme.spacingS) {
-            ProgressView()
-                .controlSize(.small)
-            Text("Discarding…")
-                .font(theme.calloutFont)
-                .foregroundStyle(theme.textSecondary)
-        }
-        .frame(width: lastSize.width > 0 ? lastSize.width : 560,
-               height: lastSize.height > 0 ? lastSize.height : 240)
-        .accessibilityElement(children: .combine)
     }
 
     private func discard() {
-        let sessionID = session.persistentModelID
-        var transaction = Transaction()
-        transaction.disablesAnimations = true
-        withTransaction(transaction) { isClosing = true }
-        // Delete only after the bound views are gone (their onDisappear/commit handlers may still write).
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            if let pending = engine.pendingEndSession, pending.persistentModelID == sessionID {
-                engine.discardPendingSession()
-            } else {
-                // No longer pending (e.g. replaced by an import): just close the sheet.
-                engine.completeReview()
-            }
+        if let pending = engine.pendingEndSession, pending.persistentModelID == session.persistentModelID {
+            engine.discardPendingSession()
+        } else {
+            // No longer pending (e.g. replaced by an import): just close the sheet.
+            engine.completeReview()
         }
     }
 }
 
 // MARK: - Form
 
+@MainActor
 private struct EndSessionForm: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(\.modelContext) private var modelContext
@@ -81,9 +55,14 @@ private struct EndSessionForm: View {
 
     @State private var confirmDiscard = false
     @State private var showsNotes = false
+    @State private var showsSegments = false
+    @State private var showsLearnings = false
     @FocusState private var titleFocused: Bool
+    @FocusState private var takeawayFocused: Bool
 
-    private static let fieldLabelWidth: CGFloat = 64
+    private static let fieldLabelWidth: CGFloat = 72
+    /// Same guidance as LearningsEditor's takeaway counter.
+    private static let takeawayGuidanceLength = 140
 
     init(session: WorkSession, onDiscard: @escaping () -> Void) {
         self._session = Bindable(wrappedValue: session)
@@ -93,7 +72,7 @@ private struct EndSessionForm: View {
     var body: some View {
         VStack(spacing: 0) {
             ScrollView {
-                VStack(alignment: .leading, spacing: theme.spacingXL) {
+                VStack(alignment: .leading, spacing: theme.spacingL) {
                     header
                     if session.activeDuration() < 60 {
                         InlineBanner("This session was under a minute.",
@@ -104,15 +83,12 @@ private struct EndSessionForm: View {
                     fields
                     segmentsReview
                     notesReview
-                    VStack(alignment: .leading, spacing: theme.spacingS) {
-                        SectionHeader("Learnings", systemImage: "lightbulb")
-                        LearningsEditor(session: session, style: .compact)
-                    }
+                    learningsReview
                 }
                 .padding(theme.spacingXL)
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(minHeight: 320, idealHeight: 560, maxHeight: 760)
+            .frame(minHeight: 300, idealHeight: 470, maxHeight: 760)
 
             Rectangle()
                 .fill(theme.separator)
@@ -131,7 +107,12 @@ private struct EndSessionForm: View {
             Text("Its notes, images, learnings and time will be deleted. This can’t be undone.")
         }
         .onAppear {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { titleFocused = true }
+            // Reopen what the user already filled in (e.g. a resumed-then-stopped session).
+            showsLearnings = !session.learningText.isBlank || !(session.learningPoints ?? []).isEmpty
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                titleFocused = true
+            }
         }
     }
 
@@ -207,6 +188,46 @@ private struct EndSessionForm: View {
             fieldRow("Tags") {
                 TagPicker(selection: sessionTagsBinding, scopeLabel: session.label)
             }
+            fieldRow("Takeaway") {
+                takeawayField
+            }
+        }
+    }
+
+    /// The one line shown in the overlay and menu bar during the next session (`overlaySummary`). The same field
+    /// also appears inside the Learnings disclosure (LearningsEditor); both edit the same property.
+    private var takeawayField: some View {
+        let count = session.overlaySummary.trimmed.count
+        let limit = Self.takeawayGuidanceLength
+        return VStack(alignment: .leading, spacing: theme.spacingXS) {
+            TextField("Takeaway", text: $session.overlaySummary,
+                      prompt: Text("One line to see when you start your next session"))
+                .textFieldStyle(.plain)
+                .font(theme.bodyFont)
+                .focused($takeawayFocused)
+                .insetField(isFocused: takeawayFocused)
+                .accessibilityLabel("Takeaway for next time")
+                .onChange(of: session.overlaySummary) { oldValue, newValue in
+                    guard LiveModelGuard.isUsable(session) else { return }
+                    if oldValue.isBlank && !newValue.isBlank && !session.showInOverlay {
+                        session.showInOverlay = true
+                    }
+                }
+            HStack(spacing: theme.spacingS) {
+                Toggle("Show in overlay & menu bar", isOn: $session.showInOverlay)
+                    .toggleStyle(.checkbox)
+                    .font(theme.captionFont)
+                    .foregroundStyle(theme.textSecondary)
+                    .help("Show this takeaway in the overlay and menu bar during your next session.")
+                Spacer(minLength: theme.spacingS)
+                if count > 0 {
+                    Text("\(count)/\(limit)")
+                        .font(theme.captionFont.monospacedDigit())
+                        .foregroundStyle(count > limit ? theme.warning : theme.textTertiary)
+                        .help(count > limit ? "Shorter takeaways fit the overlay better." : "Suggested length: up to \(limit) characters.")
+                        .accessibilityLabel("\(count) of \(limit) suggested characters")
+                }
+            }
         }
     }
 
@@ -267,22 +288,27 @@ private struct EndSessionForm: View {
     private var segmentsReview: some View {
         let segments = session.sortedSegments
         return VStack(alignment: .leading, spacing: theme.spacingS) {
-            SectionHeader("Segments", systemImage: "rectangle.split.3x1") {
-                Text("\(segments.count)").monospacedDigit()
-            }
             ProportionBar(parts: segments.map { segment in
                 ProportionBar.Part(value: segment.activeDuration(),
                                    color: segment.effectiveLabel?.color ?? theme.textTertiary,
                                    label: "\(segment.displayFocus), \(segment.activeDuration().formattedShort)")
             }, height: 8)
-            VStack(alignment: .leading, spacing: 0) {
-                ForEach(segments) { segment in
-                    EndSessionSegmentRow(segment: segment)
+            DisclosureGroup(isExpanded: $showsSegments) {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(segments) { segment in
+                        EndSessionSegmentRow(segment: segment)
+                    }
+                    Text("You can split, merge and retime segments later in History.")
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textTertiary)
+                        .padding(.top, theme.spacingXS)
                 }
+                .padding(.top, theme.spacingXS)
+            } label: {
+                Label("Segments (\(segments.count))", systemImage: "rectangle.split.3x1")
+                    .font(theme.calloutFont.weight(.medium))
+                    .foregroundStyle(theme.textSecondary)
             }
-            Text("You can split, merge and retime segments later in History.")
-                .font(theme.captionFont)
-                .foregroundStyle(theme.textTertiary)
         }
     }
 
@@ -299,9 +325,22 @@ private struct EndSessionForm: View {
                 .padding(.top, theme.spacingS)
             } label: {
                 Label("Notes (\(notes.count))", systemImage: "note.text")
-                    .font(theme.headlineFont)
-                    .foregroundStyle(theme.textPrimary)
+                    .font(theme.calloutFont.weight(.medium))
+                    .foregroundStyle(theme.textSecondary)
             }
+        }
+    }
+
+    /// What I learned + learning points (B's editor), collapsed by default.
+    private var learningsReview: some View {
+        let hasLearnings = !session.learningText.isBlank || !(session.learningPoints ?? []).isEmpty
+        return DisclosureGroup(isExpanded: $showsLearnings) {
+            LearningsEditor(session: session, style: .compact, showsTakeaway: false)
+                .padding(.top, theme.spacingS)
+        } label: {
+            Label(hasLearnings ? "Learnings" : "Add learnings", systemImage: "lightbulb")
+                .font(theme.calloutFont.weight(.medium))
+                .foregroundStyle(theme.textSecondary)
         }
     }
 
@@ -354,11 +393,15 @@ private struct EndSessionForm: View {
         } else if session.title != session.title.trimmed {
             session.title = session.title.trimmed
         }
+        if session.overlaySummary != session.overlaySummary.trimmed {
+            session.overlaySummary = session.overlaySummary.trimmed
+        }
         session.touch()
         engine.completeReview()
     }
 }
 
+@MainActor
 private struct EndSessionSegmentRow: View {
     @Environment(\.theme) private var theme
     private let segment: Segment

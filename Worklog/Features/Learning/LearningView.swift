@@ -5,6 +5,7 @@ import SwiftUI
 ///
 /// Left: search + "All" / "Untagged" / tags with counts. Right: the selected tag's points per week (+ average
 /// mastery), then a chronological timeline grouped by month or week, each point linking to its session.
+@MainActor
 struct LearningView: View {
     @Environment(\.theme) private var theme
     @Environment(AppSettings.self) private var settings
@@ -275,6 +276,7 @@ struct LearningView: View {
 // MARK: - Empty states
 
 /// Whole-pane state when there are no learnings at all, with a short how-to.
+@MainActor
 private struct LearningPageEmptyState: View {
     @Environment(\.theme) private var theme
     @Environment(WindowRouter.self) private var router

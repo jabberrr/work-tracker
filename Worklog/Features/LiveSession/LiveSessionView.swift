@@ -4,18 +4,16 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 /// The "Today" page of the main window: the start form when idle, the live instrument while a session runs.
+@MainActor
 struct LiveSessionView: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(\.theme) private var theme
-
-    /// While true the active pane is already gone, so nothing reads the session that is about to be deleted.
-    @State private var isDiscarding = false
 
     init() {}
 
     var body: some View {
         Group {
-            if let session = engine.activeSession, !isDiscarding, LiveModelGuard.isUsable(session) {
+            if let session = engine.activeSession, LiveModelGuard.isUsable(session) {
                 LiveActivePane(session: session, onDiscard: discardActiveSession)
                     .id(session.persistentModelID)
                     .transition(.opacity)
@@ -28,20 +26,21 @@ struct LiveSessionView: View {
         .themedBackground()
     }
 
-    /// Remove every view bound to the session first, delete it on a later run-loop turn.
+    /// `engine.discard()` clears `activeSession` right away (this page switches to the idle pane) and deletes the
+    /// session on the next main-actor turn, so no view reads it after deletion. No animation: the active pane
+    /// must not linger in a transition while its model goes away.
     private func discardActiveSession() {
         var transaction = Transaction()
         transaction.disablesAnimations = true
-        withTransaction(transaction) { isDiscarding = true }
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
-            engine.discard()
-            isDiscarding = false
+        withTransaction(transaction) {
+            _ = engine.discard()
         }
     }
 }
 
 // MARK: - Idle
 
+@MainActor
 private struct LiveIdlePane: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings
@@ -53,6 +52,7 @@ private struct LiveIdlePane: View {
     @State private var startTags: [WorkTag] = []
     @State private var startFocus = ""
     @State private var didLoadDefaults = false
+    @State private var today = Date()
     @FocusState private var focusFieldFocused: Bool
 
     init() {}
@@ -76,6 +76,8 @@ private struct LiveIdlePane: View {
             .frame(maxWidth: .infinity)
         }
         .onAppear(perform: onAppear)
+        .onReceive(LiveDayChange.publisher) { _ in today = Date() }
+        .onChange(of: settings.defaultLabelID) { _, _ in startLabel = engine.defaultLabel() }
         .onChange(of: router.noteFocusRequest) { _, _ in handleNoteFocusRequest() }
         .onChange(of: router.splitRequest) { _, newValue in
             // Nothing to split while idle; mark it handled so it doesn't fire on the next active pane.
@@ -90,7 +92,7 @@ private struct LiveIdlePane: View {
                 .foregroundStyle(theme.textPrimary)
                 .accessibilityAddTraits(.isHeader)
             Spacer()
-            Text(Date().formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+            Text(today.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
                 .font(theme.captionFont)
                 .foregroundStyle(theme.textSecondary)
         }
@@ -134,10 +136,15 @@ private struct LiveIdlePane: View {
     }
 
     private func onAppear() {
+        today = Date()
         if !didLoadDefaults {
             didLoadDefaults = true
             startLabel = engine.defaultLabel()
+        } else if let label = startLabel, !LiveStartChoice.isUsable(label) {
+            // Deleted, merged or archived in Settings since: fall back to the default label.
+            startLabel = engine.defaultLabel()
         }
+        startTags = LiveStartChoice.tags(startTags)
         if router.noteFocusRequest > LiveRequestLedger.handledNoteFocusRequest {
             handleNoteFocusRequest()
         }
@@ -147,16 +154,20 @@ private struct LiveIdlePane: View {
     /// No session to take notes in: focus the start form's focus field instead.
     private func handleNoteFocusRequest() {
         LiveRequestLedger.handledNoteFocusRequest = router.noteFocusRequest
-        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focusFieldFocused = true }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(100))
+            focusFieldFocused = true
+        }
     }
 
     private func start() {
         guard !engine.isActive else { return }
-        let label = startLabel
-        let tags = startTags
+        // The picked label/tags may have been deleted, merged or archived in Settings since they were chosen.
+        let label = LiveStartChoice.label(startLabel, engine: engine)
+        let tags = LiveStartChoice.tags(startTags)
         let focus = startFocus
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-            engine.start(label: label, tags: tags, focus: focus)
+            _ = engine.start(label: label, tags: tags, focus: focus)
         }
         startFocus = ""
         startTags = []
@@ -164,6 +175,7 @@ private struct LiveIdlePane: View {
 }
 
 /// Today total vs goal, session count and today's finished sessions.
+@MainActor
 private struct LiveTodaySummary: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings
@@ -212,6 +224,7 @@ private struct LiveTodaySummary: View {
     }
 }
 
+@MainActor
 private struct LiveTodaySessionRow: View {
     @Environment(\.theme) private var theme
     private let session: WorkSession
@@ -260,6 +273,7 @@ private struct LiveTodaySessionRow: View {
 
 // MARK: - Active
 
+@MainActor
 private struct LiveActivePane: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings
@@ -275,7 +289,6 @@ private struct LiveActivePane: View {
     @State private var showEditSegment = false
     @State private var confirmDiscard = false
     @State private var keepGoingDismissed = false
-    @State private var takeawayDismissed = false
     @State private var coarseNow = Date()
     @State private var isDropTargeted = false
     @FocusState private var noteFocused: Bool
@@ -294,7 +307,7 @@ private struct LiveActivePane: View {
                 header
                 instrument
                 controls
-                if let takeaway = engine.lastTakeaway, !takeawayDismissed {
+                if let takeaway = engine.lastTakeaway {
                     takeawayStrip(takeaway)
                 }
                 segmentsSection
@@ -334,7 +347,7 @@ private struct LiveActivePane: View {
                 }
                 if showLong {
                     LiveLongSessionBanner(
-                        hours: Int(session.wallDuration(at: coarseNow) / 3600),
+                        hours: Int(session.activeDuration(at: max(coarseNow, Date())) / 3600),
                         onStopAtLastActivity: { _ = engine.stop(at: session.lastActivityDate) },
                         onStopNow: { _ = engine.stop() },
                         onKeepGoing: { keepGoingDismissed = true })
@@ -343,11 +356,13 @@ private struct LiveActivePane: View {
         }
     }
 
+    /// Based on active time (pauses, including an overnight auto-pause on sleep, don't count) and never while
+    /// paused: a paused session isn't accumulating anything to forget about.
     private func shouldWarnLongSession(at date: Date) -> Bool {
-        guard !keepGoingDismissed, settings.longSessionWarningHours > 0 else { return false }
+        guard !keepGoingDismissed, !isPaused, settings.longSessionWarningHours > 0 else { return false }
         // Read `Date()` too so the banner also appears right after a relaunch, before the coarse clock ticks.
         let now = max(date, Date())
-        return session.wallDuration(at: now) >= settings.longSessionWarningHours * 3600
+        return session.activeDuration(at: now) >= settings.longSessionWarningHours * 3600
     }
 
     // MARK: Header
@@ -403,10 +418,15 @@ private struct LiveActivePane: View {
 
             Spacer(minLength: theme.spacingS)
 
-            Text("Started \(session.startedAt.shortTime) · \(segmentCount) \(segmentCount == 1 ? "segment" : "segments")")
-                .font(theme.captionFont)
-                .foregroundStyle(theme.textSecondary)
-                .monospacedDigit()
+            VStack(alignment: .trailing, spacing: theme.spacingXS) {
+                Text("Started \(session.startedAt.shortTime) · \(segmentCount) \(segmentCount == 1 ? "segment" : "segments")")
+                    .font(theme.captionFont)
+                    .foregroundStyle(theme.textSecondary)
+                    .monospacedDigit()
+                if engine.isActiveSessionOnAnotherMac {
+                    LiveOtherMacHint()
+                }
+            }
         }
     }
 
@@ -511,21 +531,11 @@ private struct LiveActivePane: View {
     // MARK: Takeaway
 
     private func takeawayStrip(_ takeaway: SessionTakeaway) -> some View {
-        HStack(alignment: .top, spacing: theme.spacingS) {
-            LiveTakeawayView(takeaway: takeaway, lineLimit: 3, isCompact: true)
-            Button {
-                takeawayDismissed = true
-            } label: {
-                Image(systemName: "xmark")
-            }
-            .buttonStyle(IconButtonStyle(size: 20))
-            .accessibilityLabel("Hide takeaway")
-            .help("Hide the takeaway for this session")
-        }
-        .padding(theme.spacingM)
-        .background(RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous).fill(theme.surface))
-        .overlay(RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous)
-            .strokeBorder(theme.separator, lineWidth: theme.borderWidth))
+        LiveTakeawayView(takeaway: takeaway, lineLimit: 3, isCompact: true)
+            .padding(theme.spacingM)
+            .background(RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous).fill(theme.surface))
+            .overlay(RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous)
+                .strokeBorder(theme.separator, lineWidth: theme.borderWidth))
     }
 
     // MARK: Segments
@@ -599,6 +609,9 @@ private struct LiveActivePane: View {
             dropImages(providers)
             return true
         }
+        // Paste commands only reach focused views: let a click on the notes area (outside the text field) focus it.
+        .focusable()
+        .focusEffectDisabled()
         .onPasteCommand(of: [UTType.image, UTType.fileURL]) { _ in
             pasteImages()
         }
@@ -630,18 +643,25 @@ private struct LiveActivePane: View {
     private func handlePendingRequests() {
         if router.noteFocusRequest > LiveRequestLedger.handledNoteFocusRequest {
             LiveRequestLedger.handledNoteFocusRequest = router.noteFocusRequest
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { noteFocused = true }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(100))
+                noteFocused = true
+            }
         }
         if router.splitRequest > LiveRequestLedger.handledSplitRequest {
             LiveRequestLedger.handledSplitRequest = router.splitRequest
             // Let the window come forward before anchoring the popover.
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { showSplit = true }
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                showSplit = true
+            }
         }
     }
 }
 
 // MARK: - Active pane pieces
 
+@MainActor
 private struct LiveSegmentRow: View {
     @Environment(\.theme) private var theme
     private let segment: Segment
@@ -704,12 +724,16 @@ private struct LiveSegmentRow: View {
 }
 
 /// Notes of the running session, oldest first / newest at the bottom, in a bounded scroll box that follows
-/// new notes.
+/// new notes. Context menu: Copy, Edit (inline editor: Return saves, Esc cancels), Delete.
+@MainActor
 private struct LiveNotesList: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.theme) private var theme
     private let notes: [Note]
     @State private var contentHeight: CGFloat = 0
+    @State private var editingNoteID: PersistentIdentifier?
+    @State private var editText = ""
+    @FocusState private var editorFocused: Bool
 
     private static let maxHeight: CGFloat = 320
 
@@ -724,15 +748,8 @@ private struct LiveNotesList: View {
                 VStack(alignment: .leading, spacing: theme.spacingS) {
                     ForEach(notes) { note in
                         if LiveModelGuard.isUsable(note) {
-                            NoteRow(note: note, showsSegment: true)
+                            row(for: note)
                                 .id(note.persistentModelID)
-                                .contextMenu {
-                                    Button("Copy Text") { copy(note.text) }
-                                    Divider()
-                                    Button("Delete Note", role: .destructive) {
-                                        SessionEditor.deleteNote(note, in: modelContext)
-                                    }
-                                }
                         }
                     }
                 }
@@ -744,7 +761,9 @@ private struct LiveNotesList: View {
             }
             .defaultScrollAnchor(.bottom)
             .frame(height: min(max(contentHeight, 40), Self.maxHeight))
-            .onPreferenceChange(LiveNotesHeightKey.self) { contentHeight = $0 }
+            .onPreferenceChange(LiveNotesHeightKey.self) { value in
+                MainActor.assumeIsolated { contentHeight = value }
+            }
             .onAppear { scrollToBottom(proxy, animated: false) }
             .onChange(of: notes.count) { oldCount, newCount in
                 if newCount > oldCount { scrollToBottom(proxy, animated: true) }
@@ -755,10 +774,80 @@ private struct LiveNotesList: View {
         .clipShape(shape)
     }
 
+    @ViewBuilder
+    private func row(for note: Note) -> some View {
+        if editingNoteID == note.persistentModelID {
+            editor(for: note)
+        } else {
+            NoteRow(note: note, showsSegment: true)
+                .contextMenu {
+                    Button("Copy Text") { copy(note.text) }
+                    Button("Edit Note…") { beginEditing(note) }
+                    Divider()
+                    Button("Delete Note", role: .destructive) {
+                        if editingNoteID == note.persistentModelID { cancelEditing() }
+                        SessionEditor.deleteNote(note, in: modelContext)
+                    }
+                }
+        }
+    }
+
+    private func editor(for note: Note) -> some View {
+        VStack(alignment: .leading, spacing: theme.spacingXS) {
+            HStack(alignment: .firstTextBaseline, spacing: theme.spacingS) {
+                Text(note.createdAt.shortTime)
+                    .font(theme.captionFont.monospacedDigit())
+                    .foregroundStyle(theme.textTertiary)
+                TextField("Note", text: $editText, prompt: Text("Note text"), axis: .vertical)
+                    .textFieldStyle(.plain)
+                    .font(theme.bodyFont)
+                    .lineLimit(1...6)
+                    .focused($editorFocused)
+                    .onSubmit { commitEditing(note) }
+                    .onExitCommand { cancelEditing() }
+                    .insetField(isFocused: editorFocused)
+                    .accessibilityLabel("Edit note")
+            }
+            HStack(spacing: theme.spacingS) {
+                Spacer(minLength: 0)
+                Button("Cancel", action: cancelEditing)
+                    .buttonStyle(QuietButtonStyle())
+                Button("Save") { commitEditing(note) }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(editText.isBlank)
+                    .help("Save the note (Return)")
+            }
+            .controlSize(.small)
+        }
+    }
+
+    private func beginEditing(_ note: Note) {
+        guard LiveModelGuard.isUsable(note) else { return }
+        editText = note.text
+        editingNoteID = note.persistentModelID
+        Task { @MainActor in
+            await Task.yield()
+            editorFocused = true
+        }
+    }
+
+    private func commitEditing(_ note: Note) {
+        let text = editText.trimmed
+        defer { cancelEditing() }
+        guard !text.isEmpty, LiveModelGuard.isUsable(note), text != note.text else { return }
+        SessionEditor.updateNote(note, text: text, date: nil, in: modelContext)
+    }
+
+    private func cancelEditing() {
+        editingNoteID = nil
+        editorFocused = false
+        editText = ""
+    }
+
     private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
-        guard let last = notes.last else { return }
+        guard let last = notes.last(where: { LiveModelGuard.isUsable($0) }) else { return }
         let id = last.persistentModelID
-        DispatchQueue.main.async {
+        Task { @MainActor in
             if animated {
                 withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) }
             } else {
@@ -781,6 +870,7 @@ private struct LiveNotesHeightKey: PreferenceKey {
 }
 
 /// Thumbnails of images attached during the session (thumbnailData only).
+@MainActor
 private struct LiveAttachmentStrip: View {
     @Environment(\.modelContext) private var modelContext
     @Environment(\.theme) private var theme
@@ -831,6 +921,7 @@ private struct LiveAttachmentStrip: View {
 }
 
 /// "Still working?" banner with three actions (InlineBanner has room for one).
+@MainActor
 private struct LiveLongSessionBanner: View {
     @Environment(\.theme) private var theme
     private let hours: Int

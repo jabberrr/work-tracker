@@ -9,12 +9,15 @@ import SwiftUI
 /// Focus: the panel is borderless + `.nonactivatingPanel`, `canBecomeKey == true` and
 /// `becomesKeyOnlyIfNeeded == true`, so clicking a text field makes it key (typing works) without
 /// activating Worklog; buttons work without taking key status.
+@MainActor
 struct OverlayView: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings
     @Environment(WindowRouter.self) private var router
     @Environment(OverlayPanelController.self) private var overlay
     @Environment(\.theme) private var theme
+    /// For the idle Start button's "Start · <default label>" (no fetch in `body`).
+    @Query(sort: \WorkLabel.sortIndex) private var labels: [WorkLabel]
 
     @State private var isSplitting = false
     @FocusState private var noteFocused: Bool
@@ -59,6 +62,10 @@ struct OverlayView: View {
             }
             Spacer(minLength: theme.spacingXS)
             closeButton
+        }
+
+        if engine.isActiveSessionOnAnotherMac {
+            LiveOtherMacHint()
         }
 
         if settings.overlayShowTimer {
@@ -191,13 +198,15 @@ struct OverlayView: View {
                 }
                 Spacer(minLength: 0)
                 if settings.overlayShowControls {
-                    Button {
-                        engine.start(label: engine.defaultLabel())
-                    } label: {
-                        Label("Start", systemImage: "play.fill")
+                    let startLabel = LiveStartChoice.defaultLabel(in: labels, settings: settings)
+                    Button(action: start) {
+                        Label(startTitle(startLabel), systemImage: "play.fill")
+                            .lineLimit(1)
+                            .truncationMode(.tail)
                     }
                     .buttonStyle(PrimaryButtonStyle())
-                    .help("Start a session with the default label")
+                    .help(startLabel.map { "Start a session with “\($0.name)” (the default label)" }
+                          ?? "Start a session")
                 }
             }
             .controlSize(.small)
@@ -205,6 +214,15 @@ struct OverlayView: View {
     }
 
     // MARK: Pieces
+
+    private func startTitle(_ label: WorkLabel?) -> String {
+        guard let name = label?.name.nilIfBlank else { return "Start" }
+        return "Start · \(name)"
+    }
+
+    private func start() {
+        _ = engine.start(label: engine.defaultLabel())
+    }
 
     private var hasControlsRow: Bool {
         settings.overlayShowControls || settings.overlayShowSplitButton || settings.overlayShowTodayTotal
@@ -294,7 +312,7 @@ struct OverlayView: View {
 
     private func stop() {
         isSplitting = false
-        engine.stop()
+        _ = engine.stop()
         // The review sheet lives in the main window.
         if engine.pendingEndSession != nil {
             router.showMainWindow()
@@ -303,6 +321,7 @@ struct OverlayView: View {
 }
 
 /// "Today 2h 15m" (live while running).
+@MainActor
 private struct OverlayTodayTotal: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(\.theme) private var theme

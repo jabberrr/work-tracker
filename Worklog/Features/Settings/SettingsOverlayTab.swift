@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// Overlay & Menu Bar: every overlay content/appearance option, visibility, and the menu bar extra options.
+@MainActor
 struct SettingsOverlayTab: View {
     @Environment(AppSettings.self) private var settings
     @Environment(OverlayPanelController.self) private var overlay
@@ -31,8 +32,6 @@ struct SettingsOverlayTab: View {
                 Toggle("Segment focus", isOn: $settings.overlayShowSegmentFocus)
                 Toggle("Start, pause and stop buttons", isOn: $settings.overlayShowControls)
                 Toggle("Split button", isOn: $settings.overlayShowSplitButton)
-                    .disabled(!settings.overlayShowControls)
-                    .padding(.leading, theme.spacingL)
                 Toggle("Quick note field", isOn: $settings.overlayShowNoteField)
                 Toggle("Last takeaway", isOn: $settings.overlayShowLastTakeaway)
                 Toggle("Today’s total", isOn: $settings.overlayShowTodayTotal)

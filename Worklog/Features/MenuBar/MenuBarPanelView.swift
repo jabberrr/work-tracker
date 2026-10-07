@@ -4,12 +4,14 @@ import SwiftUI
 
 /// Content of the `MenuBarExtra` (`.window` style, 320 pt wide): live status and controls, inline split,
 /// quick note, last takeaway, today's total, overlay toggle and app rows.
+@MainActor
 struct MenuBarPanelView: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings
     @Environment(WindowRouter.self) private var router
     @Environment(OverlayPanelController.self) private var overlay
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @Environment(\.theme) private var theme
 
     @State private var isSplitting = false
@@ -43,6 +45,9 @@ struct MenuBarPanelView: View {
         .onChange(of: engine.isActive) { _, isActive in
             if !isActive { isSplitting = false }
         }
+        .onChange(of: settings.defaultLabelID) { _, _ in
+            startLabel = engine.defaultLabel()
+        }
     }
 
     private var rule: some View {
@@ -53,9 +58,12 @@ struct MenuBarPanelView: View {
     }
 
     private func onAppear() {
-        router.register(openWindow: openWindow)
+        router.register(openWindow: openWindow, openSettings: openSettings)
         if !didLoadDefaults {
             didLoadDefaults = true
+            startLabel = engine.defaultLabel()
+        } else if startLabel.map({ !LiveStartChoice.isUsable($0) }) ?? true {
+            // Never loaded (no labels yet at first open), or deleted/merged/archived in Settings since.
             startLabel = engine.defaultLabel()
         }
     }
@@ -72,6 +80,10 @@ struct MenuBarPanelView: View {
                     .foregroundStyle(theme.textSecondary)
                 Spacer(minLength: theme.spacingS)
                 LabelBadge(label: engine.currentLabel, size: .small)
+            }
+
+            if engine.isActiveSessionOnAnotherMac {
+                LiveOtherMacHint()
             }
 
             LiveClock(isTicking: !isPaused) { date in
@@ -144,7 +156,7 @@ struct MenuBarPanelView: View {
     }
 
     private func stop() {
-        engine.stop()
+        _ = engine.stop()
         isSplitting = false
         // The review sheet lives in the main window.
         if engine.pendingEndSession != nil {
@@ -182,16 +194,19 @@ struct MenuBarPanelView: View {
                     .labelsHidden()
                     .controlSize(.small)
                 Spacer(minLength: 0)
-                Button {
-                    engine.start(label: startLabel)
-                } label: {
+                Button(action: startSession) {
                     Label("Start", systemImage: "play.fill")
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .controlSize(.small)
-                .help("Start a session (⌘⇧S)")
+                .help("Start a session with the chosen label (⌘⇧S)")
             }
         }
+    }
+
+    private func startSession() {
+        // The picked label may have been deleted, merged or archived in Settings since it was chosen.
+        _ = engine.start(label: LiveStartChoice.label(startLabel, engine: engine))
     }
 
     // MARK: Takeaway + today
@@ -216,16 +231,25 @@ struct MenuBarPanelView: View {
 
     private var menuRows: some View {
         VStack(alignment: .leading, spacing: 2) {
-            HStack(spacing: theme.spacingS) {
-                Toggle("Show overlay", isOn: Binding(
-                    get: { settings.overlayEnabled },
-                    set: { $0 ? overlay.show() : overlay.hide() }
-                ))
-                .toggleStyle(.checkbox)
-                .font(theme.bodyFont)
-                .foregroundStyle(theme.textPrimary)
-                Spacer(minLength: 0)
-                shortcutHint("⌘⇧O")
+            VStack(alignment: .leading, spacing: 2) {
+                HStack(spacing: theme.spacingS) {
+                    Toggle("Show overlay", isOn: Binding(
+                        get: { settings.overlayEnabled },
+                        set: { $0 ? overlay.show() : overlay.hide() }
+                    ))
+                    .toggleStyle(.checkbox)
+                    .font(theme.bodyFont)
+                    .foregroundStyle(theme.textPrimary)
+                    Spacer(minLength: 0)
+                    shortcutHint("⌘⇧O")
+                }
+                if settings.overlayEnabled && settings.overlayHideWhenIdle && !engine.isActive {
+                    // Hidden while idle: say so, or the toggle looks broken.
+                    Text("Appears when a session starts")
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textTertiary)
+                        .padding(.leading, theme.spacingL + theme.spacingXS)
+                }
             }
             .padding(.horizontal, theme.spacingS)
             .padding(.vertical, theme.spacingXS + 1)
@@ -275,6 +299,7 @@ struct MenuBarPanelView: View {
 }
 
 /// "Today 2h 15m of 4h" + goal meter, live while running.
+@MainActor
 private struct MenuBarTodayRow: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings

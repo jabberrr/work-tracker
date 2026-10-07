@@ -55,6 +55,10 @@ struct StatsTimeChartCard: View {
     let dailyGoalHours: Double
 
     private var unit: Calendar.Component { result.bucket.component }
+    /// The calculator's calendar (week start from Settings), so Charts bins weeks exactly like the buckets.
+    private var calendar: Calendar {
+        StatsCalculator.makeCalendar(weekStartsOnMonday: result.options.weekStartsOnMonday)
+    }
     private var showsGoal: Bool { result.bucket == .day && dailyGoalHours > 0 }
     private var maxHours: Double { result.maxBucketSeconds / 3600 }
     private var yUpper: Double {
@@ -71,7 +75,7 @@ struct StatsTimeChartCard: View {
         case .week:
             return .dateTime.month(.abbreviated).day()
         case .month:
-            let years = Set(result.bucketStarts.map { Calendar.current.component(.year, from: $0) })
+            let years = Set(result.bucketStarts.map { calendar.component(.year, from: $0) })
             return years.count > 1 ? .dateTime.month(.abbreviated).year(.twoDigits) : .dateTime.month(.abbreviated)
         }
     }
@@ -117,10 +121,11 @@ struct StatsTimeChartCard: View {
         let names = result.series.map(\.name)
         let colors = result.series.map { theme.statsSeriesColor($0) }
         let format = xLabelFormat
+        let calendar = self.calendar
         return Chart {
             ForEach(result.bars) { bar in
                 BarMark(
-                    x: .value("Date", bar.bucketStart, unit: unit),
+                    x: .value("Date", bar.bucketStart, unit: unit, calendar: calendar),
                     y: .value("Hours", bar.hours),
                     width: .ratio(0.6)
                 )
@@ -400,8 +405,10 @@ struct StatsHeatmapCard: View {
 
     private static let hourKeys: [String] = (0..<24).map { String(format: "%02d", $0) }
 
+    /// "9 AM" / "09". Uses a fixed reference day (1 Jan 2001) so DST days can't skip an hour.
     private static func hourName(_ hour: Int) -> String {
-        let date = Calendar.current.date(bySettingHour: hour, minute: 0, second: 0, of: .now) ?? .now
+        let components = DateComponents(year: 2001, month: 1, day: 1, hour: hour)
+        let date = Calendar.current.date(from: components) ?? .now
         return date.formatted(.dateTime.hour())
     }
 

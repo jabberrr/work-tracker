@@ -3,17 +3,21 @@ import SwiftUI
 /// The menu bar extra's label: a status icon, plus the elapsed time while a session is active and
 /// `settings.menuBarShowsTimer` is on. The only view that reads `engine.tick` (a 1 s Timer in .common mode,
 /// which keeps ticking while menus are open, unlike TimelineView in the status item).
+/// Registers `openWindow`/`openSettings` with the router as soon as the status item exists, so the menu bar,
+/// overlay and commands can open windows even before the main window has ever appeared.
+@MainActor
 struct MenuBarLabelView: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings
     @Environment(WindowRouter.self) private var router
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
 
     init() {}
 
     var body: some View {
         content
-            .onAppear { router.register(openWindow: openWindow) }
+            .onAppear { router.register(openWindow: openWindow, openSettings: openSettings) }
     }
 
     @ViewBuilder

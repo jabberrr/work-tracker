@@ -2,11 +2,14 @@ import AppKit
 import AuthenticationServices
 import SwiftUI
 
-/// Account: Sign in with Apple state, sign in / out, and where data is stored (iCloud vs. this Mac only).
+/// Account: Sign in with Apple state, sign in / out, where data is stored (iCloud vs. this Mac only) and the
+/// live iCloud sync status (`SyncMonitor`).
+@MainActor
 struct SettingsAccountTab: View {
     @Environment(AuthService.self) private var auth
     @Environment(AppSettings.self) private var settings
     @Environment(PersistenceController.self) private var persistence
+    @Environment(SyncMonitor.self) private var sync
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
 
@@ -27,9 +30,17 @@ struct SettingsAccountTab: View {
 
             Section("Sync and storage") {
                 storageStatusRow
+                if persistence.storeMode == .cloudKit {
+                    syncActivityRow
+                    if let error = sync.lastErrorDescription {
+                        InlineBanner(error, systemImage: "exclamationmark.icloud", style: .warning)
+                    }
+                }
                 Toggle("Sync with iCloud", isOn: $settings.iCloudSyncEnabled)
                     .disabled(!Entitlements.hasCloudKit)
                 if needsRelaunch {
+                    // Quit (not relaunch): a second instance must not open the same store while this one
+                    // is still saving and backing up on its way out.
                     InlineBanner("Quit and reopen Worklog to apply this change.",
                                  systemImage: "arrow.clockwise", style: .warning,
                                  actionTitle: "Quit Worklog", action: { NSApp.terminate(nil) })
@@ -139,7 +150,7 @@ struct SettingsAccountTab: View {
         case .inMemory(let reason):
             return reason == "Preview"
                 ? "Nothing is written to disk."
-                : "\(reason) Changes made now are lost when Worklog quits. Restore a backup in the Data tab."
+                : "\(reason) Changes made now are lost when Worklog quits. Use Recover… in the Data tab."
         }
     }
 
@@ -166,34 +177,85 @@ struct SettingsAccountTab: View {
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
-                Text(iCloudAccountLine)
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
+                if let line = iCloudAccountLine {
+                    Text(line)
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textTertiary)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
             Spacer()
         }
         .accessibilityElement(children: .combine)
     }
 
-    private var iCloudAccountLine: String {
+    /// The iCloud account state as `SyncMonitor` sees it (CKContainer.accountStatus). nil when there is nothing
+    /// useful to say (sync off for this launch, status not checked).
+    private var iCloudAccountLine: String? {
         if !Entitlements.hasCloudKit {
             return "This build isn’t set up for iCloud (no CloudKit entitlement)."
         }
-        return FileManager.default.ubiquityIdentityToken != nil
-            ? "This Mac is signed in to iCloud."
-            : "This Mac isn’t signed in to iCloud (System Settings ▸ Apple Account)."
+        switch sync.accountStatus {
+        case .unknown:
+            return persistence.storeMode == .cloudKit ? "Checking the iCloud account…" : nil
+        case .available:
+            return "This Mac is signed in to iCloud."
+        case .noAccount:
+            return "This Mac isn’t signed in to iCloud (System Settings ▸ Apple Account)."
+        case .restricted:
+            return "iCloud is restricted on this Mac (for example by Screen Time or a device profile)."
+        case .temporarilyUnavailable:
+            return "iCloud is temporarily unavailable. Check System Settings ▸ Apple Account."
+        case .couldNotDetermine:
+            return "Worklog couldn’t check the iCloud account."
+        }
     }
 
-    /// True when the toggle differs from what this launch used (it's read once at launch).
-    private var needsRelaunch: Bool {
-        let launchedWithSync: Bool
-        switch persistence.storeMode {
-        case .cloudKit: launchedWithSync = true
-        case .localOnly(let reason): launchedWithSync = reason != "iCloud sync disabled"
-        case .inMemory: return false
+    // MARK: Sync activity
+
+    /// "Syncing…" / "Last synced 2 minutes ago" / "Waiting for the first download from iCloud". Re-rendered every
+    /// 30 s so the relative time stays current.
+    private var syncActivityRow: some View {
+        TimelineView(.periodic(from: .now, by: 30)) { context in
+            HStack(spacing: theme.spacingS) {
+                if sync.isSyncing {
+                    ProgressView()
+                        .controlSize(.small)
+                        .frame(width: 28)
+                        .accessibilityHidden(true)
+                } else {
+                    Image(systemName: sync.lastErrorDescription == nil ? "checkmark.icloud" : "exclamationmark.icloud")
+                        .foregroundStyle(sync.lastErrorDescription == nil ? theme.textSecondary : theme.warning)
+                        .frame(width: 28)
+                        .accessibilityHidden(true)
+                }
+                Text(syncActivityText(now: context.date))
+                    .font(theme.calloutFont)
+                    .foregroundStyle(theme.textSecondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Spacer()
+            }
+            .accessibilityElement(children: .combine)
         }
-        return settings.iCloudSyncEnabled != launchedWithSync
+    }
+
+    private func syncActivityText(now: Date) -> String {
+        if sync.isSyncing {
+            return sync.hasCompletedFirstImport ? "Syncing…" : "Downloading your data from iCloud…"
+        }
+        if let last = sync.lastSyncDate {
+            // Never "in 2 seconds" when the clocks disagree slightly.
+            let shown = min(last, now)
+            return "Last synced \(shown.formatted(.relative(presentation: .named, unitsStyle: .wide)))"
+        }
+        return sync.hasCompletedFirstImport ? "Up to date" : "Waiting for the first sync with iCloud…"
+    }
+
+    /// True when the toggle differs from what this launch used (it's read once at launch). Never while the store
+    /// couldn't be opened — recovery is offered in the Data tab instead.
+    private var needsRelaunch: Bool {
+        guard !persistence.isInMemory else { return false }
+        return settings.iCloudSyncEnabled != persistence.cloudSyncRequestedAtLaunch
     }
 
     private var syncExplanation: String {

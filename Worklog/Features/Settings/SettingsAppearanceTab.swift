@@ -1,6 +1,7 @@
 import SwiftUI
 
 /// Appearance: theme style (live swatches), light/dark/system, accent, in-app text size, reset.
+@MainActor
 struct SettingsAppearanceTab: View {
     @Environment(ThemeManager.self) private var themeManager
     @Environment(\.theme) private var theme
@@ -52,7 +53,7 @@ struct SettingsAppearanceTab: View {
                     Spacer()
                     Button("Reset Appearance") { themeManager.resetToDefaults() }
                         .buttonStyle(QuietButtonStyle())
-                        .help("Paper theme, system appearance, theme accent, standard text size")
+                        .help("\(ThemeID.default.displayName) theme, system appearance, theme accent, standard text size")
                 }
             }
         }

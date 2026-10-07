@@ -1,4 +1,5 @@
 import AppKit
+import Combine
 import SwiftData
 import SwiftUI
 
@@ -9,6 +10,7 @@ import SwiftUI
 
 /// Re-renders `content` once per second while the session runs (TimelineView); renders it once, statically,
 /// while paused or idle. Always compute durations from the date passed in (never accumulate).
+@MainActor
 struct LiveClock<Content: View>: View {
     private let isTicking: Bool
     private let content: (Date) -> Content
@@ -32,15 +34,38 @@ struct LiveClock<Content: View>: View {
 // MARK: - Today's sessions (query)
 
 /// Fetches sessions that started since two days before today (enough to catch sessions crossing midnight)
-/// with `@Query`, so no view fetches inside `body`. The cutoff is recomputed whenever the parent re-renders.
+/// with `@Query`, so no view fetches inside `body`. At midnight (`NSCalendarDayChanged`) the query is rebuilt
+/// for the new day and the content re-renders, so "today" never goes stale while the app stays open.
+@MainActor
 struct LiveTodaySessionsQuery<Content: View>: View {
+    private let content: ([WorkSession]) -> Content
+    @State private var day = Date().startOfDay
+
+    init(@ViewBuilder content: @escaping ([WorkSession]) -> Content) {
+        self.content = content
+    }
+
+    var body: some View {
+        LiveTodaySessionsResults(day: day, content: content)
+            .id(day)
+            .onReceive(LiveDayChange.publisher) { _ in
+                day = Date().startOfDay
+            }
+            .onAppear {
+                let today = Date().startOfDay
+                if today != day { day = today }
+            }
+    }
+}
+
+@MainActor
+private struct LiveTodaySessionsResults<Content: View>: View {
     @Query private var sessions: [WorkSession]
     private let content: ([WorkSession]) -> Content
 
-    init(@ViewBuilder content: @escaping ([WorkSession]) -> Content) {
-        let todayStart = Date().startOfDay
-        let cutoff = Calendar.current.date(byAdding: .day, value: -2, to: todayStart)
-            ?? todayStart.addingTimeInterval(-2 * 86_400)
+    init(day: Date, content: @escaping ([WorkSession]) -> Content) {
+        let cutoff = Calendar.current.date(byAdding: .day, value: -2, to: day)
+            ?? day.addingTimeInterval(-2 * 86_400)
         _sessions = Query(filter: #Predicate<WorkSession> { $0.startedAt >= cutoff },
                           sort: \WorkSession.startedAt, order: .reverse)
         self.content = content
@@ -49,6 +74,15 @@ struct LiveTodaySessionsQuery<Content: View>: View {
     var body: some View {
         // Drop objects deleted in this run loop turn (discard) before any child reads them.
         content(sessions.filter { LiveModelGuard.isUsable($0) })
+    }
+}
+
+/// Midnight (or a clock/time-zone change that moves the day), delivered on the main queue.
+enum LiveDayChange {
+    static var publisher: AnyPublisher<Notification, Never> {
+        NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
+            .receive(on: DispatchQueue.main)
+            .eraseToAnyPublisher()
     }
 }
 
@@ -87,6 +121,42 @@ enum LiveDayMath {
 enum LiveModelGuard {
     static func isUsable(_ model: some PersistentModel) -> Bool {
         !model.isDeleted && model.modelContext != nil
+    }
+}
+
+/// Start/split choices are held in `@State` across Settings edits: a label or tag picked earlier may have been
+/// deleted, merged or archived since. Resolve them right before handing them to the engine.
+@MainActor
+enum LiveStartChoice {
+    /// The picked label if it can still be used; a picked-but-gone label falls back to the default label.
+    /// `nil` (the user chose "None") stays `nil`.
+    static func label(_ picked: WorkLabel?, engine: SessionEngine) -> WorkLabel? {
+        guard let picked else { return nil }
+        if isUsable(picked) { return picked }
+        return engine.defaultLabel()
+    }
+
+    /// Like `label(_:engine:)`, but a gone label becomes `nil` (the engine then keeps the current label).
+    static func splitLabel(_ picked: WorkLabel?) -> WorkLabel? {
+        guard let picked, isUsable(picked) else { return nil }
+        return picked
+    }
+
+    static func tags(_ picked: [WorkTag]) -> [WorkTag] {
+        picked.filter { LiveModelGuard.isUsable($0) && !$0.isArchived }
+    }
+
+    static func isUsable(_ label: WorkLabel) -> Bool {
+        LiveModelGuard.isUsable(label) && !label.isArchived
+    }
+
+    /// Same rule as `SessionEngine.defaultLabel()`, computed from `@Query` results (no fetch in `body`).
+    static func defaultLabel(in labels: [WorkLabel], settings: AppSettings) -> WorkLabel? {
+        let active = labels.filter { isUsable($0) }
+        if let id = settings.defaultLabelID, let match = active.first(where: { $0.uuid == id }) {
+            return match
+        }
+        return active.first
     }
 }
 
@@ -135,6 +205,7 @@ enum LiveSegmentFormStyle {
 }
 
 /// Focus + label + tags for a new segment (split) or for the current segment (edit).
+@MainActor
 struct LiveSegmentForm: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(\.theme) private var theme
@@ -227,7 +298,10 @@ struct LiveSegmentForm: View {
             tags = current?.tagList ?? []
         }
         // Give the hosting window a moment to become key before focusing the field.
-        DispatchQueue.main.async { focusFieldFocused = true }
+        Task { @MainActor in
+            await Task.yield()
+            focusFieldFocused = true
+        }
     }
 
     private func commit() {
@@ -235,11 +309,15 @@ struct LiveSegmentForm: View {
             onFinish()
             return
         }
+        // Label/tags may have been deleted or archived in Settings while the form was open.
+        let safeLabel = LiveStartChoice.splitLabel(label)
+        let safeTags = LiveStartChoice.tags(tags)
         switch mode {
         case .split:
-            engine.split(label: label, tags: tags, focus: focus)
+            engine.split(label: safeLabel, tags: safeTags, focus: focus)
         case .edit:
-            engine.updateCurrentSegment(label: label, tags: tags, focus: focus)
+            engine.updateCurrentSegment(label: safeLabel ?? LiveStartChoice.splitLabel(engine.currentLabel),
+                                        tags: safeTags, focus: focus)
         }
         onFinish()
     }
@@ -249,6 +327,7 @@ struct LiveSegmentForm: View {
 
 /// Native pull-down menu of tags with checkmarks: label-scoped tags first, then global tags, then other labels'
 /// tags in a submenu. Native menus never take key status, so this is safe inside the menu bar window/overlay.
+@MainActor
 struct LiveTagMenu: View {
     @Environment(\.theme) private var theme
     @Query(sort: \WorkTag.name) private var allTags: [WorkTag]
@@ -286,7 +365,7 @@ struct LiveTagMenu: View {
             if active.isEmpty {
                 Text("No tags yet")
             }
-            if !selection.isEmpty {
+            if !liveSelection.isEmpty {
                 Divider()
                 Button("Clear tags") { selection = [] }
             }
@@ -300,25 +379,34 @@ struct LiveTagMenu: View {
         .fixedSize(horizontal: false, vertical: true)
         .foregroundStyle(theme.textSecondary)
         .accessibilityLabel("Tags")
-        .accessibilityValue(selection.isEmpty ? "None" : summary)
+        .accessibilityValue(liveSelection.isEmpty ? "None" : summary)
         .help("Choose tags")
     }
 
+    /// Never read a tag deleted or merged in Settings while this menu was on screen.
+    private var liveSelection: [WorkTag] {
+        selection.filter { LiveModelGuard.isUsable($0) }
+    }
+
     private var summary: String {
-        selection.isEmpty ? "Add tags" : selection.map(\.name).joined(separator: ", ")
+        let live = liveSelection
+        return live.isEmpty ? "Add tags" : live.map(\.name).joined(separator: ", ")
     }
 
     private func toggle(for tag: WorkTag) -> some View {
-        Toggle(tag.name, isOn: Binding(
-            get: { selection.contains(where: { $0.persistentModelID == tag.persistentModelID }) },
+        let tagID = tag.persistentModelID
+        return Toggle(tag.name, isOn: Binding(
+            get: { liveSelection.contains(where: { $0.persistentModelID == tagID }) },
             set: { isOn in
+                var next = liveSelection
                 if isOn {
-                    if !selection.contains(where: { $0.persistentModelID == tag.persistentModelID }) {
-                        selection.append(tag)
+                    if !next.contains(where: { $0.persistentModelID == tagID }) {
+                        next.append(tag)
                     }
                 } else {
-                    selection.removeAll { $0.persistentModelID == tag.persistentModelID }
+                    next.removeAll { $0.persistentModelID == tagID }
                 }
+                selection = next
             }
         ))
     }
@@ -328,6 +416,7 @@ struct LiveTagMenu: View {
 
 /// Single-line note composer: Return adds a timestamped note to the running session (engine.addNote),
 /// clears the field and keeps focus. Shows a short confirmation line.
+@MainActor
 struct LiveQuickNoteField: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(\.theme) private var theme
@@ -390,7 +479,8 @@ struct LiveQuickNoteField: View {
         confirmation = "Note added at \(note.createdAt.shortTime)"
         confirmationToken += 1
         let token = confirmationToken
-        DispatchQueue.main.asyncAfter(deadline: .now() + 2.5) {
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(2500))
             if confirmationToken == token { confirmation = nil }
         }
     }
@@ -398,54 +488,120 @@ struct LiveQuickNoteField: View {
 
 // MARK: - Takeaway
 
-/// "Last takeaway" block: quote glyph, the takeaway text, and "title · day" metadata.
+/// "Last takeaway" block: quote glyph, the takeaway text, "title · day" metadata (a link that opens the source
+/// session in History) and a "Done" checkmark (`engine.dismissTakeaway()`: the takeaway stops showing everywhere).
+@MainActor
 struct LiveTakeawayView: View {
+    @Environment(SessionEngine.self) private var engine
+    @Environment(WindowRouter.self) private var router
+    @Environment(\.modelContext) private var modelContext
     @Environment(\.theme) private var theme
     private let takeaway: SessionTakeaway
     private let lineLimit: Int?
     private let showsTitle: Bool
     private let isCompact: Bool
+    private let showsDone: Bool
 
-    init(takeaway: SessionTakeaway, lineLimit: Int? = nil, showsTitle: Bool = true, isCompact: Bool = false) {
+    init(takeaway: SessionTakeaway, lineLimit: Int? = nil, showsTitle: Bool = true, isCompact: Bool = false,
+         showsDone: Bool = true) {
         self.takeaway = takeaway
         self.lineLimit = lineLimit
         self.showsTitle = showsTitle
         self.isCompact = isCompact
+        self.showsDone = showsDone
     }
 
     var body: some View {
-        HStack(alignment: .firstTextBaseline, spacing: theme.spacingS) {
-            Image(systemName: "quote.opening")
-                .font(theme.captionFont.weight(.semibold))
-                .foregroundStyle(theme.textTertiary)
-                .accessibilityHidden(true)
-            VStack(alignment: .leading, spacing: theme.spacingXS) {
-                if showsTitle {
-                    Text("Last takeaway")
-                        .font(theme.captionFont.weight(.semibold))
-                        .foregroundStyle(theme.textSecondary)
-                }
-                Text(takeaway.text)
-                    .font(isCompact ? theme.calloutFont : theme.bodyFont)
-                    .foregroundStyle(theme.textPrimary)
-                    .lineLimit(lineLimit)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                Text(meta)
-                    .font(theme.captionFont)
+        HStack(alignment: .top, spacing: theme.spacingS) {
+            HStack(alignment: .firstTextBaseline, spacing: theme.spacingS) {
+                Image(systemName: "quote.opening")
+                    .font(theme.captionFont.weight(.semibold))
                     .foregroundStyle(theme.textTertiary)
-                    .lineLimit(1)
-                    .truncationMode(.tail)
+                    .accessibilityHidden(true)
+                VStack(alignment: .leading, spacing: theme.spacingXS) {
+                    VStack(alignment: .leading, spacing: theme.spacingXS) {
+                        if showsTitle {
+                            Text("Last takeaway")
+                                .font(theme.captionFont.weight(.semibold))
+                                .foregroundStyle(theme.textSecondary)
+                        }
+                        Text(takeaway.text)
+                            .font(isCompact ? theme.calloutFont : theme.bodyFont)
+                            .foregroundStyle(theme.textPrimary)
+                            .lineLimit(lineLimit)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .textSelection(.enabled)
+                    }
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel(accessibilityText)
+
+                    Button(action: openSource) {
+                        Text(meta)
+                            .font(theme.captionFont)
+                            .foregroundStyle(theme.textTertiary)
+                            .lineLimit(1)
+                            .truncationMode(.tail)
+                            .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help("Open “\(takeaway.title)” in History")
+                    .accessibilityLabel("From \(meta)")
+                    .accessibilityHint("Opens the session in History")
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+
+            if showsDone {
+                Button {
+                    engine.dismissTakeaway()
+                } label: {
+                    Image(systemName: "checkmark")
+                }
+                .buttonStyle(IconButtonStyle(size: isCompact ? 20 : 24))
+                .foregroundStyle(theme.textTertiary)
+                .accessibilityLabel("Done with this takeaway")
+                .help("Done: stop showing this takeaway")
+            }
         }
-        .accessibilityElement(children: .combine)
-        .accessibilityLabel("Last takeaway: \(takeaway.text). From \(meta)")
+        .accessibilityElement(children: .contain)
         .help(takeaway.text)
     }
 
     private var meta: String {
         "\(takeaway.title) · \(takeaway.date.relativeDayTitle)"
+    }
+
+    private var accessibilityText: String {
+        "Last takeaway: \(takeaway.text)"
+    }
+
+    /// Fetches the source session on click only (never in `body`).
+    private func openSource() {
+        let uuid = takeaway.sessionUUID
+        var descriptor = FetchDescriptor<WorkSession>(predicate: #Predicate<WorkSession> { $0.uuid == uuid })
+        descriptor.fetchLimit = 1
+        guard let session = try? modelContext.fetch(descriptor).first, LiveModelGuard.isUsable(session) else {
+            return
+        }
+        router.showSession(session)
+    }
+}
+
+// MARK: - Other-Mac hint
+
+/// Subtle hint while the active session is controlled from another Mac (synced through iCloud).
+@MainActor
+struct LiveOtherMacHint: View {
+    @Environment(\.theme) private var theme
+
+    init() {}
+
+    var body: some View {
+        Label("Running on another Mac", systemImage: "laptopcomputer")
+            .font(theme.captionFont)
+            .foregroundStyle(theme.textTertiary)
+            .lineLimit(1)
+            .help("This session was started or last changed on another Mac. Pausing, splitting or stopping it here takes it over.")
     }
 }
 

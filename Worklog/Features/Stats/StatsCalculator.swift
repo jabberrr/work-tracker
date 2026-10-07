@@ -298,6 +298,25 @@ enum StatsCalculator {
     static let unlabeledName = "Unlabeled"
     static let maxTagCount = 10
 
+    /// Longest window (in days) still drawn with daily bars; longer windows use weeks.
+    static let maxDailyBucketDays = 400
+    /// Longest window (in days) still drawn with weekly bars; longer windows use months.
+    static let maxWeeklyBucketDays = 7 * 260
+
+    /// The bucket actually used for a window of `dayCount` days (coarsened to keep the chart readable).
+    static func effectiveBucket(_ requested: StatsBucket, dayCount: Int) -> StatsBucket {
+        var bucket = requested
+        if bucket == .day && dayCount > maxDailyBucketDays { bucket = .week }
+        if bucket == .week && dayCount > maxWeeklyBucketDays { bucket = .month }
+        return bucket
+    }
+
+    /// The range's buckets minus those the calculator would coarsen for this window length.
+    static func allowedBuckets(for range: StatsRange, dayCount: Int) -> [StatsBucket] {
+        let honored = range.allowedBuckets.filter { effectiveBucket($0, dayCount: dayCount) == $0 }
+        return honored.isEmpty ? [.month] : honored
+    }
+
     static func makeCalendar(weekStartsOnMonday: Bool) -> Calendar {
         var calendar = Calendar.current
         calendar.firstWeekday = weekStartsOnMonday ? 2 : 1
@@ -322,9 +341,7 @@ enum StatsCalculator {
         let dayCount = max(1, calendar.dateComponents([.day], from: windowStart, to: windowEnd).day ?? 1)
 
         // Effective bucket: keep the chart readable.
-        var bucket = options.bucket
-        if bucket == .day && dayCount > 400 { bucket = .week }
-        if bucket == .week && dayCount > 7 * 260 { bucket = .month }
+        let bucket = effectiveBucket(options.bucket, dayCount: dayCount)
 
         var bucketCache: [Date: Date] = [:]
         func bucketStart(forDay day: Date) -> Date {

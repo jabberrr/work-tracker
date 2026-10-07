@@ -31,15 +31,18 @@ struct LearningsEditor: View {
 
     @Bindable private var session: WorkSession
     private let style: LearningsEditorStyle
+    private let showsTakeaway: Bool
 
     @State private var newPointText = ""
     @State private var showsPointDetails = false
     @State private var showsAllPoints = false
     @FocusState private var focusedField: LearningsField?
 
-    init(session: WorkSession, style: LearningsEditorStyle = .full) {
+    /// - Parameter showsTakeaway: pass `false` when the host already edits `overlaySummary` itself (the end-of-session sheet).
+    init(session: WorkSession, style: LearningsEditorStyle = .full, showsTakeaway: Bool = true) {
         self._session = Bindable(wrappedValue: session)
         self.style = style
+        self.showsTakeaway = showsTakeaway
     }
 
     static let summaryGuidanceLength = 140
@@ -57,7 +60,9 @@ struct LearningsEditor: View {
     private var content: some View {
         VStack(alignment: .leading, spacing: style == .full ? theme.spacingL : theme.spacingM) {
             learningTextEditor
-            takeawayEditor
+            if showsTakeaway {
+                takeawayEditor
+            }
             pointsEditor
         }
         .frame(maxWidth: .infinity, alignment: .leading)

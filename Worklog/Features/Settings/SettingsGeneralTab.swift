@@ -1,7 +1,9 @@
 import SwiftData
 import SwiftUI
 
-/// General: session defaults, automatic pausing, the "still working?" warning, daily goal and week start.
+/// General: session defaults, takeaway lifetime, automatic pausing, the "still working?" warning, daily goal,
+/// week start and the Dock icon.
+@MainActor
 struct SettingsGeneralTab: View {
     @Environment(AppSettings.self) private var settings
     @Query(sort: \WorkLabel.sortIndex) private var labels: [WorkLabel]
@@ -28,6 +30,13 @@ struct SettingsGeneralTab: View {
                 Toggle("Ask before discarding a running session", isOn: $settings.confirmBeforeDiscard)
             }
 
+            Section("Takeaway") {
+                Toggle("Show takeaway for the next session only", isOn: $settings.takeawayNextSessionOnly)
+                SettingsFootnote(settings.takeawayNextSessionOnly
+                                 ? "A takeaway shows in Today, the overlay and the menu bar until the next session’s review is done."
+                                 : "A takeaway stays in Today, the overlay and the menu bar until you write a new one or mark it done.")
+            }
+
             Section("Automatic pausing") {
                 Toggle("Pause when the Mac goes to sleep", isOn: $settings.pauseOnSleep)
                 Toggle("Pause when Worklog quits", isOn: $settings.pauseOnQuit)
@@ -52,6 +61,13 @@ struct SettingsGeneralTab: View {
                     Text("Sunday").tag(false)
                 }
                 SettingsFootnote("Used by Today, Stats and the Learning page.")
+            }
+
+            Section("Dock") {
+                Toggle("Hide the Dock icon when the main window is closed", isOn: $settings.hideDockIconWhenClosed)
+                SettingsFootnote(settings.showMenuBarExtra
+                                 ? "Worklog keeps running in the menu bar. Open the main window from the menu bar panel."
+                                 : "The menu bar item is off, so reopen Worklog from the Applications folder or Spotlight to get the window back.")
             }
         }
         .formStyle(.grouped)

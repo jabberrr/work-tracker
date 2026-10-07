@@ -3,6 +3,7 @@ import SwiftUI
 
 /// Labels & Tags: manage the label list (create, rename, color, symbol, reorder, archive, merge, delete with
 /// reassignment) and tags (create, rename, color, parent label, archive, merge, delete).
+@MainActor
 struct SettingsLabelsTab: View {
     private enum Pane: String, CaseIterable, Identifiable {
         case labels, tags
@@ -38,6 +39,7 @@ struct SettingsLabelsTab: View {
 
 // MARK: - Labels pane
 
+@MainActor
 struct SettingsLabelsPane: View {
     @Environment(\.modelContext) private var context
     @Environment(AppSettings.self) private var settings
@@ -186,6 +188,7 @@ struct SettingsLabelsPane: View {
 
 // MARK: - Label editor
 
+@MainActor
 private struct SettingsLabelEditor: View {
     @Environment(\.modelContext) private var context
     @Environment(AppSettings.self) private var settings
@@ -283,8 +286,16 @@ private struct SettingsLabelEditor: View {
         .onChange(of: nameFocused) {
             if !nameFocused { commitName() }
         }
-        .onDisappear(perform: commitName)
-        .onChange(of: label.colorHex) { save() }
+        .onDisappear {
+            commitName()
+            // Flush a color change still waiting in the debounce below.
+            if !label.isDeleted, label.modelContext != nil, context.hasChanges { save() }
+        }
+        .task(id: label.colorHex) {
+            // The color wheel reports every drag tick: save once the color settles.
+            try? await Task.sleep(for: .milliseconds(400))
+            if !Task.isCancelled { save() }
+        }
         .onChange(of: label.symbolName) { save() }
         .sheet(isPresented: $showsDeleteSheet) {
             SettingsDeleteLabelSheet(label: label, candidates: otherLabels) {
@@ -352,6 +363,7 @@ private struct SettingsLabelEditor: View {
 // MARK: - Delete label sheet
 
 /// "Delete “Meetings”? 42 sessions use it. Move them to: ▾ [Unlabeled]" — reassign target, or archive instead.
+@MainActor
 private struct SettingsDeleteLabelSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(AppSettings.self) private var settings

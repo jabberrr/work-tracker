@@ -31,8 +31,13 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
 }
 
 /// Root of the `Settings` scene (⌘,). Native TabView, ~680 × 520, a grouped Form per tab.
+///
+/// `WindowRouter.showSettings(tab:)` sets `router.settingsTabRequest` to a `SettingsTab.rawValue`; this view selects
+/// that tab (on appear and whenever the request changes) and clears the request.
+@MainActor
 struct SettingsView: View {
     @Environment(PersistenceController.self) private var persistence
+    @Environment(WindowRouter.self) private var router
     @AppStorage("settingsWindow.selectedTab") private var selectedTab: SettingsTab = .general
 
     init() {}
@@ -54,11 +59,25 @@ struct SettingsView: View {
         }
         .frame(width: 680, height: 520)
         .onAppear {
-            // The store couldn't be opened: RootView's "Restore from backup…" opens Settings — go straight to Data.
-            if case .inMemory(let reason) = persistence.storeMode, reason != "Preview" {
+            if router.settingsTabRequest != nil {
+                applyTabRequest()
+            } else if SettingsRecovery.isNeeded(persistence) {
+                // The store couldn't be opened: go straight to Data, where "Recover…" lives.
                 selectedTab = .data
             }
         }
+        .onChange(of: router.settingsTabRequest) {
+            applyTabRequest()
+        }
+    }
+
+    /// Selects the requested tab (unknown raw values are ignored) and clears the request.
+    private func applyTabRequest() {
+        guard let raw = router.settingsTabRequest else { return }
+        if let tab = SettingsTab(rawValue: raw) {
+            selectedTab = tab
+        }
+        router.settingsTabRequest = nil
     }
 }
 

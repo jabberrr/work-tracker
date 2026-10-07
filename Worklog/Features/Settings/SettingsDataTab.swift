@@ -5,6 +5,10 @@ import UniformTypeIdentifiers
 
 /// Data: export (JSON with/without images, sessions CSV, segments CSV), import (merge / replace), rolling backups
 /// (back up now, schedule, retention, restore, reveal, delete) and delete-all.
+///
+/// When the store couldn't be opened (in-memory fallback) the tab leads with "Recover…" and every restore goes
+/// through `SettingsRecoverySheet` (move the damaged store aside, relaunch, restore) — never into the temporary store.
+@MainActor
 struct SettingsDataTab: View {
     @Environment(ExportService.self) private var exporter
     @Environment(BackupService.self) private var backups
@@ -19,25 +23,32 @@ struct SettingsDataTab: View {
     @State private var backupToDelete: BackupFile?
     @State private var confirmsDeleteAll = false
     @State private var confirmsDeleteAllAgain = false
+    @State private var recoveryRequest: SettingsRecoveryRequest?
+
+    private var needsRecovery: Bool { SettingsRecovery.isNeeded(persistence) }
 
     var body: some View {
         @Bindable var settings = settings
 
         Form {
-            if case .inMemory(let reason) = persistence.storeMode, reason != "Preview" {
-                Section {
-                    InlineBanner("Worklog couldn’t open its data store, so nothing is saved right now. Restoring a backup loads it for this session only — export it as JSON to keep a copy. The original store file is left untouched for recovery.",
-                                 systemImage: "exclamationmark.triangle.fill", style: .error)
-                }
+            if needsRecovery {
+                recoverySection
             }
 
             exportSection
-            importSection
+            if !needsRecovery {
+                importSection
+            }
             backupsSection(settings: $settings)
-            dangerSection
+            if !needsRecovery {
+                dangerSection
+            }
         }
         .formStyle(.grouped)
         .onAppear { backups.refreshList() }
+        .sheet(item: $recoveryRequest) { request in
+            SettingsRecoverySheet(request: request)
+        }
         .sheet(item: $pendingImport) { pending in
             SettingsImportSheet(pending: pending) { result in
                 pendingImport = nil
@@ -72,6 +83,17 @@ struct SettingsDataTab: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("A backup of your current data is saved first. This can’t be undone from within Worklog except by restoring that backup.")
+        }
+    }
+
+    // MARK: - Recovery
+
+    private var recoverySection: some View {
+        Section {
+            InlineBanner("Worklog couldn’t open its data store, so nothing you change now is saved.",
+                         systemImage: "exclamationmark.triangle.fill", style: .error,
+                         actionTitle: "Recover…", action: { recoveryRequest = SettingsRecoveryRequest(preselected: nil) })
+            SettingsFootnote("Recover moves the damaged store into a “Recovered” folder (it’s never deleted), relaunches Worklog and restores a backup — or starts fresh and downloads your data from iCloud when sync is on.")
         }
     }
 
@@ -155,7 +177,7 @@ struct SettingsDataTab: View {
                 .buttonStyle(QuietButtonStyle())
                 Spacer()
             }
-            SettingsFootnote("Import a Worklog JSON export or backup. “Merge” adds and updates sessions by their ID and keeps everything else; “Replace” deletes all current data first.")
+            SettingsFootnote("Import a Worklog JSON export or backup. “Merge” adds sessions from the file and keeps everything else — where a session exists in both, the more recently edited version wins. “Replace” deletes all current data first. Either way, a backup of your current data is made first.")
         }
     }
 
@@ -200,7 +222,10 @@ struct SettingsDataTab: View {
                     Label("Back Up Now", systemImage: "externaldrive")
                 }
                 .buttonStyle(QuietButtonStyle())
-                .disabled(backups.isWorking)
+                .disabled(backups.isWorking || needsRecovery)
+                .help(needsRecovery
+                      ? "Backups are paused while the data store can’t be opened, so good backups aren’t replaced. Export JSON to keep this session’s changes."
+                      : "Back up all data now")
                 Button {
                     backups.revealInFinder()
                 } label: {
@@ -263,6 +288,7 @@ struct SettingsDataTab: View {
                 .buttonStyle(QuietButtonStyle())
                 .controlSize(.small)
                 .disabled(backups.isWorking)
+                .help(needsRecovery ? "Move the damaged store aside, relaunch and restore this backup" : "Restore this backup")
             Menu {
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([backup.url]) }
                 Divider()
@@ -304,6 +330,11 @@ struct SettingsDataTab: View {
     }
 
     private func prepareRestore(_ backup: BackupFile) {
+        if needsRecovery {
+            // Never restore into the temporary in-memory store: recover into a fresh on-disk store instead.
+            recoveryRequest = SettingsRecoveryRequest(preselected: backup)
+            return
+        }
         do {
             let archive = try exporter.decodeArchive(from: backup.url)
             pendingImport = SettingsPendingImport(source: .backup(backup), archive: archive)
@@ -378,7 +409,9 @@ struct SettingsPendingImport: Identifiable {
 // MARK: - Import / restore sheet
 
 /// Shows what an archive contains, lets the user pick Merge or Replace, warns about images and a running session,
-/// asks once more for Replace, then imports (file) or restores (backup; BackupService makes a safety backup).
+/// asks once more for Replace, then imports (file) or restores (backup). A safety backup of the current data is
+/// always made first (BackupService.restore for backups, here for files) unless the store is in memory only.
+@MainActor
 private struct SettingsImportSheet: View {
     @Environment(ExportService.self) private var exporter
     @Environment(BackupService.self) private var backups
@@ -431,7 +464,7 @@ private struct SettingsImportSheet: View {
             }
 
             Picker("Mode", selection: $mode) {
-                Text("Merge — add and update, keep everything else").tag(ImportMode.merge)
+                Text("Merge — add sessions from the file, keep everything else").tag(ImportMode.merge)
                 Text("Replace — delete all current data first").tag(ImportMode.replace)
             }
             .pickerStyle(.radioGroup)
@@ -449,8 +482,11 @@ private struct SettingsImportSheet: View {
                 SettingsFootnote(isBackup
                                  ? "Your current data is backed up automatically before restoring."
                                  : "Your current data is backed up automatically before replacing.")
-            } else if !archive.includesAttachments {
-                SettingsFootnote("This file has no images. Merging keeps the images you already have.")
+            } else {
+                SettingsFootnote("Sessions that exist in both keep the more recently edited version, and a running session is never changed. Your current data is backed up automatically first.")
+                if !archive.includesAttachments {
+                    SettingsFootnote("This file has no images. Merging keeps the images you already have.")
+                }
             }
 
             if let errorText {
@@ -508,9 +544,10 @@ private struct SettingsImportSheet: View {
             case .backup(let backup):
                 summary = try backups.restore(from: backup, mode: mode)
             case .file:
-                if mode == .replace {
+                // Safety backup before merging or replacing (pointless for a store that lives in memory only).
+                if !exporter.isEphemeralStore {
                     guard backups.backupNow(reason: .beforeRestore) != nil else {
-                        errorText = "A safety backup of your current data couldn’t be made, so nothing was replaced. \(backups.lastError ?? "")"
+                        errorText = "A safety backup of your current data couldn’t be made, so nothing was imported. \(backups.lastError ?? "")"
                         return
                     }
                 }

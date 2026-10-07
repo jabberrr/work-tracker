@@ -2,6 +2,7 @@ import SwiftData
 import SwiftUI
 
 /// Tags: filterable list (active / archived) + editor (name, color, parent label, archive, merge, delete).
+@MainActor
 struct SettingsTagsPane: View {
     @Environment(\.modelContext) private var context
     @Environment(\.theme) private var theme
@@ -132,6 +133,7 @@ struct SettingsTagsPane: View {
 
 // MARK: - Tag editor
 
+@MainActor
 private struct SettingsTagEditor: View {
     @Environment(\.modelContext) private var context
     @Environment(\.theme) private var theme
@@ -228,8 +230,16 @@ private struct SettingsTagEditor: View {
             if !nameFocused { commitName() }
         }
         .onChange(of: draftName) { duplicate = nil }
-        .onDisappear(perform: commitName)
-        .onChange(of: tag.colorHex) { save() }
+        .onDisappear {
+            commitName()
+            // Flush a color change still waiting in the debounce below.
+            if !tag.isDeleted, tag.modelContext != nil, context.hasChanges { save() }
+        }
+        .task(id: tag.colorHex) {
+            // The color wheel reports every drag tick: save once the color settles.
+            try? await Task.sleep(for: .milliseconds(400))
+            if !Task.isCancelled { save() }
+        }
         .onChange(of: tag.label) { save() }
         .confirmationDialog(
             mergeTarget.map { "Merge “\(tag.name)” into “\($0.name)”?" } ?? "Merge tags?",
