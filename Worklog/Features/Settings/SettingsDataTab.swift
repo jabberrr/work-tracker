@@ -272,10 +272,19 @@ struct SettingsDataTab: View {
     private func backupRow(_ backup: BackupFile) -> some View {
         HStack(spacing: theme.spacingM) {
             VStack(alignment: .leading, spacing: 2) {
-                Text(backup.date.shortDateTime)
-                    .font(theme.bodyFont)
-                    .foregroundStyle(theme.textPrimary)
-                Text(Self.reasonName(backup.reason))
+                HStack(spacing: theme.spacingXS) {
+                    Text(backup.date.shortDateTime)
+                        .font(theme.bodyFont)
+                        .foregroundStyle(theme.textPrimary)
+                    if backup.isPinned {
+                        Image(systemName: "pin.fill")
+                            .font(theme.captionFont)
+                            .foregroundStyle(theme.accent)
+                            .help("Pinned: never removed automatically")
+                            .accessibilityLabel("Pinned")
+                    }
+                }
+                Text(Self.backupDetail(backup))
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textSecondary)
             }
@@ -290,6 +299,7 @@ struct SettingsDataTab: View {
                 .disabled(backups.isWorking)
                 .help(needsRecovery ? "Move the damaged store aside, relaunch and restore this backup" : "Restore this backup")
             Menu {
+                pinButton(backup)
                 Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([backup.url]) }
                 Divider()
                 Button("Delete…", role: .destructive) { backupToDelete = backup }
@@ -306,10 +316,29 @@ struct SettingsDataTab: View {
         .accessibilityElement(children: .contain)
         .contextMenu {
             Button("Restore…") { prepareRestore(backup) }
+            pinButton(backup)
             Button("Show in Finder") { NSWorkspace.shared.activateFileViewerSelecting([backup.url]) }
             Divider()
             Button("Delete…", role: .destructive) { backupToDelete = backup }
         }
+    }
+
+    private func pinButton(_ backup: BackupFile) -> some View {
+        Button(backup.isPinned ? "Unpin" : "Pin (Keep Forever)") {
+            backups.setPinned(!backup.isPinned, for: backup)
+        }
+        .help(backup.isPinned ? "Let automatic clean-up remove this backup again"
+                              : "Never remove this backup automatically")
+    }
+
+    /// "Automatic · 42 sessions" (the count is unknown for older backups).
+    static func backupDetail(_ backup: BackupFile) -> String {
+        var parts = [reasonName(backup.reason)]
+        if let count = backup.sessionCount {
+            parts.append("\(count) \(count == 1 ? "session" : "sessions")")
+        }
+        if backup.isPinned { parts.append("pinned") }
+        return parts.joined(separator: " · ")
     }
 
     static func reasonName(_ reason: String) -> String {
@@ -410,7 +439,7 @@ struct SettingsPendingImport: Identifiable {
 
 /// Shows what an archive contains, lets the user pick Merge or Replace, warns about images and a running session,
 /// asks once more for Replace, then imports (file) or restores (backup). A safety backup of the current data is
-/// always made first (BackupService.restore for backups, here for files) unless the store is in memory only.
+/// always made first (`BackupService.restore` / `BackupService.importArchive`) unless the store is in memory only.
 @MainActor
 private struct SettingsImportSheet: View {
     @Environment(ExportService.self) private var exporter
@@ -544,14 +573,8 @@ private struct SettingsImportSheet: View {
             case .backup(let backup):
                 summary = try backups.restore(from: backup, mode: mode)
             case .file:
-                // Safety backup before merging or replacing (pointless for a store that lives in memory only).
-                if !exporter.isEphemeralStore {
-                    guard backups.backupNow(reason: .beforeRestore) != nil else {
-                        errorText = "A safety backup of your current data couldn’t be made, so nothing was imported. \(backups.lastError ?? "")"
-                        return
-                    }
-                }
-                summary = try exporter.importArchive(archive, mode: mode)
+                // BackupService makes the safety backup first (merge and replace alike) and refreshes the list.
+                summary = try backups.importArchive(archive, mode: mode)
             }
             onFinish(SettingsDataMessage(title: isBackup ? "Backup restored" : "Import complete",
                                          text: summary.description))

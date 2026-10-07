@@ -109,7 +109,7 @@ struct HistoryView: View {
                     sortMenu
                 }
                 labelChips
-                if let tagID = tagFilter, let tag = tags.first(where: { $0.persistentModelID == tagID }) {
+                if let tagID = tagFilter, let tag = ModelLiveness.live(tags).first(where: { $0.persistentModelID == tagID }) {
                     HStack(spacing: theme.spacingXS) {
                         Text("Tag")
                             .font(theme.captionFont)
@@ -230,7 +230,7 @@ struct HistoryView: View {
     }
 
     private var filterMenu: some View {
-        let activeTags = tags.filter { !$0.isArchived || $0.persistentModelID == tagFilter }
+        let activeTags = ModelLiveness.live(tags).filter { !$0.isArchived || $0.persistentModelID == tagFilter }
         return Menu {
             Picker("Filter by tag", selection: $tagFilter) {
                 Text("Any tag").tag(PersistentIdentifier?.none)
@@ -256,7 +256,7 @@ struct HistoryView: View {
     }
 
     private var labelChips: some View {
-        let visibleLabels = labels.filter { !$0.isArchived || $0.persistentModelID == labelFilter }
+        let visibleLabels = ModelLiveness.live(labels).filter { !$0.isArchived || $0.persistentModelID == labelFilter }
         return ScrollView(.horizontal, showsIndicators: false) {
             HStack(spacing: theme.spacingXS + 2) {
                 chipButton(title: "All", hex: LabelPalette.defaultTagHex, isSelected: labelFilter == nil) {

@@ -115,7 +115,7 @@ struct LearningView: View {
                 Text(row.tag.name)
                     .lineLimit(1)
                     .truncationMode(.tail)
-                if let parent = row.tag.label {
+                if let parent = ModelLiveness.live(row.tag.label) {
                     Text(parent.name)
                         .font(theme.captionFont)
                         .foregroundStyle(theme.textTertiary)

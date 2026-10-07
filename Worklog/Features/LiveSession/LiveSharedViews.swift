@@ -340,15 +340,20 @@ struct LiveTagMenu: View {
     }
 
     var body: some View {
-        let active = allTags.filter { !$0.isArchived }
-        let scopeID = scopeLabel?.persistentModelID
-        let scoped = active.filter { $0.label != nil && $0.label?.persistentModelID == scopeID }
-        let global = active.filter { $0.label == nil }
-        let others = active.filter { $0.label != nil && $0.label?.persistentModelID != scopeID }
+        // Never read a tag or label deleted/merged in Settings while this menu is on screen.
+        let active = ModelLiveness.live(allTags).filter { !$0.isArchived }
+        let scope = ModelLiveness.live(scopeLabel)
+        let scopeID = scope?.persistentModelID
+        let scoped = active.filter { ModelLiveness.live($0.label)?.persistentModelID == scopeID && scopeID != nil }
+        let global = active.filter { ModelLiveness.live($0.label) == nil }
+        let others = active.filter { tag in
+            guard let parent = ModelLiveness.live(tag.label) else { return false }
+            return parent.persistentModelID != scopeID
+        }
 
         Menu {
             if !scoped.isEmpty {
-                Section(scopeLabel?.name ?? "Label") {
+                Section(scope?.name ?? "Label") {
                     ForEach(scoped) { tag in toggle(for: tag) }
                 }
             }

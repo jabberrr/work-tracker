@@ -117,20 +117,36 @@ struct StatsTimeChartCard: View {
         }
     }
 
+    /// Bucket midpoints to label (at most ~8, evenly spaced); the label shows the bucket's start.
+    private var axisDates: [Date] {
+        let starts = result.bucketStarts
+        guard !starts.isEmpty else { return [] }
+        let step = max(1, Int((Double(starts.count) / 8).rounded(.up)))
+        return stride(from: 0, to: starts.count, by: step).map { index in
+            let start = starts[index]
+            let end = calendar.date(byAdding: unit, value: 1, to: start) ?? start.addingTimeInterval(86_400)
+            return start.addingTimeInterval(end.timeIntervalSince(start) / 2)
+        }
+    }
+
     private var chart: some View {
         let names = result.series.map(\.name)
         let colors = result.series.map { theme.statsSeriesColor($0) }
         let format = xLabelFormat
         let calendar = self.calendar
+        let unit = self.unit
         return Chart {
+            // Stacked bars drawn explicitly: each piece spans its bucket (inset ~20 % per side, like a 0.6 width
+            // ratio) from the series below it to its own top. Works on macOS 14 without date-unit binning.
             ForEach(result.bars) { bar in
-                BarMark(
-                    x: .value("Date", bar.bucketStart, unit: unit, calendar: calendar),
-                    y: .value("Hours", bar.hours),
-                    width: .ratio(0.6)
+                let inset = bar.bucketEnd.timeIntervalSince(bar.bucketStart) * 0.2
+                RectangleMark(
+                    xStart: .value("Date", bar.bucketStart.addingTimeInterval(inset)),
+                    xEnd: .value("Date", bar.bucketEnd.addingTimeInterval(-inset)),
+                    yStart: .value("Hours", bar.stackStartHours),
+                    yEnd: .value("Hours", bar.stackEndHours)
                 )
                 .foregroundStyle(by: .value("Label", bar.seriesName))
-                .cornerRadius(theme.radiusS / 2)
                 .accessibilityLabel("\(bar.bucketStart.formatted(format)), \(bar.seriesName)")
                 .accessibilityValue(bar.seconds.formattedShort)
             }
@@ -164,12 +180,12 @@ struct StatsTimeChartCard: View {
             }
         }
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 7)) { value in
+            AxisMarks(values: axisDates) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(theme.separator)
                 AxisValueLabel {
                     if let date = value.as(Date.self) {
-                        Text(date.formatted(format))
+                        Text((calendar.dateInterval(of: unit, for: date)?.start ?? date).formatted(format))
                     }
                 }
                 .font(theme.captionFont)

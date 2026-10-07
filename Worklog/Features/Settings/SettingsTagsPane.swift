@@ -13,17 +13,20 @@ struct SettingsTagsPane: View {
 
     private var filtered: [WorkTag] {
         let query = filterText.trimmed
-        let base = tags.filter { !$0.isDeleted }
+        let base = liveTags
         guard !query.isEmpty else { return base }
         return base.filter {
             $0.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil
-                || ($0.label?.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil)
+                || (ModelLiveness.live($0.label)?.name.range(of: query, options: [.caseInsensitive, .diacriticInsensitive]) != nil)
         }
     }
 
+    /// The query can briefly include tags deleted or merged a moment ago; never read those.
+    private var liveTags: [WorkTag] { ModelLiveness.live(tags) }
+
     private var selectedTag: WorkTag? {
         guard let selectedID else { return nil }
-        return tags.first { $0.persistentModelID == selectedID }
+        return liveTags.first { $0.persistentModelID == selectedID }
     }
 
     var body: some View {
@@ -33,11 +36,11 @@ struct SettingsTagsPane: View {
             Divider()
             Group {
                 if let tag = selectedTag {
-                    SettingsTagEditor(tag: tag, allTags: tags,
+                    SettingsTagEditor(tag: tag, allTags: liveTags,
                                       onDeleted: { selectedID = nil },
                                       onMerged: { target in selectedID = target.persistentModelID })
                         .id(tag.persistentModelID)
-                } else if tags.isEmpty {
+                } else if liveTags.isEmpty {
                     EmptyStateView(title: "No tags", systemImage: "number",
                                    message: "Tags add detail to a label, like a project or a topic. Create one below or while starting a session.")
                 } else {
@@ -102,7 +105,7 @@ struct SettingsTagsPane: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .foregroundStyle(tag.isArchived ? theme.textSecondary : theme.textPrimary)
-                if let parent = tag.label {
+                if let parent = ModelLiveness.live(tag.label) {
                     Text(parent.name)
                         .font(theme.captionFont)
                         .foregroundStyle(theme.textTertiary)

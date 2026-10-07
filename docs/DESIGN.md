@@ -552,7 +552,7 @@ Built to be finished in about ten seconds: the essentials up front, everything e
 ┌──────────────────────┬───────────────────────────────────────────────────────┐
 │ [⌕ Search learnings] │  #coding                                   34 points  │ ← titleFont
 │ All             128  │  ┌ Card ─ Points per week ───────────────────────────┐ │
-│ Untagged         12  │  │ ▂▃▅▂▇▅▃  BarMark (accent) + LineMark mastery      │ │
+│ Untagged         12  │  │ ▂▃▅▂▇▅▃  bars (accent) + LineMark mastery         │ │
 │ #coding          34  │  │          (textSecondary, dashed; right axis 1–5)  │ │
 │ #writing         20  │  └──────────────────────────────────────────────────┘ │
 │ #review          18  │  OCTOBER 2026 ──────────────────────────────────────── │
@@ -572,7 +572,7 @@ Built to be finished in about ten seconds: the essentials up front, everything e
   Stats                                          [ 7D | 30D | 90D | 1Y | All ]  ← segmented Picker
   [Total 23h 40m] [Sessions 18] [Avg length 1h 19m] [Longest 3h 05m] [Streak 5 days]   StatTiles
   ┌ Card ─ Time by label ───────────────────────────────────────────────────────┐
-  │ stacked BarMark by day/week, label colors; RuleMark goal (dashed)           │
+  │ stacked bars by day/week/month, label colors; RuleMark goal (dashed)        │
   └─────────────────────────────────────────────────────────────────────────────┘
   ┌ Card ─ Label share ───────────────┐ ┌ Card ─ Top tags ────────────────────┐
   │ SectorMark donut (innerRadius 0.6)│ │ by time | by count (segmented)       │
@@ -586,8 +586,13 @@ Chart styling (C):
 - Series colors: label series use `label.color` (`.chartForegroundStyleScale(domain:range:)` built from
   labels); everything else `theme.chartColor(i)`. Unlabeled = `theme.textTertiary`.
 - Axes: `AxisGridLine` `theme.separator` 0.5 pt; axis labels `captionFont` `textTertiary`; no axis lines.
-- Bars: `.cornerRadius(theme.radiusS / 2)`; bar width ratio ~0.6. Goal: `RuleMark(y:)` dashed `[4, 3]`,
-  `textSecondary`, annotation "Goal 4h" in `captionFont`.
+- Bars: `.cornerRadius(theme.radiusS / 2)` (single-series bars); bar width ratio ~0.6. Goal: `RuleMark(y:)`
+  dashed `[4, 3]`, `textSecondary`, annotation "Goal 4h" in `captionFont`.
+- Date bars (time per day/week/month, learning points per week/month) are drawn as
+  `RectangleMark(xStart:xEnd:yStart:yEnd:)` across each bucket (`bucketStart` → next bucket start, inset 20 % per
+  side ≈ width ratio 0.6); stacked series carry their own offsets from `StatsCalculator`. No date-unit binning
+  (`.value(_:_:unit:)`), so week buckets always honor Settings ▸ week start. X-axis ticks sit at bucket midpoints
+  and are labeled with the bucket's start.
 - Durations on axes in hours (`formattedHoursDecimal`); tooltips/selection via `chartOverlay` optional.
 - Chart height 220 (main), 180 (secondary). Not enough data → `EmptyStateView` in the pane (§12).
 
@@ -611,8 +616,10 @@ Use native `Form { }.formStyle(.grouped)` in every tab, `themedBackground()` on 
   editor (name field, `LabelColorPicker`, `SymbolPicker` in a 240 pt area, Archive / Delete…). Tags below:
   `Table` or List with name, parent label `LabelPicker(includeNone:true, title:"Parent")`, color, usage, ⋯.
 - Delete label: sheet "Delete “Meetings”? 42 sessions use it. Move them to: ▾ [Unlabeled]" `{!Delete}`.
-- Data: grouped sections Export / Import / Backups (list rows: date `shortDateTime`, reason, size in
-  `monoFont`) / Danger zone (`DestructiveButtonStyle`, double confirm).
+- Data: grouped sections Export / Import / Backups (list rows: date `shortDateTime` + `pin.fill` when pinned,
+  "reason · N sessions · pinned", size in `monoFont`, Restore…, ⋯ menu with Pin/Unpin · Show in Finder · Delete…)
+  / Danger zone (`DestructiveButtonStyle`, double confirm). Importing a file and restoring a backup both go
+  through `BackupService` (`importArchive(_:mode:)` / `restore(from:mode:)`), which makes the safety backup first.
 - **Data ▸ Recovery** (only while the store couldn't be opened, i.e. in-memory mode): a first section with an
   error `InlineBanner` "Worklog couldn’t open its data store, so nothing you change now is saved." and the
   action **Recover…**, plus a footnote. Recover… opens a sheet (`SettingsRecoverySheet`, width 540):

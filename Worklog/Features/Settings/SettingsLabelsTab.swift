@@ -47,11 +47,13 @@ struct SettingsLabelsPane: View {
     @Query(sort: \WorkLabel.sortIndex) private var labels: [WorkLabel]
     @State private var selectedID: PersistentIdentifier?
 
-    private var activeLabels: [WorkLabel] { labels.filter { !$0.isArchived } }
-    private var archivedLabels: [WorkLabel] { labels.filter { $0.isArchived } }
+    /// The query can briefly include labels deleted or merged a moment ago; never read those.
+    private var liveLabels: [WorkLabel] { ModelLiveness.live(labels) }
+    private var activeLabels: [WorkLabel] { liveLabels.filter { !$0.isArchived } }
+    private var archivedLabels: [WorkLabel] { liveLabels.filter { $0.isArchived } }
     private var selectedLabel: WorkLabel? {
         guard let selectedID else { return nil }
-        return labels.first { $0.persistentModelID == selectedID }
+        return liveLabels.first { $0.persistentModelID == selectedID }
     }
 
     var body: some View {
@@ -71,7 +73,7 @@ struct SettingsLabelsPane: View {
                 Divider()
                 Group {
                     if let label = selectedLabel {
-                        SettingsLabelEditor(label: label, allLabels: labels, onDeleted: { selectedID = nil },
+                        SettingsLabelEditor(label: label, allLabels: liveLabels, onDeleted: { selectedID = nil },
                                             onMerged: { target in selectedID = target.persistentModelID })
                             .id(label.persistentModelID)
                     } else {
@@ -164,6 +166,7 @@ struct SettingsLabelsPane: View {
     }
 
     private func addLabel() {
+        let labels = liveLabels
         let usedColors = Set(labels.map { LabelPalette.normalized($0.colorHex) })
         let palette = LabelPalette.hexColors
         let color = palette.first { !usedColors.contains(LabelPalette.normalized($0)) }
@@ -204,7 +207,7 @@ private struct SettingsLabelEditor: View {
     @State private var mergeTarget: WorkLabel?
 
     private var otherLabels: [WorkLabel] {
-        allLabels.filter { $0.persistentModelID != label.persistentModelID }
+        allLabels.filter { $0.persistentModelID != label.persistentModelID && ModelLiveness.isLive($0) }
     }
 
     private var isDefault: Binding<Bool> {

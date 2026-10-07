@@ -11,6 +11,8 @@ struct LearningPageActivityChart: View {
 
     private struct Bucket: Identifiable {
         let start: Date
+        /// Start of the next bucket.
+        let end: Date
         var count: Int
         var masterySum: Int
         var ratedCount: Int
@@ -20,7 +22,7 @@ struct LearningPageActivityChart: View {
 
     private struct Model {
         let unit: Calendar.Component
-        /// Same week start as the buckets, so Charts bins each bar into the right week.
+        /// Same week start as the buckets (axis labels resolve a bucket's start with it).
         let calendar: Calendar
         let buckets: [Bucket]
         let maxCount: Int
@@ -45,11 +47,15 @@ struct LearningPageActivityChart: View {
         func start(of date: Date) -> Date {
             calendar.dateInterval(of: unit, for: date)?.start ?? calendar.startOfDay(for: date)
         }
+        func end(of start: Date) -> Date {
+            let next = calendar.date(byAdding: unit, value: 1, to: start) ?? start.addingTimeInterval(7 * 86_400)
+            return max(next, start.addingTimeInterval(1))
+        }
 
         var byStart: [Date: Bucket] = [:]
         for (date, mastery) in points {
             let key = start(of: date)
-            var bucket = byStart[key] ?? Bucket(start: key, count: 0, masterySum: 0, ratedCount: 0)
+            var bucket = byStart[key] ?? Bucket(start: key, end: end(of: key), count: 0, masterySum: 0, ratedCount: 0)
             bucket.count += 1
             if (1...5).contains(mastery) {
                 bucket.masterySum += mastery
@@ -64,7 +70,8 @@ struct LearningPageActivityChart: View {
         var guardCount = 0
         while cursor <= end && guardCount < 1_000 {
             guardCount += 1
-            buckets.append(byStart[cursor] ?? Bucket(start: cursor, count: 0, masterySum: 0, ratedCount: 0))
+            buckets.append(byStart[cursor] ?? Bucket(start: cursor, end: end(of: cursor), count: 0, masterySum: 0,
+                                                     ratedCount: 0))
             guard let next = calendar.date(byAdding: unit, value: 1, to: cursor), next > cursor else { break }
             cursor = next
         }
@@ -108,6 +115,17 @@ struct LearningPageActivityChart: View {
         }
     }
 
+    /// Midpoints of at most ~6 evenly spaced buckets; each label shows its bucket's start.
+    private func axisDates(_ model: Model) -> [Date] {
+        let buckets = model.buckets
+        guard !buckets.isEmpty else { return [] }
+        let step = max(1, Int((Double(buckets.count) / 6).rounded(.up)))
+        return stride(from: 0, to: buckets.count, by: step).map { index in
+            let bucket = buckets[index]
+            return bucket.start.addingTimeInterval(bucket.end.timeIntervalSince(bucket.start) / 2)
+        }
+    }
+
     private func countTicks(_ maxCount: Int) -> [Double] {
         let step = max(1, Int((Double(maxCount) / 4).rounded(.up)))
         return stride(from: 0, through: maxCount, by: step).map { Double($0) }
@@ -119,12 +137,17 @@ struct LearningPageActivityChart: View {
         let periodFormat: Date.FormatStyle = model.unit == .month
             ? .dateTime.month(.abbreviated).year()
             : .dateTime.month(.abbreviated).day()
+        let calendar = model.calendar
+        let unit = model.unit
         return Chart {
+            // Bars span their bucket explicitly (inset ~20 % per side); no date-unit binning needed.
             ForEach(model.buckets) { bucket in
-                BarMark(
-                    x: .value("Period", bucket.start, unit: model.unit, calendar: model.calendar),
-                    y: .value("Points", Double(bucket.count)),
-                    width: .ratio(0.6)
+                let inset = bucket.end.timeIntervalSince(bucket.start) * 0.2
+                RectangleMark(
+                    xStart: .value("Period", bucket.start.addingTimeInterval(inset)),
+                    xEnd: .value("Period", bucket.end.addingTimeInterval(-inset)),
+                    yStart: .value("Points", 0.0),
+                    yEnd: .value("Points", Double(bucket.count))
                 )
                 .foregroundStyle(theme.accent)
                 .cornerRadius(theme.radiusS / 2)
@@ -134,8 +157,8 @@ struct LearningPageActivityChart: View {
             if model.hasMastery {
                 ForEach(model.buckets.filter { $0.masteryAverage != nil }) { bucket in
                     LineMark(
-                        x: .value("Period", bucket.start, unit: model.unit, calendar: model.calendar),
-                        y: .value("Mastery", (bucket.masteryAverage ?? 0) * scale)
+                        x: .value("Period", bucket.start.addingTimeInterval(bucket.end.timeIntervalSince(bucket.start) / 2)),
+                        y: .value("Points", (bucket.masteryAverage ?? 0) * scale)
                     )
                     .foregroundStyle(theme.textSecondary)
                     .lineStyle(StrokeStyle(lineWidth: 1.5, dash: [4, 3]))
@@ -153,12 +176,12 @@ struct LearningPageActivityChart: View {
         .chartXScale(domain: model.domain)
         .chartYScale(domain: 0...(Double(model.maxCount) * 1.08))
         .chartXAxis {
-            AxisMarks(values: .automatic(desiredCount: 6)) { value in
+            AxisMarks(values: axisDates(model)) { value in
                 AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
                     .foregroundStyle(theme.separator)
                 AxisValueLabel {
                     if let date = value.as(Date.self) {
-                        Text(date.formatted(periodFormat))
+                        Text((calendar.dateInterval(of: unit, for: date)?.start ?? date).formatted(periodFormat))
                     }
                 }
                 .font(theme.captionFont)

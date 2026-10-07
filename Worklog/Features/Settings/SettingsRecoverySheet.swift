@@ -8,7 +8,7 @@ enum SettingsRecovery {
     /// (not for previews/tests, which are in memory on purpose).
     @MainActor
     static func isNeeded(_ persistence: PersistenceController) -> Bool {
-        persistence.isInMemory && persistence.storeMode != .inMemory(reason: "Preview")
+        persistence.isRecoveryMode
     }
 
     /// The reason text of the in-memory fallback, if any.
@@ -229,7 +229,7 @@ struct SettingsRecoverySheet: View {
 
     static func backupTitle(_ backup: BackupFile) -> String {
         let size = ByteCountFormatter.string(fromByteCount: backup.sizeBytes, countStyle: .file)
-        return "\(backup.date.shortDateTime) · \(SettingsDataTab.reasonName(backup.reason)) · \(size)"
+        return "\(backup.date.shortDateTime) · \(SettingsDataTab.backupDetail(backup)) · \(size)"
     }
 
     // MARK: Actions
@@ -271,7 +271,7 @@ struct SettingsRecoverySheet: View {
                 errorText = "“\(source.lastPathComponent)” can’t be restored: \(error.localizedDescription) Nothing was changed."
                 return
             }
-            if chosenFile != nil {
+            if chosenFile != nil, !Self.isInsideAppSupport(source) {
                 do {
                     restoreURL = try copyIntoContainer(source)
                 } catch {
@@ -307,6 +307,14 @@ struct SettingsRecoverySheet: View {
         }
 
         PersistenceController.relaunchApp()
+    }
+
+    /// A file already in Worklog's own folder (e.g. a backup picked by hand) is restored in place, so backups whose
+    /// images live in `Backups/Attachments` keep them.
+    private static func isInsideAppSupport(_ url: URL) -> Bool {
+        let base = AppConstants.applicationSupportURL.standardizedFileURL.path(percentEncoded: false)
+        let path = url.standardizedFileURL.path(percentEncoded: false)
+        return path.hasPrefix(base.hasSuffix("/") ? base : base + "/")
     }
 
     /// Copies a user-chosen file into Application Support/Worklog/Recovered so the next launch can read it.

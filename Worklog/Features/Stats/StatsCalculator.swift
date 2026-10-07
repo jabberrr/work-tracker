@@ -206,11 +206,18 @@ struct StatsSnapshot: Sendable {
 /// One stacked bar piece: active seconds of one label in one bucket.
 struct StatsBarValue: Identifiable, Sendable {
     let bucketStart: Date
+    /// Start of the next bucket (the chart draws each bar across [bucketStart, bucketEnd)).
+    let bucketEnd: Date
     let seriesKey: String
     let seriesName: String
     let seconds: TimeInterval
+    /// Active seconds of the series stacked below this one in the same bucket.
+    let stackOffsetSeconds: TimeInterval
     var id: String { "\(bucketStart.timeIntervalSinceReferenceDate)|\(seriesKey)" }
     var hours: Double { seconds / 3600 }
+    /// Bottom and top of this piece of the stacked bar, in hours.
+    var stackStartHours: Double { stackOffsetSeconds / 3600 }
+    var stackEndHours: Double { (stackOffsetSeconds + seconds) / 3600 }
 }
 
 /// A label series (stacked bars + donut). `colorHex == nil` → Unlabeled (theme color).
@@ -471,10 +478,13 @@ enum StatsCalculator {
         var maxBucket: TimeInterval = 0
         for start in bucketStarts {
             guard let values = bucketSeries[start] else { continue }
+            let end = calendar.date(byAdding: bucket.component, value: 1, to: start) ?? start.addingTimeInterval(86_400)
             var bucketTotal: TimeInterval = 0
             for key in seriesKeys {
                 guard let seconds = values[key], seconds > 0, let name = nameForKey[key] else { continue }
-                bars.append(StatsBarValue(bucketStart: start, seriesKey: key, seriesName: name, seconds: seconds))
+                bars.append(StatsBarValue(bucketStart: start, bucketEnd: max(end, start.addingTimeInterval(1)),
+                                          seriesKey: key, seriesName: name, seconds: seconds,
+                                          stackOffsetSeconds: bucketTotal))
                 bucketTotal += seconds
             }
             maxBucket = max(maxBucket, bucketTotal)
