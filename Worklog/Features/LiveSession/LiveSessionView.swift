@@ -1,0 +1,884 @@
+import AppKit
+import SwiftData
+import SwiftUI
+import UniformTypeIdentifiers
+
+/// The "Today" page of the main window: the start form when idle, the live instrument while a session runs.
+struct LiveSessionView: View {
+    @Environment(SessionEngine.self) private var engine
+    @Environment(\.theme) private var theme
+
+    /// While true the active pane is already gone, so nothing reads the session that is about to be deleted.
+    @State private var isDiscarding = false
+
+    init() {}
+
+    var body: some View {
+        Group {
+            if let session = engine.activeSession, !isDiscarding, LiveModelGuard.isUsable(session) {
+                LiveActivePane(session: session, onDiscard: discardActiveSession)
+                    .id(session.persistentModelID)
+                    .transition(.opacity)
+            } else {
+                LiveIdlePane()
+                    .transition(.opacity)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .themedBackground()
+    }
+
+    /// Remove every view bound to the session first, delete it on a later run-loop turn.
+    private func discardActiveSession() {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) { isDiscarding = true }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.05) {
+            engine.discard()
+            isDiscarding = false
+        }
+    }
+}
+
+// MARK: - Idle
+
+private struct LiveIdlePane: View {
+    @Environment(SessionEngine.self) private var engine
+    @Environment(AppSettings.self) private var settings
+    @Environment(WindowRouter.self) private var router
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @State private var startLabel: WorkLabel?
+    @State private var startTags: [WorkTag] = []
+    @State private var startFocus = ""
+    @State private var didLoadDefaults = false
+    @FocusState private var focusFieldFocused: Bool
+
+    init() {}
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: theme.spacingXL) {
+                header
+                startCard
+                if let takeaway = engine.lastTakeaway {
+                    Card {
+                        LiveTakeawayView(takeaway: takeaway)
+                    }
+                }
+                LiveTodaySessionsQuery { sessions in
+                    LiveTodaySummary(sessions: sessions)
+                }
+            }
+            .padding(theme.spacingXL)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+        .onAppear(perform: onAppear)
+        .onChange(of: router.noteFocusRequest) { _, _ in handleNoteFocusRequest() }
+        .onChange(of: router.splitRequest) { _, newValue in
+            // Nothing to split while idle; mark it handled so it doesn't fire on the next active pane.
+            LiveRequestLedger.handledSplitRequest = newValue
+        }
+    }
+
+    private var header: some View {
+        HStack(alignment: .firstTextBaseline) {
+            Text("Today")
+                .font(theme.largeTitleFont)
+                .foregroundStyle(theme.textPrimary)
+                .accessibilityAddTraits(.isHeader)
+            Spacer()
+            Text(Date().formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
+                .font(theme.captionFont)
+                .foregroundStyle(theme.textSecondary)
+        }
+    }
+
+    private var startCard: some View {
+        Card {
+            VStack(alignment: .leading, spacing: theme.spacingM) {
+                Text("What are you working on?")
+                    .font(theme.headlineFont)
+                    .foregroundStyle(theme.textPrimary)
+
+                TextField("Focus", text: $startFocus, prompt: Text("Focus (optional)"))
+                    .textFieldStyle(.plain)
+                    .focused($focusFieldFocused)
+                    .insetField(isFocused: focusFieldFocused)
+                    .onSubmit(start)
+                    .accessibilityLabel("Focus")
+                    .accessibilityHint("Press Return to start the session")
+
+                HStack(alignment: .firstTextBaseline, spacing: theme.spacingL) {
+                    LabelPicker(selection: $startLabel, includeNone: true, title: "Label")
+                        .fixedSize()
+                    TagPicker(selection: $startTags, scopeLabel: startLabel)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                HStack {
+                    Spacer()
+                    Button(action: start) {
+                        Label("Start session", systemImage: "play.fill")
+                    }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .controlSize(.large)
+                    .keyboardShortcut(.defaultAction)
+                    .help("Start a session with this label, tags and focus (⌘⇧S starts with the default label)")
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private func onAppear() {
+        if !didLoadDefaults {
+            didLoadDefaults = true
+            startLabel = engine.defaultLabel()
+        }
+        if router.noteFocusRequest > LiveRequestLedger.handledNoteFocusRequest {
+            handleNoteFocusRequest()
+        }
+        LiveRequestLedger.handledSplitRequest = router.splitRequest
+    }
+
+    /// No session to take notes in: focus the start form's focus field instead.
+    private func handleNoteFocusRequest() {
+        LiveRequestLedger.handledNoteFocusRequest = router.noteFocusRequest
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { focusFieldFocused = true }
+    }
+
+    private func start() {
+        guard !engine.isActive else { return }
+        let label = startLabel
+        let tags = startTags
+        let focus = startFocus
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            engine.start(label: label, tags: tags, focus: focus)
+        }
+        startFocus = ""
+        startTags = []
+    }
+}
+
+/// Today total vs goal, session count and today's finished sessions.
+private struct LiveTodaySummary: View {
+    @Environment(SessionEngine.self) private var engine
+    @Environment(AppSettings.self) private var settings
+    @Environment(WindowRouter.self) private var router
+    @Environment(\.theme) private var theme
+
+    private let sessions: [WorkSession]
+
+    init(sessions: [WorkSession]) {
+        self.sessions = sessions
+    }
+
+    var body: some View {
+        let now = Date()
+        let total = LiveDayMath.totalToday(sessions, active: engine.activeSession, now: now)
+        let ended = LiveDayMath.endedToday(sessions, now: now)
+        let goal = LiveDayMath.goalSeconds(settings)
+
+        VStack(alignment: .leading, spacing: theme.spacingL) {
+            LazyVGrid(columns: [GridItem(.adaptive(minimum: 150), spacing: theme.spacingM)],
+                      alignment: .leading, spacing: theme.spacingM) {
+                StatTile(title: "Today", value: total.formattedShort, systemImage: "target",
+                         caption: goal > 0 ? "of \(goal.formattedShort) goal" : nil)
+                StatTile(title: "Sessions", value: "\(ended.count)", systemImage: "clock.arrow.circlepath")
+            }
+            if goal > 0 {
+                ProportionBar(parts: [.init(value: total, color: theme.accent, label: "Today")], total: goal)
+                    .accessibilityLabel("Daily goal progress")
+            }
+
+            VStack(alignment: .leading, spacing: theme.spacingXS) {
+                SectionHeader("Today's sessions", systemImage: "clock.arrow.circlepath") {
+                    if !ended.isEmpty { Text("\(ended.count)") }
+                }
+                if ended.isEmpty {
+                    Text("Nothing logged yet today.")
+                        .font(theme.calloutFont)
+                        .foregroundStyle(theme.textTertiary)
+                } else {
+                    ForEach(ended) { session in
+                        LiveTodaySessionRow(session: session) { router.showSession(session) }
+                    }
+                }
+            }
+        }
+    }
+}
+
+private struct LiveTodaySessionRow: View {
+    @Environment(\.theme) private var theme
+    private let session: WorkSession
+    private let action: () -> Void
+
+    init(session: WorkSession, action: @escaping () -> Void) {
+        self.session = session
+        self.action = action
+    }
+
+    var body: some View {
+        if LiveModelGuard.isUsable(session) {
+            Button(action: action) {
+                HStack(spacing: theme.spacingM) {
+                    Text(session.startedAt.shortTime)
+                        .font(theme.captionFont.monospacedDigit())
+                        .foregroundStyle(theme.textTertiary)
+                        .frame(minWidth: 60, alignment: .leading)
+                    Text(session.displayTitle)
+                        .font(theme.bodyFont)
+                        .foregroundStyle(theme.textPrimary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(session.displayTitle)
+                    Spacer(minLength: theme.spacingS)
+                    LabelBadge(label: session.label, size: .small)
+                    Text(session.activeDuration().formattedShort)
+                        .font(theme.timerCompactFont)
+                        .monospacedDigit()
+                        .foregroundStyle(theme.textSecondary)
+                        .frame(minWidth: 56, alignment: .trailing)
+                    Image(systemName: "chevron.right")
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textTertiary)
+                        .accessibilityHidden(true)
+                }
+                .padding(.horizontal, theme.spacingS)
+                .padding(.vertical, theme.spacingS)
+            }
+            .buttonStyle(LiveHoverRowStyle())
+            .accessibilityLabel("\(session.displayTitle), \(session.label?.name ?? "Unlabeled"), \(session.activeDuration().formattedShort)")
+            .accessibilityHint("Opens the session in History")
+        }
+    }
+}
+
+// MARK: - Active
+
+private struct LiveActivePane: View {
+    @Environment(SessionEngine.self) private var engine
+    @Environment(AppSettings.self) private var settings
+    @Environment(WindowRouter.self) private var router
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    private let session: WorkSession
+    private let onDiscard: () -> Void
+
+    @State private var showSplit = false
+    @State private var showEditSegment = false
+    @State private var confirmDiscard = false
+    @State private var keepGoingDismissed = false
+    @State private var takeawayDismissed = false
+    @State private var coarseNow = Date()
+    @State private var isDropTargeted = false
+    @FocusState private var noteFocused: Bool
+
+    init(session: WorkSession, onDiscard: @escaping () -> Void) {
+        self.session = session
+        self.onDiscard = onDiscard
+    }
+
+    private var isPaused: Bool { engine.isPaused }
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: theme.spacingXL) {
+                banners
+                header
+                instrument
+                controls
+                if let takeaway = engine.lastTakeaway, !takeawayDismissed {
+                    takeawayStrip(takeaway)
+                }
+                segmentsSection
+                notesSection
+            }
+            .padding(theme.spacingXL)
+            .frame(maxWidth: 760, alignment: .leading)
+            .frame(maxWidth: .infinity)
+        }
+        .task {
+            // Coarse clock for the "still working?" banner (no need to re-render the page every second).
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 30_000_000_000)
+                coarseNow = Date()
+            }
+        }
+        .onAppear(perform: handlePendingRequests)
+        .onChange(of: router.noteFocusRequest) { _, _ in handlePendingRequests() }
+        .onChange(of: router.splitRequest) { _, _ in handlePendingRequests() }
+    }
+
+    // MARK: Banners
+
+    @ViewBuilder
+    private var banners: some View {
+        let reason = engine.autoPauseReason
+        let showLong = shouldWarnLongSession(at: coarseNow)
+        if (reason != nil && isPaused) || showLong {
+            VStack(alignment: .leading, spacing: theme.spacingS) {
+                if let reason, isPaused {
+                    InlineBanner(reason == .sleep ? "Paused when your Mac went to sleep." : "Paused when Worklog quit.",
+                                 systemImage: "pause.circle",
+                                 style: .warning,
+                                 actionTitle: "Resume",
+                                 action: { engine.resume() },
+                                 onDismiss: { engine.clearAutoPauseReason() })
+                }
+                if showLong {
+                    LiveLongSessionBanner(
+                        hours: Int(session.wallDuration(at: coarseNow) / 3600),
+                        onStopAtLastActivity: { _ = engine.stop(at: session.lastActivityDate) },
+                        onStopNow: { _ = engine.stop() },
+                        onKeepGoing: { keepGoingDismissed = true })
+                }
+            }
+        }
+    }
+
+    private func shouldWarnLongSession(at date: Date) -> Bool {
+        guard !keepGoingDismissed, settings.longSessionWarningHours > 0 else { return false }
+        // Read `Date()` too so the banner also appears right after a relaunch, before the coarse clock ticks.
+        let now = max(date, Date())
+        return session.wallDuration(at: now) >= settings.longSessionWarningHours * 3600
+    }
+
+    // MARK: Header
+
+    private var header: some View {
+        let segment = engine.currentSegment
+        let focus = segment?.focus.trimmed ?? ""
+        let segmentCount = session.segments?.count ?? 0
+        let tags = displayedTags(segment)
+
+        return HStack(alignment: .top, spacing: theme.spacingL) {
+            VStack(alignment: .leading, spacing: theme.spacingS) {
+                Button {
+                    showEditSegment = true
+                } label: {
+                    LabelBadge(label: engine.currentLabel, size: .large)
+                }
+                .buttonStyle(.plain)
+                .help("Change this segment's label, tags and focus")
+                .accessibilityHint("Edits the current segment")
+
+                Button {
+                    showEditSegment = true
+                } label: {
+                    HStack(alignment: .firstTextBaseline, spacing: theme.spacingS) {
+                        Text(focus.isEmpty ? "Add a focus…" : focus)
+                            .font(theme.titleFont)
+                            .foregroundStyle(focus.isEmpty ? theme.textTertiary : theme.textPrimary)
+                            .multilineTextAlignment(.leading)
+                            .fixedSize(horizontal: false, vertical: true)
+                        Image(systemName: "pencil")
+                            .font(theme.captionFont)
+                            .foregroundStyle(theme.textTertiary)
+                            .accessibilityHidden(true)
+                    }
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .help("Edit the current segment")
+                .accessibilityLabel(focus.isEmpty ? "Add a focus" : "Focus: \(focus)")
+                .accessibilityHint("Edits the current segment")
+
+                if !tags.isEmpty {
+                    TagChipsRow(tags: tags)
+                }
+            }
+            .popover(isPresented: $showEditSegment, arrowEdge: .bottom) {
+                LiveSegmentForm(mode: .edit, style: .popover) { showEditSegment = false }
+                    .padding(theme.spacingL)
+                    .frame(width: 300)
+                    .modifier(LiveEnvironmentBridge(engine: engine, theme: theme, context: modelContext))
+            }
+
+            Spacer(minLength: theme.spacingS)
+
+            Text("Started \(session.startedAt.shortTime) · \(segmentCount) \(segmentCount == 1 ? "segment" : "segments")")
+                .font(theme.captionFont)
+                .foregroundStyle(theme.textSecondary)
+                .monospacedDigit()
+        }
+    }
+
+    /// Session tags ∪ current segment tags, unique, by name.
+    private func displayedTags(_ segment: Segment?) -> [WorkTag] {
+        var seen = Set<UUID>()
+        var result: [WorkTag] = []
+        for tag in session.tagList + (segment?.tagList ?? []) where seen.insert(tag.uuid).inserted {
+            result.append(tag)
+        }
+        return result.sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    // MARK: Instrument
+
+    private var instrument: some View {
+        LiveClock(isTicking: !isPaused) { date in
+            VStack(spacing: theme.spacingS) {
+                TimerText(engine.elapsed(at: date), style: .hero, isPaused: isPaused)
+                HStack(spacing: theme.spacingS) {
+                    LiveDot(isPaused: isPaused)
+                    Text(isPaused ? "Paused" : "Running")
+                        .font(theme.captionFont.weight(.medium))
+                        .foregroundStyle(theme.textSecondary)
+                    Text("·")
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textTertiary)
+                        .accessibilityHidden(true)
+                    Text("this segment")
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textSecondary)
+                    TimerText(engine.currentSegmentElapsed(at: date), style: .medium, isPaused: isPaused)
+                        .accessibilityLabel("Segment time")
+                }
+            }
+        }
+        .frame(maxWidth: .infinity)
+    }
+
+    // MARK: Controls
+
+    private var controls: some View {
+        HStack(spacing: theme.spacingM) {
+            Button {
+                engine.togglePause()
+            } label: {
+                Label(isPaused ? "Resume" : "Pause", systemImage: isPaused ? "play.fill" : "pause.fill")
+            }
+            .buttonStyle(QuietButtonStyle())
+            .help(isPaused ? "Resume the session (⌘⇧P)" : "Pause the session (⌘⇧P)")
+
+            Button {
+                showSplit = true
+            } label: {
+                Label("Split", systemImage: "scissors")
+            }
+            .buttonStyle(QuietButtonStyle())
+            .help("Start a new segment when your focus changes (⌘⇧D)")
+            .popover(isPresented: $showSplit, arrowEdge: .bottom) {
+                LiveSegmentForm(mode: .split, style: .popover) { showSplit = false }
+                    .padding(theme.spacingL)
+                    .frame(width: 300)
+                    .modifier(LiveEnvironmentBridge(engine: engine, theme: theme, context: modelContext))
+            }
+
+            Button(action: stop) {
+                Label("Stop", systemImage: "stop.fill")
+            }
+            .buttonStyle(PrimaryButtonStyle())
+            .help("Stop and review the session (⌘⇧S)")
+        }
+        .controlSize(.large)
+        .frame(maxWidth: .infinity)
+        .overlay(alignment: .trailing) {
+            Button {
+                if settings.confirmBeforeDiscard {
+                    confirmDiscard = true
+                } else {
+                    onDiscard()
+                }
+            } label: {
+                Image(systemName: "trash")
+            }
+            .buttonStyle(IconButtonStyle())
+            .accessibilityLabel("Discard session")
+            .help("Discard this session")
+            .confirmationDialog("Discard this session?", isPresented: $confirmDiscard) {
+                Button("Discard", role: .destructive, action: onDiscard)
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                Text("Its notes and time will be deleted.")
+            }
+        }
+    }
+
+    private func stop() {
+        withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
+            _ = engine.stop()
+        }
+    }
+
+    // MARK: Takeaway
+
+    private func takeawayStrip(_ takeaway: SessionTakeaway) -> some View {
+        HStack(alignment: .top, spacing: theme.spacingS) {
+            LiveTakeawayView(takeaway: takeaway, lineLimit: 3, isCompact: true)
+            Button {
+                takeawayDismissed = true
+            } label: {
+                Image(systemName: "xmark")
+            }
+            .buttonStyle(IconButtonStyle(size: 20))
+            .accessibilityLabel("Hide takeaway")
+            .help("Hide the takeaway for this session")
+        }
+        .padding(theme.spacingM)
+        .background(RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous).fill(theme.surface))
+        .overlay(RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous)
+            .strokeBorder(theme.separator, lineWidth: theme.borderWidth))
+    }
+
+    // MARK: Segments
+
+    private var segmentsSection: some View {
+        let segments = session.sortedSegments
+        return VStack(alignment: .leading, spacing: theme.spacingS) {
+            SectionHeader("Segments", systemImage: "rectangle.split.3x1") {
+                Text("\(segments.count)")
+                    .monospacedDigit()
+            }
+            LiveClock(isTicking: !isPaused) { date in
+                VStack(alignment: .leading, spacing: theme.spacingS) {
+                    ProportionBar(parts: segments.map { segment in
+                        ProportionBar.Part(value: segment.activeDuration(at: date),
+                                           color: segment.effectiveLabel?.color ?? theme.textTertiary,
+                                           label: "\(segment.displayFocus), \(segment.activeDuration(at: date).formattedShort)")
+                    }, height: 8)
+                    VStack(alignment: .leading, spacing: 0) {
+                        ForEach(segments) { segment in
+                            LiveSegmentRow(segment: segment,
+                                           isCurrent: segment.endedAt == nil,
+                                           isPaused: isPaused,
+                                           now: date)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // MARK: Notes
+
+    private var notesSection: some View {
+        let notes = session.sortedNotes
+        let attachments = session.sortedAttachments
+        return VStack(alignment: .leading, spacing: theme.spacingS) {
+            SectionHeader("Notes", systemImage: "note.text") {
+                Button(action: attachImages) {
+                    Image(systemName: "photo.badge.plus")
+                }
+                .buttonStyle(IconButtonStyle(size: 24))
+                .accessibilityLabel("Attach image")
+                .help("Attach images to this session (you can also drop or paste them here)")
+            }
+
+            if !attachments.isEmpty {
+                LiveAttachmentStrip(attachments: attachments)
+            }
+
+            if notes.isEmpty {
+                Text("No notes yet. Type below and press Return — each note gets a timestamp.")
+                    .font(theme.calloutFont)
+                    .foregroundStyle(theme.textTertiary)
+            } else {
+                LiveNotesList(notes: notes)
+            }
+
+            LiveQuickNoteField(prompt: "Add a note…", isFocused: $noteFocused)
+        }
+        .padding(isDropTargeted ? theme.spacingS : 0)
+        .background {
+            if isDropTargeted {
+                RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous)
+                    .fill(theme.accent.opacity(0.06))
+                    .overlay(RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous)
+                        .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 1.5, dash: [5, 4])))
+            }
+        }
+        .onDrop(of: [UTType.image, UTType.fileURL], isTargeted: $isDropTargeted) { providers in
+            dropImages(providers)
+            return true
+        }
+        .onPasteCommand(of: [UTType.image, UTType.fileURL]) { _ in
+            pasteImages()
+        }
+    }
+
+    private func attachImages() {
+        guard LiveModelGuard.isUsable(session) else { return }
+        AttachmentImporter.addFromOpenPanel(to: session, in: modelContext)
+    }
+
+    private func dropImages(_ providers: [NSItemProvider]) {
+        let target = session
+        let context = modelContext
+        Task { @MainActor in
+            let images = await AttachmentImporter.loadImages(from: providers)
+            guard !images.isEmpty, LiveModelGuard.isUsable(target) else { return }
+            AttachmentImporter.add(images, to: target, in: context)
+        }
+    }
+
+    private func pasteImages() {
+        let images = AttachmentImporter.imagesFromPasteboard()
+        guard !images.isEmpty, LiveModelGuard.isUsable(session) else { return }
+        AttachmentImporter.add(images, to: session, in: modelContext)
+    }
+
+    // MARK: Router requests
+
+    private func handlePendingRequests() {
+        if router.noteFocusRequest > LiveRequestLedger.handledNoteFocusRequest {
+            LiveRequestLedger.handledNoteFocusRequest = router.noteFocusRequest
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) { noteFocused = true }
+        }
+        if router.splitRequest > LiveRequestLedger.handledSplitRequest {
+            LiveRequestLedger.handledSplitRequest = router.splitRequest
+            // Let the window come forward before anchoring the popover.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.15) { showSplit = true }
+        }
+    }
+}
+
+// MARK: - Active pane pieces
+
+private struct LiveSegmentRow: View {
+    @Environment(\.theme) private var theme
+    private let segment: Segment
+    private let isCurrent: Bool
+    private let isPaused: Bool
+    private let now: Date
+
+    init(segment: Segment, isCurrent: Bool, isPaused: Bool, now: Date) {
+        self.segment = segment
+        self.isCurrent = isCurrent
+        self.isPaused = isPaused
+        self.now = now
+    }
+
+    var body: some View {
+        if LiveModelGuard.isUsable(segment) {
+            let duration = segment.activeDuration(at: now)
+            HStack(alignment: .firstTextBaseline, spacing: theme.spacingM) {
+                Text(timeRange)
+                    .font(theme.captionFont.monospacedDigit())
+                    .foregroundStyle(theme.textTertiary)
+                    .frame(minWidth: 110, alignment: .leading)
+                LabelBadge(label: segment.effectiveLabel, size: .small)
+                Text(segment.focus.isBlank ? "—" : segment.focus.trimmed)
+                    .font(theme.calloutFont)
+                    .foregroundStyle(segment.focus.isBlank ? theme.textTertiary : theme.textPrimary)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                    .help(segment.displayFocus)
+                if !segment.tagList.isEmpty {
+                    Text(segment.tagList.map { "#\($0.name)" }.joined(separator: " "))
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: theme.spacingS)
+                if isCurrent {
+                    LiveDot(isPaused: isPaused, size: 6)
+                    TimerText(duration, style: .compact, isPaused: isPaused)
+                        .accessibilityLabel("Current segment time")
+                } else {
+                    Text(duration.formattedShort)
+                        .font(theme.timerCompactFont)
+                        .monospacedDigit()
+                        .foregroundStyle(theme.textSecondary)
+                }
+            }
+            .padding(.vertical, theme.spacingXS + 1)
+            .accessibilityElement(children: .combine)
+        }
+    }
+
+    private var timeRange: String {
+        let start = segment.startedAt.shortTime
+        if let end = segment.endedAt {
+            return "\(start) – \(end.shortTime)"
+        }
+        return "\(start) – now"
+    }
+}
+
+/// Notes of the running session, oldest first / newest at the bottom, in a bounded scroll box that follows
+/// new notes.
+private struct LiveNotesList: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.theme) private var theme
+    private let notes: [Note]
+    @State private var contentHeight: CGFloat = 0
+
+    private static let maxHeight: CGFloat = 320
+
+    init(notes: [Note]) {
+        self.notes = notes
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous)
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: theme.spacingS) {
+                    ForEach(notes) { note in
+                        if LiveModelGuard.isUsable(note) {
+                            NoteRow(note: note, showsSegment: true)
+                                .id(note.persistentModelID)
+                                .contextMenu {
+                                    Button("Copy Text") { copy(note.text) }
+                                    Divider()
+                                    Button("Delete Note", role: .destructive) {
+                                        SessionEditor.deleteNote(note, in: modelContext)
+                                    }
+                                }
+                        }
+                    }
+                }
+                .padding(theme.spacingM)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .background(GeometryReader { geo in
+                    Color.clear.preference(key: LiveNotesHeightKey.self, value: geo.size.height)
+                })
+            }
+            .defaultScrollAnchor(.bottom)
+            .frame(height: min(max(contentHeight, 40), Self.maxHeight))
+            .onPreferenceChange(LiveNotesHeightKey.self) { contentHeight = $0 }
+            .onAppear { scrollToBottom(proxy, animated: false) }
+            .onChange(of: notes.count) { oldCount, newCount in
+                if newCount > oldCount { scrollToBottom(proxy, animated: true) }
+            }
+        }
+        .background(shape.fill(theme.surface))
+        .overlay(shape.strokeBorder(theme.separator, lineWidth: theme.borderWidth))
+        .clipShape(shape)
+    }
+
+    private func scrollToBottom(_ proxy: ScrollViewProxy, animated: Bool) {
+        guard let last = notes.last else { return }
+        let id = last.persistentModelID
+        DispatchQueue.main.async {
+            if animated {
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(id, anchor: .bottom) }
+            } else {
+                proxy.scrollTo(id, anchor: .bottom)
+            }
+        }
+    }
+
+    private func copy(_ text: String) {
+        NSPasteboard.general.clearContents()
+        NSPasteboard.general.setString(text, forType: .string)
+    }
+}
+
+private struct LiveNotesHeightKey: PreferenceKey {
+    static let defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// Thumbnails of images attached during the session (thumbnailData only).
+private struct LiveAttachmentStrip: View {
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.theme) private var theme
+    private let attachments: [Attachment]
+
+    init(attachments: [Attachment]) {
+        self.attachments = attachments
+    }
+
+    var body: some View {
+        ScrollView(.horizontal, showsIndicators: false) {
+            HStack(spacing: theme.spacingS) {
+                ForEach(attachments) { attachment in
+                    if LiveModelGuard.isUsable(attachment) {
+                        thumbnail(attachment)
+                    }
+                }
+            }
+        }
+    }
+
+    private func thumbnail(_ attachment: Attachment) -> some View {
+        let shape = RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
+        return Group {
+            if let image = attachment.thumbnailImage {
+                Image(nsImage: image)
+                    .resizable()
+                    .scaledToFill()
+            } else {
+                Image(systemName: "photo")
+                    .foregroundStyle(theme.textTertiary)
+            }
+        }
+        .frame(width: 64, height: 64)
+        .background(shape.fill(theme.insetSurface))
+        .clipShape(shape)
+        .overlay(shape.strokeBorder(theme.separator, lineWidth: 1))
+        .help(attachment.caption.isBlank ? attachment.filename : attachment.caption)
+        .accessibilityLabel(attachment.caption.isBlank ? "Image \(attachment.filename)" : "Image: \(attachment.caption)")
+        .contextMenu {
+            Button("Save Image…") { AttachmentImporter.saveToDisk(attachment) }
+            Divider()
+            Button("Delete Image", role: .destructive) {
+                SessionEditor.deleteAttachment(attachment, in: modelContext)
+            }
+        }
+    }
+}
+
+/// "Still working?" banner with three actions (InlineBanner has room for one).
+private struct LiveLongSessionBanner: View {
+    @Environment(\.theme) private var theme
+    private let hours: Int
+    private let onStopAtLastActivity: () -> Void
+    private let onStopNow: () -> Void
+    private let onKeepGoing: () -> Void
+
+    init(hours: Int, onStopAtLastActivity: @escaping () -> Void, onStopNow: @escaping () -> Void,
+         onKeepGoing: @escaping () -> Void) {
+        self.hours = hours
+        self.onStopAtLastActivity = onStopAtLastActivity
+        self.onStopNow = onStopNow
+        self.onKeepGoing = onKeepGoing
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous)
+        VStack(alignment: .leading, spacing: theme.spacingS) {
+            HStack(alignment: .firstTextBaseline, spacing: theme.spacingS) {
+                Image(systemName: "exclamationmark.triangle")
+                    .font(theme.bodyFont.weight(.semibold))
+                    .foregroundStyle(theme.warning)
+                    .accessibilityHidden(true)
+                Text("Still working? This session has been running for \(hours) \(hours == 1 ? "hour" : "hours").")
+                    .font(theme.calloutFont)
+                    .foregroundStyle(theme.textPrimary)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+            HStack(spacing: theme.spacingS) {
+                Button("Stop at last activity", action: onStopAtLastActivity)
+                    .help("End the session at your last note, split or resume")
+                Button("Stop now", action: onStopNow)
+                Button("Keep going", action: onKeepGoing)
+            }
+            .buttonStyle(QuietButtonStyle())
+            .controlSize(.small)
+        }
+        .padding(.horizontal, theme.spacingM)
+        .padding(.vertical, theme.spacingS)
+        .background {
+            ZStack {
+                shape.fill(theme.surface)
+                shape.fill(theme.warning.opacity(theme.tintOpacity))
+            }
+        }
+        .overlay(shape.strokeBorder(theme.warning.opacity(0.35), lineWidth: 1))
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Warning: still working?")
+    }
+}
