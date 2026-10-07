@@ -17,7 +17,7 @@ PROJECT = "Worklog"
 APP_DIR = "Worklog"
 TEST_DIR = "WorklogTests"
 CONFIG_DIR = "Config"
-BUNDLE_ID = "com.example.worklog"  # CHANGE ME (also AppConstants.swift and the entitlements files)
+BUNDLE_ID = "app.dabora.worktracker"  # CHANGE ME (also AppConstants.swift and the entitlements files)
 DEPLOYMENT_TARGET = "14.0"
 
 # Files that live in the source tree but must not be compiled or copied as resources.

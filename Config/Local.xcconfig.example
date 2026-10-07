@@ -1,6 +1,9 @@
-// Copy to Config/Local.xcconfig (git-ignored) to build with your team, iCloud (CloudKit) and Sign in with Apple.
-// Also replace the placeholder identifiers (see README ▸ Setup) before the first signed build.
+// Copy to Config/Local.xcconfig (git-ignored) to override signing on your machine.
+//
+// Build without an Apple Developer team: ad-hoc signing with the reduced entitlements (sandbox, user-selected files,
+// network). iCloud sync and Sign in with Apple are then off and the app explains that at runtime.
+// (Also clear DEVELOPMENT_TEAM in Xcode ▸ Worklog target ▸ Signing & Capabilities, or set your own team there.)
 
-WORKLOG_TEAM = ABCDE12345
-WORKLOG_SIGN_IDENTITY = Apple Development
-WORKLOG_ENTITLEMENTS = Worklog/Resources/Worklog.entitlements
+WORKLOG_TEAM =
+WORKLOG_SIGN_IDENTITY = -
+WORKLOG_ENTITLEMENTS = Worklog/Resources/WorklogLocal.entitlements

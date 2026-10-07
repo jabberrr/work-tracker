@@ -1,14 +1,13 @@
-// Signing defaults for both targets (the base configuration of both targets in Worklog.xcodeproj).
+// Signing for both targets (the base configuration of both targets in Worklog.xcodeproj).
 //
-// Out of the box Worklog builds and runs WITHOUT an Apple Developer team: ad-hoc "Sign to Run Locally" with the
-// reduced entitlements (sandbox, user-selected files, network). iCloud sync and Sign in with Apple are then off and the
-// app explains that at runtime.
+// Default: signed with the project team, full entitlements (iCloud/CloudKit, push for CloudKit, Sign in with Apple).
+// Requires a paid Apple Developer Program membership — free "Personal Team" accounts can't use iCloud or Sign in with Apple.
 //
-// To enable iCloud + Sign in with Apple, copy Config/Local.xcconfig.example to Config/Local.xcconfig (git-ignored),
-// set your team, then reopen the project in Xcode.
+// To build WITHOUT a team (ad-hoc "Sign to Run Locally", local-only storage, no Sign in with Apple), copy
+// Config/Local.xcconfig.example to Config/Local.xcconfig (git-ignored).
 
-WORKLOG_TEAM =
-WORKLOG_SIGN_IDENTITY = -
-WORKLOG_ENTITLEMENTS = Worklog/Resources/WorklogLocal.entitlements
+WORKLOG_TEAM = 6W4ZKDHBVD
+WORKLOG_SIGN_IDENTITY = Apple Development
+WORKLOG_ENTITLEMENTS = Worklog/Resources/Worklog.entitlements
 
 #include? "Local.xcconfig"

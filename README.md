@@ -38,41 +38,34 @@ optional floating overlay give quick access while you work.
 
 ## Setup
 
-### Quick start (no Apple Developer team)
-
-A fresh checkout builds and runs without any signing setup:
+### Quick start
 
 Open `Worklog.xcodeproj` in Xcode and press Run (⌘R). There is nothing to install or generate.
 
-`Config/Signing.xcconfig` defaults to ad-hoc signing ("Sign to Run Locally") with the reduced entitlements file
-`Worklog/Resources/WorklogLocal.entitlements` (sandbox, user-selected files, network client). In this mode:
+The project is signed with team `6W4ZKDHBVD` and bundle id `app.dabora.worktracker`, using the full entitlements
+(`Worklog/Resources/Worklog.entitlements`: iCloud/CloudKit container `iCloud.app.dabora.worktracker`, push for CloudKit,
+Sign in with Apple). That needs a paid Apple Developer Program membership.
 
-- the app detects the missing iCloud entitlement at runtime and uses a local-only store; Settings ▸ Account explains why;
-- Sign in with Apple shows a hint to continue without signing in;
-- everything else works, including local backups, export and import.
+To build **without** a team, copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (git-ignored). That switches to
+ad-hoc signing with `WorklogLocal.entitlements`; the app then uses a local-only store, Sign in with Apple shows a hint to
+continue without signing in, and everything else (backups, export, import) still works.
 
 Add and remove files in Xcode as usual. (`scripts/generate_xcodeproj.py` can rebuild the project from the folders on
 disk, which is useful only when files were added outside Xcode, e.g. by tooling on a machine without Xcode.)
 
-### With your team (iCloud sync + Sign in with Apple)
+### Signing, iCloud and Sign in with Apple
 
-1. **Use your own identifiers.** Replace the placeholders (each appears in several files):
+1. **Identifiers** (change all of them together if you change one):
 
-   | Placeholder | Where to change it |
+   | Identifier | Where |
    |---|---|
-   | Bundle id `com.example.worklog` | Xcode ▸ Worklog target ▸ Signing & Capabilities ▸ Bundle Identifier (and `com.example.worklog.tests` for WorklogTests); also `BUNDLE_ID` in `scripts/generate_xcodeproj.py` |
-   | Bundle id `com.example.worklog` | `Worklog/App/AppConstants.swift`: `AppConstants.bundleID` (log subsystem; the Keychain uses the running bundle id) |
-   | CloudKit container `iCloud.com.example.worklog` | `Worklog/Resources/Worklog.entitlements`: `com.apple.developer.icloud-container-identifiers` |
-   | CloudKit container `iCloud.com.example.worklog` | `Worklog/App/AppConstants.swift`: `AppConstants.cloudKitContainerID` (fallback only — at runtime the id is read from the entitlements) |
+   | Bundle id `app.dabora.worktracker` (tests: `app.dabora.worktracker.tests`) | Xcode ▸ target ▸ Signing & Capabilities; `AppConstants.bundleID`; `BUNDLE_ID` in `scripts/generate_xcodeproj.py` |
+   | CloudKit container `iCloud.app.dabora.worktracker` | `Worklog/Resources/Worklog.entitlements`; `AppConstants.cloudKitContainerID` (fallback only — at runtime the id is read from the entitlements) |
+   | Team `6W4ZKDHBVD` | Xcode ▸ target ▸ Signing & Capabilities; `WORKLOG_TEAM` in `Config/Signing.xcconfig` |
 
-2. **Set your team** in a git-ignored local config:
-
-   ```sh
-   cp Config/Local.xcconfig.example Config/Local.xcconfig
-   # edit WORKLOG_TEAM = <your Team ID>, then reopen the project in Xcode
-   ```
-
-   `Local.xcconfig` switches signing to "Apple Development" and the entitlements to `Worklog/Resources/Worklog.entitlements`.
+2. **First signed build.** In Xcode ▸ Worklog target ▸ Signing & Capabilities, check that *Sign in with Apple*, *iCloud*
+   (CloudKit, container `iCloud.app.dabora.worktracker` ticked) and *Push Notifications* are listed. If the container is red,
+   click the refresh button under Containers (or "+" and enter the id) so Xcode creates it.
 
 3. **Enable capabilities** for the App ID in the Apple Developer portal (automatic signing usually does this):
    - iCloud, with CloudKit and the container above (create the container if needed)
