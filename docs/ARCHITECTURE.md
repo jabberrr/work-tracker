@@ -8,7 +8,7 @@
 
 **Worklog** is a native macOS 14+ work-session tracker. You start a session with a label, pause and resume it, split it into segments when your focus changes, and take timestamped notes. At the end you title it and record learnings. You can later browse, search and edit history, follow how your learnings evolve per tag, and view stats. Quick access comes from a `MenuBarExtra` window panel and an optional floating, non-activating `NSPanel` overlay.
 
-Stack: Swift 5 language mode, SwiftUI, Observation, SwiftData + CloudKit (private DB) with local fallback, AuthenticationServices, Swift Charts, ImageIO, and XcodeGen. There are no third-party dependencies.
+Stack: Swift 5 language mode, SwiftUI, Observation, SwiftData + CloudKit (private DB) with local fallback, AuthenticationServices, Swift Charts and ImageIO. The Xcode project (`Worklog.xcodeproj`) is committed. There are no third-party dependencies.
 
 **Identity vs. sync:**
 - iCloud sync uses the Mac's signed-in iCloud account through the CloudKit private database. It works whether or not the user signs in with Apple.
@@ -1760,6 +1760,8 @@ Within views:
 ## 8. Configuration files (CORE)
 
 ### 8.1 `project.yml`
+
+> **Superseded:** the XcodeGen spec was replaced by the committed `Worklog.xcodeproj` (generated from the same settings by `scripts/generate_xcodeproj.py`). The spec below is kept for reference only.
 ```yaml
 name: Worklog
 options:
@@ -1846,7 +1848,7 @@ schemes:
 `WorklogLocal.entitlements` contains only the first three keys. With it, the app runs with "Sign to Run Locally". CloudKit then falls back to the local store, and Sign in with Apple shows its hint.
 
 ### 8.3 README (CORE) must explain
-1. `brew install xcodegen && xcodegen generate`, then open `Worklog.xcodeproj`.
+1. Open `Worklog.xcodeproj`.
 2. Replace the bundle id and container id in `project.yml`, both entitlements files and `AppConstants`, and set `DEVELOPMENT_TEAM`.
 3. In the Developer portal, enable iCloud (CloudKit container), Push Notifications and Sign in with Apple.
 4. Deploy the CloudKit schema to Production before release.

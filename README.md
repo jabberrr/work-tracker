@@ -35,7 +35,6 @@ optional floating overlay give quick access while you work.
 
 - macOS 14 Sonoma or later (deployment target)
 - Xcode 16 or later (Swift 5 language mode)
-- [XcodeGen](https://github.com/yonaskolb/XcodeGen)
 
 ## Setup
 
@@ -43,11 +42,7 @@ optional floating overlay give quick access while you work.
 
 A fresh checkout builds and runs without any signing setup:
 
-```sh
-brew install xcodegen
-xcodegen generate
-open Worklog.xcodeproj     # then Run (⌘R)
-```
+Open `Worklog.xcodeproj` in Xcode and press Run (⌘R). There is nothing to install or generate.
 
 `Config/Signing.xcconfig` defaults to ad-hoc signing ("Sign to Run Locally") with the reduced entitlements file
 `Worklog/Resources/WorklogLocal.entitlements` (sandbox, user-selected files, network client). In this mode:
@@ -56,7 +51,8 @@ open Worklog.xcodeproj     # then Run (⌘R)
 - Sign in with Apple shows a hint to continue without signing in;
 - everything else works, including local backups, export and import.
 
-Run `xcodegen generate` again whenever files are added or removed, or `project.yml` changes.
+Add and remove files in Xcode as usual. (`scripts/generate_xcodeproj.py` can rebuild the project from the folders on
+disk, which is useful only when files were added outside Xcode, e.g. by tooling on a machine without Xcode.)
 
 ### With your team (iCloud sync + Sign in with Apple)
 
@@ -64,7 +60,7 @@ Run `xcodegen generate` again whenever files are added or removed, or `project.y
 
    | Placeholder | Where to change it |
    |---|---|
-   | Bundle id `com.example.worklog` | `project.yml`: `bundleIdPrefix`, `PRODUCT_BUNDLE_IDENTIFIER` for the app and the tests |
+   | Bundle id `com.example.worklog` | Xcode ▸ Worklog target ▸ Signing & Capabilities ▸ Bundle Identifier (and `com.example.worklog.tests` for WorklogTests); also `BUNDLE_ID` in `scripts/generate_xcodeproj.py` |
    | Bundle id `com.example.worklog` | `Worklog/App/AppConstants.swift`: `AppConstants.bundleID` (log subsystem; the Keychain uses the running bundle id) |
    | CloudKit container `iCloud.com.example.worklog` | `Worklog/Resources/Worklog.entitlements`: `com.apple.developer.icloud-container-identifiers` |
    | CloudKit container `iCloud.com.example.worklog` | `Worklog/App/AppConstants.swift`: `AppConstants.cloudKitContainerID` (fallback only — at runtime the id is read from the entitlements) |
@@ -73,8 +69,7 @@ Run `xcodegen generate` again whenever files are added or removed, or `project.y
 
    ```sh
    cp Config/Local.xcconfig.example Config/Local.xcconfig
-   # edit WORKLOG_TEAM = <your Team ID>
-   xcodegen generate
+   # edit WORKLOG_TEAM = <your Team ID>, then reopen the project in Xcode
    ```
 
    `Local.xcconfig` switches signing to "Apple Development" and the entitlements to `Worklog/Resources/Worklog.entitlements`.
