@@ -101,6 +101,9 @@ final class AppServices {
         let recoveredHint = "The damaged data was moved to the Recovered folder (Settings ▸ Data)."
         guard let path = marker.backupPath else {
             PersistenceController.clearPendingRecovery()
+            // The fresh store has no labels: allow seeding again (deferred until the first iCloud import when syncing,
+            // and skipped if labels arrive from iCloud).
+            UserDefaults.standard.set(false, forKey: SeedData.didSeedDefaultsKey)
             persistence.launchNotice = persistence.isSyncingWithICloud
                 ? "Worklog started with a fresh data store and is downloading your data from iCloud. \(recoveredHint)"
                 : "Worklog started with a fresh, empty data store. \(recoveredHint)"

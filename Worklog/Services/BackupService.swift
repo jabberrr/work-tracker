@@ -202,7 +202,8 @@ final class BackupService {
             Log.backup.info("Skipping \(reason.rawValue, privacy: .public) backup: store is in memory only")
             return nil
         }
-        if reason == .onQuit && !isDirty {
+        // A scheduled write still in flight would be killed at quit (atomic, so it leaves no file): back up again.
+        if reason == .onQuit && !isDirty && !isWorking {
             Log.backup.info("Skipping on-quit backup: nothing changed")
             return nil
         }
@@ -475,7 +476,7 @@ final class BackupService {
     }
 
     /// Session count from the file name, else (older backups < 20 MB) by reading the file.
-    private static func knownSessionCount(_ file: BackupFile) -> Int? {
+    private nonisolated static func knownSessionCount(_ file: BackupFile) -> Int? {
         if let count = file.sessionCount { return count }
         guard file.sizeBytes < 20 * 1024 * 1024 else { return nil }
         struct Probe: Decodable {

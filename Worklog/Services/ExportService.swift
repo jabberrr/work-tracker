@@ -626,7 +626,7 @@ final class ExportService {
 
     // MARK: CSV helpers
 
-    private static func isoString(_ date: Date) -> String {
+    nonisolated private static func isoString(_ date: Date) -> String {
         ISO8601DateFormatter().string(from: date)
     }
 
@@ -635,14 +635,14 @@ final class ExportService {
     }
 
     /// RFC 4180: CRLF line endings; fields containing comma, quote, CR or LF are quoted with quotes doubled.
-    private static func csvData(_ rows: [[String]]) -> Data {
+    nonisolated private static func csvData(_ rows: [[String]]) -> Data {
         let text = rows.map { row in row.map(csvField).joined(separator: ",") }.joined(separator: "\r\n") + "\r\n"
         return Data(text.utf8)
     }
 
     /// Formula-injection guard: a value starting with = + - @ TAB or CR is prefixed with "'" so spreadsheet apps show
     /// it as text instead of evaluating it. Then RFC 4180 quoting.
-    static func csvField(_ raw: String) -> String {
+    nonisolated static func csvField(_ raw: String) -> String {
         var value = raw
         let formulaStarts: Set<Unicode.Scalar> = ["=", "+", "-", "@", "\t", "\r"]
         if let first = value.unicodeScalars.first, formulaStarts.contains(first) {
