@@ -1,0 +1,31 @@
+import Foundation
+import SwiftData
+
+@Model
+final class WorkLabel {
+    var uuid: UUID = UUID()
+    var name: String = ""
+    var colorHex: String = "#5B8DEF"
+    var symbolName: String = "circle.fill"
+    var sortIndex: Int = 0
+    var isArchived: Bool = false
+    var createdAt: Date = Date()
+
+    var sessions: [WorkSession]? = []
+    var segments: [Segment]? = []
+    /// Sub-labels (tags scoped to this label).
+    var tags: [WorkTag]? = []
+
+    init(name: String, colorHex: String = "#5B8DEF", symbolName: String = "circle.fill",
+         sortIndex: Int = 0, uuid: UUID = UUID()) {
+        self.uuid = uuid
+        self.name = name
+        self.colorHex = colorHex
+        self.symbolName = symbolName
+        self.sortIndex = sortIndex
+    }
+}
+
+extension WorkLabel {
+    var usageCount: Int { (sessions?.count ?? 0) + (segments?.count ?? 0) }
+}
