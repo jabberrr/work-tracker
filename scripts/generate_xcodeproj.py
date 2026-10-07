@@ -9,6 +9,7 @@ Object IDs are derived from stable keys, so regenerating an unchanged tree produ
 """
 import hashlib
 import os
+import string
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -30,7 +31,7 @@ def oid(key):
 def q(value):
     """Quote a pbxproj string when needed."""
     s = str(value)
-    if s and all(c.isalnum() or c in "._/" for c in s) and not s.startswith("//"):
+    if s and all(c in string.ascii_letters + string.digits + "._/" for c in s) and not s.startswith("//"):
         return s
     s = s.replace("\\", "\\\\").replace('"', '\\"').replace("\n", "\\n")
     return f'"{s}"'
@@ -103,7 +104,7 @@ def walk(rel_dir):
         if name.startswith("."):
             continue
         path = os.path.join(full, name)
-        if os.path.isdir(path) and not name.endswith(".xcassets"):
+        if os.path.isdir(path) and not name.endswith((".xcassets", ".xcdatamodeld", ".bundle")):
             dirs.append(name)
         else:
             files.append(name)
@@ -131,7 +132,8 @@ def main():
             if f.endswith(".swift"):
                 bf = b.add(f"build:{rel}", "PBXBuildFile", {"fileRef": ref})
                 (app_sources if target == "app" else test_sources).append(bf)
-            elif f.endswith(".xcassets") and target == "app":
+            elif target == "app" and not f.endswith(".entitlements"):
+                # Asset catalogs, string catalogs, JSON etc. are bundled as resources.
                 app_resources.append(b.add(f"build:{rel}", "PBXBuildFile", {"fileRef": ref}))
         return b.add(f"group:{rel_dir}", "PBXGroup", {
             "children": children, "path": os.path.basename(rel_dir), "sourceTree": "<group>",
@@ -269,7 +271,6 @@ def main():
         "COMBINE_HIDPI_IMAGES": "YES",
         "CURRENT_PROJECT_VERSION": "1",
         "DEVELOPMENT_TEAM": "$(WORKLOG_TEAM)",
-        "ENABLE_HARDENED_RUNTIME": "YES",
         "ENABLE_PREVIEWS": "YES",
         "GENERATE_INFOPLIST_FILE": "NO",
         "INFOPLIST_FILE": f"{APP_DIR}/Resources/Info.plist",
@@ -306,7 +307,11 @@ def main():
         })
 
     project_configs = config_list("project", [("Debug", project_debug), ("Release", project_release)])
-    app_configs = config_list("app", [("Debug", app_settings), ("Release", app_settings)], signing_ref)
+    # Hardened runtime is for distribution; leaving it off in Debug keeps ad-hoc ("Sign to Run Locally") builds able to
+    # load the ad-hoc signed test bundle (library validation would otherwise reject it: no Team ID).
+    app_debug = dict(app_settings, ENABLE_HARDENED_RUNTIME="NO")
+    app_release = dict(app_settings, ENABLE_HARDENED_RUNTIME="YES")
+    app_configs = config_list("app", [("Debug", app_debug), ("Release", app_release)], signing_ref)
     test_configs = config_list("tests", [("Debug", test_settings), ("Release", test_settings)], signing_ref)
 
     project_id = oid("project")
@@ -377,6 +382,7 @@ def scheme(app_id, test_id):
                 f'            </BuildableReference>\n')
     app_ref = ref(app_id, f"{PROJECT}.app", PROJECT)
     test_ref = ref(test_id, f"{TEST_DIR}.xctest", TEST_DIR)
+    runnable_ref = "".join(line[3:] + "\n" for line in app_ref.splitlines())
     return f'''<?xml version="1.0" encoding="UTF-8"?>
 <Scheme
    LastUpgradeVersion = "1600"
@@ -419,7 +425,7 @@ def scheme(app_id, test_id):
       allowLocationSimulation = "YES">
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
-{app_ref.replace("            ", "         ", 1)}      </BuildableProductRunnable>
+{runnable_ref}      </BuildableProductRunnable>
    </LaunchAction>
    <ProfileAction
       buildConfiguration = "Release"
@@ -429,7 +435,7 @@ def scheme(app_id, test_id):
       debugDocumentVersioning = "YES">
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
-{app_ref.replace("            ", "         ", 1)}      </BuildableProductRunnable>
+{runnable_ref}      </BuildableProductRunnable>
    </ProfileAction>
    <AnalyzeAction
       buildConfiguration = "Debug">

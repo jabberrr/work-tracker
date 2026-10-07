@@ -55,12 +55,12 @@
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "E3435DDA2687639586BF0B70"
-               BuildableName = "Worklog.app"
-               BlueprintName = "Worklog"
-               ReferencedContainer = "container:Worklog.xcodeproj">
-            </BuildableReference>
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "E3435DDA2687639586BF0B70"
+            BuildableName = "Worklog.app"
+            BlueprintName = "Worklog"
+            ReferencedContainer = "container:Worklog.xcodeproj">
+         </BuildableReference>
       </BuildableProductRunnable>
    </LaunchAction>
    <ProfileAction
@@ -72,12 +72,12 @@
       <BuildableProductRunnable
          runnableDebuggingMode = "0">
          <BuildableReference
-               BuildableIdentifier = "primary"
-               BlueprintIdentifier = "E3435DDA2687639586BF0B70"
-               BuildableName = "Worklog.app"
-               BlueprintName = "Worklog"
-               ReferencedContainer = "container:Worklog.xcodeproj">
-            </BuildableReference>
+            BuildableIdentifier = "primary"
+            BlueprintIdentifier = "E3435DDA2687639586BF0B70"
+            BuildableName = "Worklog.app"
+            BlueprintName = "Worklog"
+            ReferencedContainer = "container:Worklog.xcodeproj">
+         </BuildableReference>
       </BuildableProductRunnable>
    </ProfileAction>
    <AnalyzeAction

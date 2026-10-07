@@ -2,7 +2,7 @@ import Foundation
 
 enum AppConstants {
     static let appName = "Worklog"
-    static let bundleID = "com.example.worklog"                 // CHANGE ME (also project.yml)
+    static let bundleID = "com.example.worklog"                 // CHANGE ME (also BUNDLE_ID in scripts/generate_xcodeproj.py)
     static let cloudKitContainerID = "iCloud.com.example.worklog" // CHANGE ME (also entitlements)
     static let backupFolderName = "Backups"
     /// Folder (inside applicationSupportURL) for quarantined/damaged stores, pre-upgrade snapshots and unsaved data.
