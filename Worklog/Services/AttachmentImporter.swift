@@ -7,12 +7,14 @@ import UniformTypeIdentifiers
 struct ImportedImage: Sendable { let data: Data; let filename: String }
 
 enum AttachmentImportError: LocalizedError {
-    case unreadableImage, encodingFailed
+    case unreadableImage, encodingFailed, fileTooLarge, imageTooLarge
 
     var errorDescription: String? {
         switch self {
         case .unreadableImage: "The image couldn't be read."
         case .encodingFailed: "The image couldn't be converted for storage."
+        case .fileTooLarge: "The file is larger than 100 MB."
+        case .imageTooLarge: "The image has more than 150 megapixels."
         }
     }
 }
@@ -22,18 +24,62 @@ enum AttachmentImportError: LocalizedError {
     static let maxPixelDimension: Int = 2048
     static let thumbnailPixelDimension: Int = 400
     static let jpegQuality: Double = 0.8
+    /// Files/data larger than this are rejected before decoding.
+    nonisolated static let maxSourceBytes: Int = 100 * 1024 * 1024
+    /// Images with more pixels than this are rejected before thumbnailing (decompression-bomb guard).
+    nonisolated static let maxSourcePixels: Int = 150_000_000
+    /// Archive import: largest accepted stored image (stored images are ≤ 2048 px, so this is generous).
+    nonisolated static let maxStoredImageBytes: Int = 40 * 1024 * 1024
 
     /// Uses ImageIO: CGImageSourceCreateThumbnailAtIndex(kCGImageSourceThumbnailMaxPixelSize, CreateThumbnailWithTransform,
     /// CreateThumbnailFromImageAlways). Output: PNG if source has alpha, else JPEG(0.8). Fills pixel size, thumbnail, uti.
     /// Returned Attachment is NOT inserted. Metadata (EXIF/GPS) is not carried over.
     static func makeAttachment(fromImageData data: Data, filename: String) throws -> Attachment {
-        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
-              CGImageSourceGetCount(source) > 0 else {
+        guard data.count <= maxSourceBytes else { throw AttachmentImportError.fileTooLarge }
+        guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else {
             throw AttachmentImportError.unreadableImage
         }
+        return try makeAttachment(from: source, filename: filename)
+    }
+
+    static func makeAttachment(fromFileAt url: URL) throws -> Attachment {
+        let accessing = url.startAccessingSecurityScopedResource()
+        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
+        guard isWithinSizeLimit(url) else { throw AttachmentImportError.fileTooLarge }
+        guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
+            throw AttachmentImportError.unreadableImage
+        }
+        return try makeAttachment(from: source, filename: url.lastPathComponent)
+    }
+
+    /// True when the file's size is known and ≤ `maxSourceBytes` (unknown sizes are rejected).
+    nonisolated static func isWithinSizeLimit(_ url: URL) -> Bool {
+        guard let size = (try? url.resourceValues(forKeys: [.fileSizeKey]))?.fileSize else { return false }
+        return size <= maxSourceBytes
+    }
+
+    /// Archive import guard: the stored bytes must be a JPEG, PNG or HEIC image of sane size. Returns false otherwise
+    /// (the attachment is then dropped).
+    nonisolated static func isAcceptableStoredImage(_ data: Data) -> Bool {
+        guard !data.isEmpty, data.count <= maxStoredImageBytes,
+              let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary),
+              let type = CGImageSourceGetType(source) as String? else { return false }
+        let allowed = [UTType.jpeg.identifier, UTType.png.identifier, UTType.heic.identifier]
+        guard allowed.contains(type) else { return false }
+        let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
+        let width = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
+        let height = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+        return width > 0 && height > 0 && width.multipliedReportingOverflow(by: height).partialValue <= maxSourcePixels
+    }
+
+    private static func makeAttachment(from source: CGImageSource, filename: String) throws -> Attachment {
+        guard CGImageSourceGetCount(source) > 0 else { throw AttachmentImportError.unreadableImage }
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
         let sourceWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
         let sourceHeight = (properties[kCGImagePropertyPixelHeight] as? NSNumber)?.intValue ?? 0
+        guard sourceWidth > 0, sourceHeight > 0 else { throw AttachmentImportError.unreadableImage }
+        let pixels = sourceWidth.multipliedReportingOverflow(by: sourceHeight)
+        guard !pixels.overflow, pixels.partialValue <= maxSourcePixels else { throw AttachmentImportError.imageTooLarge }
         let longestSide = max(sourceWidth, sourceHeight)
         // Never upscale: cap at the source's own longest side when it is known.
         let targetMax = longestSide > 0 ? min(maxPixelDimension, longestSide) : maxPixelDimension
@@ -54,18 +100,6 @@ enum AttachmentImportError: LocalizedError {
                                     thumbnailData: thumbData, uti: uti,
                                     pixelWidth: image.width, pixelHeight: image.height)
         return attachment
-    }
-
-    static func makeAttachment(fromFileAt url: URL) throws -> Attachment {
-        let accessing = url.startAccessingSecurityScopedResource()
-        defer { if accessing { url.stopAccessingSecurityScopedResource() } }
-        let data: Data
-        do {
-            data = try Data(contentsOf: url, options: .mappedIfSafe)
-        } catch {
-            throw AttachmentImportError.unreadableImage
-        }
-        return try makeAttachment(fromImageData: data, filename: url.lastPathComponent)
     }
 
     /// NSOpenPanel (images, multiple selection).
@@ -90,7 +124,11 @@ enum AttachmentImportError: LocalizedError {
         ]
         if let urls = pasteboard.readObjects(forClasses: [NSURL.self], options: fileOptions) as? [URL], !urls.isEmpty {
             let images = urls.compactMap { url -> ImportedImage? in
-                guard let data = try? Data(contentsOf: url) else { return nil }
+                guard isWithinSizeLimit(url) else {
+                    Log.ui.error("Skipping pasted file \(url.lastPathComponent, privacy: .private): too large")
+                    return nil
+                }
+                guard let data = try? Data(contentsOf: url, options: .mappedIfSafe) else { return nil }
                 return ImportedImage(data: data, filename: url.lastPathComponent)
             }
             if !images.isEmpty { return images }
@@ -131,13 +169,14 @@ enum AttachmentImportError: LocalizedError {
             if provider.hasItemConformingToTypeIdentifier(UTType.fileURL.identifier),
                let url = await loadFileURL(from: provider) {
                 let isImage = UTType(filenameExtension: url.pathExtension)?.conforms(to: .image) ?? true
-                if isImage, let data = try? Data(contentsOf: url) {
+                if isImage, isWithinSizeLimit(url), let data = try? Data(contentsOf: url, options: .mappedIfSafe) {
                     results.append(ImportedImage(data: data, filename: url.lastPathComponent))
                     continue
                 }
             }
             if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier),
-               let data = await loadData(from: provider, typeIdentifier: UTType.image.identifier) {
+               let data = await loadData(from: provider, typeIdentifier: UTType.image.identifier),
+               data.count <= maxSourceBytes {
                 let name = provider.suggestedName?.nilIfBlank ?? "Dropped Image"
                 results.append(ImportedImage(data: data, filename: name))
             }
@@ -155,7 +194,7 @@ enum AttachmentImportError: LocalizedError {
                 insert(attachment, into: session, context: context)
                 created.append(attachment)
             } catch {
-                Log.ui.error("Skipping image \(image.filename, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                Log.ui.error("Skipping image \(image.filename, privacy: .private): \(error.localizedDescription, privacy: .public)")
             }
         }
         finish(session, created: created, context: context)
@@ -171,7 +210,7 @@ enum AttachmentImportError: LocalizedError {
                 insert(attachment, into: session, context: context)
                 created.append(attachment)
             } catch {
-                Log.ui.error("Skipping file \(url.lastPathComponent, privacy: .public): \(error.localizedDescription, privacy: .public)")
+                Log.ui.error("Skipping file \(url.lastPathComponent, privacy: .private): \(error.localizedDescription, privacy: .public)")
             }
         }
         finish(session, created: created, context: context)

@@ -7,7 +7,7 @@ final class Attachment {
     var uuid: UUID = UUID()
     var createdAt: Date = Date()
     var filename: String = ""
-    var caption: String = ""
+    @Attribute(.allowsCloudEncryption) var caption: String = ""
     /// UTI of `data`: "public.jpeg" or "public.png".
     var uti: String = "public.jpeg"
     var pixelWidth: Int = 0

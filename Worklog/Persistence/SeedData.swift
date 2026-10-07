@@ -58,15 +58,21 @@ import SwiftData
     }
 
     /// Merge duplicate WorkLabel/WorkTag objects sharing the same uuid (CloudKit can import a second copy of the
-    /// seeded rows from another Mac). The survivor is the oldest createdAt; reassign all relationships; delete the rest.
-    /// Also merges duplicate ended sessions sharing a uuid (same archive imported on two Macs; newest modifiedAt
-    /// wins) and ends extra active sessions (keeps most recent startedAt active; others: endedAt = lastActivityDate).
+    /// seeded rows from another Mac) and duplicate ended sessions sharing a uuid (same archive imported on two Macs).
+    ///
+    /// The survivor must be the SAME row on every Mac, otherwise each Mac deletes the other's copy and both vanish after
+    /// sync. So the order only uses synced values: labels/tags by (createdAt asc, instanceID asc), sessions by
+    /// (modifiedAt desc, instanceID asc). When the two best candidates can't be told apart (identical keys — e.g. rows
+    /// from before `instanceID` existed, which all share the migration default) nothing is deleted: a visible duplicate
+    /// is better than losing both copies.
+    ///
+    /// Extra running sessions are NOT ended here: `SessionEngine.reconcile()` (always called right after) ends them at
+    /// the handoff time and tells the user.
     static func deduplicate(in context: ModelContext) {
         var changed = false
         changed = deduplicateLabels(in: context) || changed
         changed = deduplicateTags(in: context) || changed
         changed = deduplicateSessions(in: context) || changed
-        changed = endExtraActiveSessions(in: context) || changed
         guard changed else { return }
         do {
             try context.save()
@@ -75,33 +81,69 @@ import SwiftData
         }
     }
 
+    // MARK: - Ordering (pure; unit-tested)
+
+    /// Labels/tags: oldest createdAt first; ties broken by instanceID. `nil` = indistinguishable.
+    nonisolated static func taxonomyPrecedes(createdAt lhsDate: Date, instanceID lhsID: UUID,
+                                             _ rhsDate: Date, _ rhsID: UUID) -> Bool? {
+        if lhsDate != rhsDate { return lhsDate < rhsDate }
+        if lhsID != rhsID { return lhsID.uuidString < rhsID.uuidString }
+        return nil
+    }
+
+    /// Sessions: newest modifiedAt first; ties broken by instanceID. `nil` = indistinguishable.
+    nonisolated static func sessionPrecedes(modifiedAt lhsDate: Date, instanceID lhsID: UUID,
+                                            _ rhsDate: Date, _ rhsID: UUID) -> Bool? {
+        if lhsDate != rhsDate { return lhsDate > rhsDate }
+        if lhsID != rhsID { return lhsID.uuidString < rhsID.uuidString }
+        return nil
+    }
+
+    /// Sorts `group` with `precedes` and returns (survivor, duplicates), or nil when the two best candidates tie.
+    private static func pickSurvivor<T>(_ group: [T], precedes: (T, T) -> Bool?) -> (survivor: T, duplicates: [T])? {
+        let sorted = group.sorted { precedes($0, $1) ?? false }
+        guard sorted.count > 1 else { return nil }
+        guard precedes(sorted[0], sorted[1]) == true else { return nil }
+        return (sorted[0], Array(sorted.dropFirst()))
+    }
+
     // MARK: - Private
 
     private static func deduplicateLabels(in context: ModelContext) -> Bool {
-        let labels = (try? context.fetch(FetchDescriptor<WorkLabel>())) ?? []
+        let labels = ((try? context.fetch(FetchDescriptor<WorkLabel>())) ?? []).filter { !$0.isDeleted }
         var changed = false
         for group in Dictionary(grouping: labels, by: \.uuid).values where group.count > 1 {
-            let sorted = group.sorted { $0.createdAt < $1.createdAt }
-            let survivor = sorted[0]
-            for duplicate in sorted.dropFirst() {
+            guard let pick = pickSurvivor(group, precedes: {
+                taxonomyPrecedes(createdAt: $0.createdAt, instanceID: $0.instanceID, $1.createdAt, $1.instanceID)
+            }) else {
+                Log.persistence.info("Skipped merging \(group.count) indistinguishable label copies")
+                continue
+            }
+            let survivor = pick.survivor
+            for duplicate in pick.duplicates {
                 for session in duplicate.sessions ?? [] { session.label = survivor }
                 for segment in duplicate.segments ?? [] { segment.label = survivor }
                 for tag in duplicate.tags ?? [] { tag.label = survivor }
                 context.delete(duplicate)
                 changed = true
             }
-            Log.persistence.info("Merged duplicate label \(survivor.name, privacy: .public)")
+            Log.persistence.info("Merged duplicate label \(survivor.name, privacy: .private)")
         }
         return changed
     }
 
     private static func deduplicateTags(in context: ModelContext) -> Bool {
-        let tags = (try? context.fetch(FetchDescriptor<WorkTag>())) ?? []
+        let tags = ((try? context.fetch(FetchDescriptor<WorkTag>())) ?? []).filter { !$0.isDeleted }
         var changed = false
         for group in Dictionary(grouping: tags, by: \.uuid).values where group.count > 1 {
-            let sorted = group.sorted { $0.createdAt < $1.createdAt }
-            let survivor = sorted[0]
-            for duplicate in sorted.dropFirst() {
+            guard let pick = pickSurvivor(group, precedes: {
+                taxonomyPrecedes(createdAt: $0.createdAt, instanceID: $0.instanceID, $1.createdAt, $1.instanceID)
+            }) else {
+                Log.persistence.info("Skipped merging \(group.count) indistinguishable tag copies")
+                continue
+            }
+            let survivor = pick.survivor
+            for duplicate in pick.duplicates {
                 for session in duplicate.sessions ?? [] {
                     session.tagList = replacing(duplicate, with: survivor, in: session.tagList)
                 }
@@ -115,38 +157,28 @@ import SwiftData
                 context.delete(duplicate)
                 changed = true
             }
-            Log.persistence.info("Merged duplicate tag \(survivor.name, privacy: .public)")
+            Log.persistence.info("Merged duplicate tag \(survivor.name, privacy: .private)")
         }
         return changed
     }
 
     private static func deduplicateSessions(in context: ModelContext) -> Bool {
-        var descriptor = FetchDescriptor<WorkSession>(predicate: #Predicate<WorkSession> { $0.endedAt != nil })
-        descriptor.propertiesToFetch = [\WorkSession.uuid, \WorkSession.modifiedAt]
-        let sessions = (try? context.fetch(descriptor)) ?? []
+        let descriptor = FetchDescriptor<WorkSession>(predicate: #Predicate<WorkSession> { $0.endedAt != nil })
+        let sessions = ((try? context.fetch(descriptor)) ?? []).filter { !$0.isDeleted }
         var changed = false
         for group in Dictionary(grouping: sessions, by: \.uuid).values where group.count > 1 {
-            let sorted = group.sorted { $0.modifiedAt > $1.modifiedAt }
-            for duplicate in sorted.dropFirst() {
+            guard let pick = pickSurvivor(group, precedes: {
+                sessionPrecedes(modifiedAt: $0.modifiedAt, instanceID: $0.instanceID, $1.modifiedAt, $1.instanceID)
+            }) else {
+                Log.persistence.info("Skipped merging \(group.count) indistinguishable session copies")
+                continue
+            }
+            for duplicate in pick.duplicates {
                 context.delete(duplicate)
                 changed = true
             }
         }
         return changed
-    }
-
-    private static func endExtraActiveSessions(in context: ModelContext) -> Bool {
-        let descriptor = FetchDescriptor<WorkSession>(
-            predicate: #Predicate<WorkSession> { $0.endedAt == nil },
-            sortBy: [SortDescriptor(\WorkSession.startedAt, order: .reverse)]
-        )
-        let actives = ((try? context.fetch(descriptor)) ?? []).filter { !$0.isDeleted }
-        guard actives.count > 1 else { return false }
-        for extra in actives.dropFirst() {
-            SessionEditor.endSession(extra, at: extra.lastActivityDate)
-            Log.persistence.info("Ended extra active session started \(extra.startedAt.ISO8601Format(), privacy: .public)")
-        }
-        return true
     }
 
     private static func replacing(_ old: WorkTag, with new: WorkTag, in tags: [WorkTag]) -> [WorkTag] {

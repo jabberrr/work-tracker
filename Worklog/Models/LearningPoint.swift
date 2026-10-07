@@ -5,7 +5,7 @@ import SwiftData
 final class LearningPoint {
     var uuid: UUID = UUID()
     var createdAt: Date = Date()
-    var text: String = ""
+    @Attribute(.allowsCloudEncryption) var text: String = ""
     var sortIndex: Int = 0
     /// Optional self-assessed mastery 1...5; 0 = not rated. Charted on the Learning page.
     var mastery: Int = 0

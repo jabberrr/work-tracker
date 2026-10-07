@@ -8,8 +8,10 @@ enum ImportMode { case merge, replace }   // merge = upsert by uuid; replace = d
 
 struct ImportSummary: Equatable {
     var labels = 0, tags = 0, sessionsInserted = 0, sessionsUpdated = 0, attachments = 0
+    /// Merge only: sessions left alone because the local copy is running or at least as new as the archived one.
+    var sessionsSkipped = 0
 
-    /// "Imported 12 sessions (3 updated), 5 labels, 9 tags."
+    /// "Imported 12 sessions (3 updated), 5 labels, 9 tags." (+ " 4 sessions were already up to date." on merge)
     var description: String {
         let sessions = sessionsInserted + sessionsUpdated
         var text = "Imported \(sessions) \(sessions == 1 ? "session" : "sessions") (\(sessionsUpdated) updated), "
@@ -17,7 +19,11 @@ struct ImportSummary: Equatable {
         if attachments > 0 {
             text += ", \(attachments) \(attachments == 1 ? "image" : "images")"
         }
-        return text + "."
+        text += "."
+        if sessionsSkipped > 0 {
+            text += " \(sessionsSkipped) \(sessionsSkipped == 1 ? "session was" : "sessions were") already up to date."
+        }
+        return text
     }
 }
 
@@ -154,7 +160,15 @@ final class ExportService {
         } catch {
             throw DataTransferError.decodingFailed(error.localizedDescription)
         }
-        return try Self.decodeArchive(from: data)
+        var archive = try Self.decodeArchive(from: data)
+        if let store = archive.attachmentStore, !store.isEmpty {
+            let folder = url.deletingLastPathComponent().appending(path: store, directoryHint: .isDirectory)
+            let missing = archive.rehydrateAttachments(from: folder)
+            if missing > 0 {
+                Log.persistence.error("\(missing) backup images are missing from \(store, privacy: .public)")
+            }
+        }
+        return archive
     }
 
     /// Decodes archive JSON, checking the format version first so newer files fail with `.unsupportedVersion`.
@@ -178,9 +192,18 @@ final class ExportService {
         }
     }
 
-    /// .replace throws .sessionActive if any session has endedAt == nil. Merge upserts labels/tags/sessions by uuid;
-    /// an existing session's children are replaced by the DTO's (matched by uuid, so unchanged rows keep their
-    /// identity; attachment bytes are kept when the archive has none). Saves, posts .worklogDataDidImport.
+    /// .replace throws .sessionActive if any session has endedAt == nil, then deletes everything and inserts the archive.
+    ///
+    /// .merge never overwrites newer local data:
+    /// - labels/tags that already exist (by uuid) keep their local name, colour, parent and archived state; only new
+    ///   ones are inserted;
+    /// - an existing session is updated only when the archived copy is strictly newer (`modifiedAt`); otherwise it is
+    ///   skipped (`sessionsSkipped`);
+    /// - when updated, its segments follow the archive (they partition the session's time), while notes, images and
+    ///   learning points are upserted only — local ones missing from the archive are kept;
+    /// - attachment bytes are kept when the archive has none.
+    /// Image bytes from the archive are accepted only if they are a JPEG/PNG/HEIC of sane size.
+    /// Saves, posts .worklogDataDidImport.
     ///
     /// Merge never touches the locally running session. A still-open session from the archive is ended at its local
     /// end time if it was already stopped here, or at its last activity when a session is running here (so an import
@@ -203,6 +226,10 @@ final class ExportService {
         for dto in archive.labels {
             let label: WorkLabel
             if let existing = labelsByID[dto.id] {
+                if mode == .merge {
+                    summary.labels += 1
+                    continue
+                }
                 label = existing
             } else {
                 label = WorkLabel(name: dto.name, uuid: dto.id)
@@ -224,6 +251,10 @@ final class ExportService {
         for dto in archive.tags {
             let tag: WorkTag
             if let existing = tagsByID[dto.id] {
+                if mode == .merge {
+                    summary.tags += 1
+                    continue
+                }
                 tag = existing
             } else {
                 tag = WorkTag(name: dto.name, uuid: dto.id)
@@ -252,6 +283,12 @@ final class ExportService {
             if let existing = sessionsByID[dto.id] {
                 if existing.endedAt == nil {
                     // Never overwrite the session that is running on this Mac.
+                    summary.sessionsSkipped += 1
+                    continue
+                }
+                if mode == .merge && existing.modifiedAt >= dto.modifiedAt {
+                    // The local copy is at least as new: keep it.
+                    summary.sessionsSkipped += 1
                     continue
                 }
                 session = existing
@@ -321,16 +358,30 @@ final class ExportService {
                 note.segment = segment ?? session.segment(containing: noteDTO.createdAt)
                 keptNotes.insert(noteDTO.id)
             }
-            for (id, note) in notesByID where !keptNotes.contains(id) {
-                note.session = nil
-                note.segment = nil
-                context.delete(note)
+            if mode == .replace {
+                for (id, note) in notesByID where !keptNotes.contains(id) {
+                    note.session = nil
+                    note.segment = nil
+                    context.delete(note)
+                }
+            } else {
+                // Local notes the archive doesn't know about stay; re-point any whose segment was dropped.
+                for (id, note) in notesByID where !keptNotes.contains(id) && (note.segment == nil || note.segment?.isDeleted == true) {
+                    note.segment = session.segment(containing: note.createdAt)
+                }
             }
 
             // Attachments (bytes kept when the archive was exported without them)
             var attachmentsByID = Self.index((session.attachments ?? []).filter { !$0.isDeleted }, by: \.uuid)
             var keptAttachments = Set<UUID>()
-            for attDTO in dto.attachments {
+            for var attDTO in dto.attachments {
+                if let data = attDTO.data, !AttachmentImporter.isAcceptableStoredImage(data) {
+                    Log.persistence.error("Dropped an archived image that isn't a valid JPEG/PNG/HEIC")
+                    attDTO.data = nil
+                    attDTO.thumbnailData = nil
+                } else if let thumb = attDTO.thumbnailData, !AttachmentImporter.isAcceptableStoredImage(thumb) {
+                    attDTO.thumbnailData = nil
+                }
                 if let existing = attachmentsByID[attDTO.id] {
                     existing.createdAt = attDTO.createdAt
                     existing.filename = attDTO.filename
@@ -358,11 +409,11 @@ final class ExportService {
                     summary.attachments += 1
                 }
             }
-            for (id, attachment) in attachmentsByID where !keptAttachments.contains(id) {
-                // Only drop images the archive actually describes as gone. An archive without image bytes still
-                // lists every attachment, so a missing id means it was deleted at the source.
-                attachment.session = nil
-                context.delete(attachment)
+            if mode == .replace {
+                for (id, attachment) in attachmentsByID where !keptAttachments.contains(id) {
+                    attachment.session = nil
+                    context.delete(attachment)
+                }
             }
 
             // Learning points
@@ -386,9 +437,11 @@ final class ExportService {
                 point.tagList = tags(for: pointDTO.tagIDs)
                 keptPoints.insert(pointDTO.id)
             }
-            for (id, point) in pointsByID where !keptPoints.contains(id) {
-                point.session = nil
-                context.delete(point)
+            if mode == .replace {
+                for (id, point) in pointsByID where !keptPoints.contains(id) {
+                    point.session = nil
+                    context.delete(point)
+                }
             }
 
             SessionEditor.normalize(session)
@@ -422,6 +475,29 @@ final class ExportService {
         try saveOrRollback()
         NotificationCenter.default.post(name: .worklogDataDidImport, object: nil)
         Log.persistence.info("Deleted all data")
+    }
+
+    /// Backups: image (and thumbnail) bytes of every attachment whose file name
+    /// (`ExportArchive.attachmentFileName`) is not in `existingFileNames`. Only those attachments' external-storage
+    /// bytes are loaded.
+    func backupImagePayloads(skipping existingFileNames: Set<String>) throws -> [BackupImagePayload] {
+        var payloads: [BackupImagePayload] = []
+        for attachment in try context.fetch(FetchDescriptor<Attachment>()) where !attachment.isDeleted {
+            let name = ExportArchive.attachmentFileName(id: attachment.uuid, uti: attachment.uti, thumbnail: false)
+            if !existingFileNames.contains(name), let data = attachment.data {
+                payloads.append(BackupImagePayload(fileName: name, data: data))
+            }
+            let thumbName = ExportArchive.attachmentFileName(id: attachment.uuid, uti: attachment.uti, thumbnail: true)
+            if !existingFileNames.contains(thumbName), let thumb = attachment.thumbnailData {
+                payloads.append(BackupImagePayload(fileName: thumbName, data: thumb))
+            }
+        }
+        return payloads
+    }
+
+    /// Number of (non-deleted) sessions in the store.
+    func sessionCount() -> Int {
+        (try? context.fetchCount(FetchDescriptor<WorkSession>())) ?? 0
     }
 
     /// True when a session with endedAt == nil exists (CORE helper used by BackupService.restore).
@@ -564,7 +640,14 @@ final class ExportService {
         return Data(text.utf8)
     }
 
-    private static func csvField(_ value: String) -> String {
+    /// Formula-injection guard: a value starting with = + - @ TAB or CR is prefixed with "'" so spreadsheet apps show
+    /// it as text instead of evaluating it. Then RFC 4180 quoting.
+    static func csvField(_ raw: String) -> String {
+        var value = raw
+        let formulaStarts: Set<Unicode.Scalar> = ["=", "+", "-", "@", "\t", "\r"]
+        if let first = value.unicodeScalars.first, formulaStarts.contains(first) {
+            value = "'" + value
+        }
         let needsQuoting = value.contains(where: { $0 == "," || $0 == "\"" || $0 == "\n" || $0 == "\r" || $0 == "\r\n" })
         guard needsQuoting else { return value }
         return "\"" + value.replacingOccurrences(of: "\"", with: "\"\"") + "\""

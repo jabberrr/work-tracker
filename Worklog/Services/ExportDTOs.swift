@@ -9,6 +9,10 @@ struct ExportArchive: Codable {
     var labels: [LabelDTO]
     var tags: [TagDTO]
     var sessions: [SessionDTO]
+    /// Backups only: name of a folder next to the archive holding image files `<attachment id>.<ext>` (and
+    /// `<id>.thumb.<ext>`) instead of base64 bytes in the JSON. nil = bytes (if any) are embedded. Older app versions
+    /// ignore the key. `ExportService.decodeArchive(from: URL)` rehydrates the bytes from that folder.
+    var attachmentStore: String? = nil
 }
 struct LabelDTO: Codable, Hashable {
     var id: UUID; var name: String; var colorHex: String; var symbolName: String
@@ -44,12 +48,12 @@ struct LearningPointDTO: Codable {
 }
 
 extension ExportArchive {
-    /// `.iso8601` dates, `.base64` data, `[.prettyPrinted, .sortedKeys]`.
-    static func makeEncoder() -> JSONEncoder {
+    /// `.iso8601` dates, `.base64` data, `[.prettyPrinted, .sortedKeys]` (backups use `pretty: false`).
+    static func makeEncoder(pretty: Bool = true) -> JSONEncoder {
         let encoder = JSONEncoder()
         encoder.dateEncodingStrategy = .iso8601
         encoder.dataEncodingStrategy = .base64
-        encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+        encoder.outputFormatting = pretty ? [.prettyPrinted, .sortedKeys] : [.sortedKeys]
         return encoder
     }
 
@@ -68,5 +72,38 @@ extension ExportArchive {
             throw DecodingError.dataCorruptedError(in: container, debugDescription: "Invalid ISO-8601 date: \(string)")
         }
         return decoder
+    }
+}
+
+extension ExportArchive {
+    /// Default `attachmentStore` folder name used by backups.
+    static let backupAttachmentFolder = "Attachments"
+
+    /// "<id>.png" / "<id>.jpg", or "<id>.thumb.png" for the thumbnail.
+    static func attachmentFileName(id: UUID, uti: String, thumbnail: Bool) -> String {
+        let ext = uti == "public.png" ? "png" : (uti == "public.heic" ? "heic" : "jpg")
+        return thumbnail ? "\(id.uuidString).thumb.\(ext)" : "\(id.uuidString).\(ext)"
+    }
+
+    /// Fills missing attachment bytes from `folder` (see `attachmentStore`). Missing files leave `data` nil.
+    /// Returns the number of attachments that still have no bytes.
+    @discardableResult
+    mutating func rehydrateAttachments(from folder: URL) -> Int {
+        var missing = 0
+        for sessionIndex in sessions.indices {
+            for attachmentIndex in sessions[sessionIndex].attachments.indices {
+                var attachment = sessions[sessionIndex].attachments[attachmentIndex]
+                guard attachment.data == nil else { continue }
+                let file = folder.appending(path: Self.attachmentFileName(id: attachment.id, uti: attachment.uti, thumbnail: false))
+                attachment.data = try? Data(contentsOf: file)
+                if attachment.data == nil { missing += 1 }
+                if attachment.thumbnailData == nil {
+                    let thumb = folder.appending(path: Self.attachmentFileName(id: attachment.id, uti: attachment.uti, thumbnail: true))
+                    attachment.thumbnailData = try? Data(contentsOf: thumb)
+                }
+                sessions[sessionIndex].attachments[attachmentIndex] = attachment
+            }
+        }
+        return missing
     }
 }

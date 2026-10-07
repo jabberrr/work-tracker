@@ -1,6 +1,8 @@
 # XcodeGen spec — run `xcodegen generate` to create Worklog.xcodeproj (not committed).
 # Placeholders to replace before shipping: com.example.worklog (bundle id), iCloud.com.example.worklog
-# (CloudKit container, also in Worklog/Resources/*.entitlements and AppConstants.swift) and DEVELOPMENT_TEAM.
+# (CloudKit container, also in Worklog/Resources/Worklog.entitlements and AppConstants.swift).
+# Signing: Config/Signing.xcconfig builds without a team by default (ad-hoc, WorklogLocal.entitlements). Put your team in
+# the git-ignored Config/Local.xcconfig (see Config/Local.xcconfig.example) to enable iCloud + Sign in with Apple.
 name: Worklog
 options:
   bundleIdPrefix: com.example          # CHANGE ME
@@ -13,7 +15,6 @@ settings:
     SWIFT_VERSION: "5.0"
     SWIFT_STRICT_CONCURRENCY: minimal
     MACOSX_DEPLOYMENT_TARGET: "14.0"
-    DEVELOPMENT_TEAM: ""               # CHANGE ME: your Team ID (required for iCloud + Sign in with Apple)
     CODE_SIGN_STYLE: Automatic
 targets:
   Worklog:
@@ -21,6 +22,9 @@ targets:
     platform: macOS
     sources:
       - path: Worklog
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
     info:
       path: Worklog/Resources/Info.plist
       properties:
@@ -40,7 +44,10 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.example.worklog   # CHANGE ME
         PRODUCT_NAME: Worklog
-        CODE_SIGN_ENTITLEMENTS: Worklog/Resources/Worklog.entitlements  # or WorklogLocal.entitlements without a team
+        # Values come from Config/Signing.xcconfig (+ optional Config/Local.xcconfig).
+        DEVELOPMENT_TEAM: $(WORKLOG_TEAM)
+        CODE_SIGN_IDENTITY: $(WORKLOG_SIGN_IDENTITY)
+        CODE_SIGN_ENTITLEMENTS: $(WORKLOG_ENTITLEMENTS)
         ENABLE_HARDENED_RUNTIME: YES
         ENABLE_PREVIEWS: YES
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
@@ -54,8 +61,13 @@ targets:
       - path: WorklogTests
     dependencies:
       - target: Worklog
+    configFiles:
+      Debug: Config/Signing.xcconfig
+      Release: Config/Signing.xcconfig
     settings:
       base:
+        DEVELOPMENT_TEAM: $(WORKLOG_TEAM)
+        CODE_SIGN_IDENTITY: $(WORKLOG_SIGN_IDENTITY)
         PRODUCT_BUNDLE_IDENTIFIER: com.example.worklog.tests
         GENERATE_INFOPLIST_FILE: YES
         TEST_HOST: "$(BUILT_PRODUCTS_DIR)/Worklog.app/Contents/MacOS/Worklog"

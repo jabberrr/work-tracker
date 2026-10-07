@@ -4,7 +4,13 @@ import SwiftData
 @Model
 final class WorkSession {
     var uuid: UUID = UUID()
-    var title: String = ""
+    /// Identifies this physical row (new on every insert; never copied by import/export). Deterministic tie-break when
+    /// two rows share a `uuid` (e.g. the same archive imported on two Macs) so every Mac keeps the same copy.
+    var instanceID: UUID = UUID()
+    /// Per-install id of the Mac that last controlled this session while it was running ("" = unknown/legacy).
+    /// Used so only the owning Mac auto-pauses it on sleep/quit. Set by SessionEngine.
+    var ownerDeviceID: String = ""
+    @Attribute(.allowsCloudEncryption) var title: String = ""
     var startedAt: Date = Date()
     var endedAt: Date? = nil
     /// JSON-encoded `[PauseInterval]`. Use `pauseIntervals`.
@@ -12,9 +18,9 @@ final class WorkSession {
     /// Cached `activeDuration` (seconds) for sorting. Refresh with `recomputeStoredDuration()` after any time edit/stop.
     var storedActiveDuration: Double = 0
     /// Free-text "what I learned".
-    var learningText: String = ""
+    @Attribute(.allowsCloudEncryption) var learningText: String = ""
     /// Optional short user-written takeaway for the next session's overlay.
-    var overlaySummary: String = ""
+    @Attribute(.allowsCloudEncryption) var overlaySummary: String = ""
     /// Show this session's takeaway in overlay/menu bar of the next session.
     var showInOverlay: Bool = false
     var createdAt: Date = Date()

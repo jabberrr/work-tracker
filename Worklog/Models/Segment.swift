@@ -9,7 +9,7 @@ final class Segment {
     var endedAt: Date? = nil
     var sortIndex: Int = 0
     /// Short "what I'm focusing on" text.
-    var focus: String = ""
+    @Attribute(.allowsCloudEncryption) var focus: String = ""
 
     @Relationship(deleteRule: .nullify, inverse: \WorkLabel.segments)
     var label: WorkLabel?

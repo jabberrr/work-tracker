@@ -4,6 +4,8 @@ import SwiftData
 @Model
 final class WorkLabel {
     var uuid: UUID = UUID()
+    /// Identifies this physical row (new on every insert); deterministic tie-break for duplicate `uuid`s.
+    var instanceID: UUID = UUID()
     var name: String = ""
     var colorHex: String = "#5B8DEF"
     var symbolName: String = "circle.fill"

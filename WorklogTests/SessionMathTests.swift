@@ -323,7 +323,8 @@ final class SessionMathTests: XCTestCase {
         XCTAssertTrue(engine.activeSession === newer)
         XCTAssertTrue(engine.isPaused)
         XCTAssertEqual(engine.autoPauseReason, .quit)
-        XCTAssertEqual(older.endedAt, t0.addingTimeInterval(600), "extra active session ends at its last activity")
+        XCTAssertEqual(older.endedAt, newer.startedAt, "extra active session ends at the handoff (newer session's start)")
+        XCTAssertNotNil(engine.handoffNotice)
         TestSupport.assertInvariants(older)
 
         engine.resume(at: newer.startedAt.addingTimeInterval(120))
@@ -353,15 +354,65 @@ final class SessionMathTests: XCTestCase {
     }
 
     @MainActor
-    func testDiscardDeletesActiveSession() throws {
+    func testHandoffEndsIdleOlderSessionAtLastActivity() throws {
+        let context = try TestSupport.makeContext()
+        let t0 = TestSupport.time(1)
+        let older = WorkSession(startedAt: t0)
+        context.insert(older)
+        let olderSegment = Segment(startedAt: t0)
+        context.insert(olderSegment)
+        olderSegment.session = older
+
+        // Started 20 h later — more than the long-session threshold (10 h by default): the older one was forgotten.
+        let newer = WorkSession(startedAt: t0.addingTimeInterval(20 * 3600))
+        context.insert(newer)
+        let newerSegment = Segment(startedAt: newer.startedAt)
+        context.insert(newerSegment)
+        newerSegment.session = newer
+        try context.save()
+
+        let engine = SessionEngine(context: context, settings: TestSupport.makeSettings())
+        engine.restoreActiveSession()
+        XCTAssertTrue(engine.activeSession === newer)
+        XCTAssertEqual(older.endedAt, older.lastActivityDate)
+        TestSupport.assertInvariants(older)
+    }
+
+    @MainActor
+    func testDiscardDeletesActiveSession() async throws {
         let context = try TestSupport.makeContext()
         let engine = SessionEngine(context: context, settings: TestSupport.makeSettings())
         engine.start(label: nil, at: TestSupport.time(9))
         engine.addNote("note", at: TestSupport.time(9, 5))
-        engine.discard()
-        XCTAssertFalse(engine.isActive)
+        let task = engine.discard()
+        XCTAssertNotNil(task)
+        XCTAssertFalse(engine.isActive, "views switch away immediately")
+        await task?.value
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<WorkSession>()), 0)
         XCTAssertEqual(try context.fetchCount(FetchDescriptor<Note>()), 0, "notes cascade")
+    }
+
+    @MainActor
+    func testPendingDiscardIsDeferredUntilFinished() throws {
+        let context = try TestSupport.makeContext()
+        let settings = TestSupport.makeSettings()
+        settings.showEndSessionSheet = true
+        let engine = SessionEngine(context: context, settings: settings)
+        let t0 = TestSupport.time(9)
+        let session = engine.start(label: nil, at: t0)
+        engine.stop(at: t0.addingTimeInterval(600))
+        XCTAssertTrue(engine.pendingEndSession === session)
+
+        engine.discardPendingSession()
+        XCTAssertNil(engine.pendingEndSession, "the sheet closes first")
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WorkSession>()), 1, "nothing deleted while the sheet may still show it")
+
+        engine.finishPendingDiscard()
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WorkSession>()), 0)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<Segment>()), 0, "segments cascade")
+
+        engine.finishPendingDiscard()   // second call is a no-op
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WorkSession>()), 0)
     }
 
     @MainActor

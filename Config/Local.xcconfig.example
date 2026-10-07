@@ -1,0 +1,6 @@
+// Copy to Config/Local.xcconfig (git-ignored) to build with your team, iCloud (CloudKit) and Sign in with Apple.
+// Also replace the placeholder identifiers (see README ▸ Setup) before the first signed build.
+
+WORKLOG_TEAM = ABCDE12345
+WORKLOG_SIGN_IDENTITY = Apple Development
+WORKLOG_ENTITLEMENTS = Worklog/Resources/Worklog.entitlements

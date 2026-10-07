@@ -371,4 +371,75 @@ final class SessionEditorTests: XCTestCase {
         XCTAssertTrue(labels.first === original, "oldest createdAt survives")
         XCTAssertTrue(session.label === original)
     }
+
+    @MainActor
+    func testDedupeTieBreakIsDeterministicByInstanceID() throws {
+        // Same uuid AND same createdAt (e.g. both copies came from the same archive): instanceID decides, so every
+        // Mac keeps the same copy regardless of fetch order.
+        let context = try TestSupport.makeContext()
+        let id = UUID()
+        let created = TestSupport.time(8)
+        let first = WorkLabel(name: "Deep work", uuid: id)
+        let second = WorkLabel(name: "Deep work", uuid: id)
+        context.insert(first)
+        context.insert(second)
+        first.createdAt = created
+        second.createdAt = created
+        first.instanceID = UUID(uuidString: "00000000-0000-4000-8000-0000000000AA")!
+        second.instanceID = UUID(uuidString: "00000000-0000-4000-8000-000000000011")!
+        try context.save()
+
+        SeedData.deduplicate(in: context)
+        let labels = try context.fetch(FetchDescriptor<WorkLabel>())
+        XCTAssertEqual(labels.count, 1)
+        XCTAssertTrue(labels.first === second, "lowest instanceID wins the tie")
+    }
+
+    @MainActor
+    func testDedupeSessionsKeepsNewestThenLowestInstanceID() throws {
+        let context = try TestSupport.makeContext()
+        let id = UUID()
+        let modified = TestSupport.time(12)
+        var copies: [WorkSession] = []
+        for suffix in ["0C", "0A", "0B"] {
+            let session = TestSupport.makeEndedSession(in: context, start: TestSupport.time(9), segmentMinutes: [30])
+            session.uuid = id
+            session.modifiedAt = modified
+            session.instanceID = UUID(uuidString: "00000000-0000-4000-8000-0000000000\(suffix)")!
+            copies.append(session)
+        }
+        // A strictly newer copy wins regardless of instanceID.
+        copies[0].modifiedAt = modified.addingTimeInterval(1)
+        try context.save()
+
+        SeedData.deduplicate(in: context)
+        let sessions = try context.fetch(FetchDescriptor<WorkSession>())
+        XCTAssertEqual(sessions.count, 1)
+        XCTAssertTrue(sessions.first === copies[0])
+
+        // Order helpers: same total order whichever side is asked first.
+        let a = UUID(uuidString: "00000000-0000-4000-8000-000000000001")!
+        let b = UUID(uuidString: "00000000-0000-4000-8000-000000000002")!
+        XCTAssertEqual(SeedData.sessionPrecedes(modifiedAt: modified, instanceID: a, modified, b), true)
+        XCTAssertEqual(SeedData.sessionPrecedes(modifiedAt: modified, instanceID: b, modified, a), false)
+        XCTAssertNil(SeedData.sessionPrecedes(modifiedAt: modified, instanceID: a, modified, a))
+        XCTAssertEqual(SeedData.taxonomyPrecedes(createdAt: modified, instanceID: b, modified.addingTimeInterval(1), a), true)
+    }
+
+    @MainActor
+    func testDedupeKeepsIndistinguishableCopies() throws {
+        // Identical keys (e.g. rows from before instanceID existed): deleting either could delete both across Macs.
+        let context = try TestSupport.makeContext()
+        let id = UUID()
+        let shared = UUID()
+        for _ in 0..<2 {
+            let session = TestSupport.makeEndedSession(in: context, start: TestSupport.time(9), segmentMinutes: [30])
+            session.uuid = id
+            session.modifiedAt = TestSupport.time(12)
+            session.instanceID = shared
+        }
+        try context.save()
+        SeedData.deduplicate(in: context)
+        XCTAssertEqual(try context.fetchCount(FetchDescriptor<WorkSession>()), 2)
+    }
 }
