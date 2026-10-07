@@ -108,7 +108,6 @@ Worklog/
   Shared/         Data-bound pickers shared by features
   Features/       LiveSession, MenuBar, Overlay, History, SessionDetail, Learning, Stats, Settings
 WorklogTests/     XCTest
-Config/           Signing.xcconfig (defaults) + optional git-ignored Local.xcconfig (your team)
 ```
 
 **Services.** All services are `@MainActor @Observable` and are created once in `AppServices`. Every scene root gets them through `.withAppServices(services)`, which injects each service, the `ModelContainer` and the theme. Views read them with `@Environment(Type.self)`. All SwiftData work goes through `container.mainContext`.
