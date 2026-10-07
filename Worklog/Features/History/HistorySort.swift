@@ -6,8 +6,10 @@ import SwiftData
 ///   their start day).
 /// - Length sorts use `storedActiveDuration` and group into duration buckets.
 /// - Label A–Z groups by primary label (Unlabeled last), newest first inside each label.
+/// - Focus A–Z groups by the first segment's focus (falling back to the session title; sessions with
+///   neither come last), newest first inside each group.
 enum HistorySort: String, CaseIterable, Identifiable {
-    case dateNewest, dateOldest, longest, shortest, labelAZ
+    case dateNewest, dateOldest, longest, shortest, labelAZ, focusAZ
 
     var id: String { rawValue }
 
@@ -18,6 +20,7 @@ enum HistorySort: String, CaseIterable, Identifiable {
         case .longest: "Longest"
         case .shortest: "Shortest"
         case .labelAZ: "Label A–Z"
+        case .focusAZ: "Focus A–Z"
         }
     }
 
@@ -28,6 +31,7 @@ enum HistorySort: String, CaseIterable, Identifiable {
         case .longest: "arrow.down.right.and.arrow.up.left"
         case .shortest: "arrow.up.left.and.arrow.down.right"
         case .labelAZ: "textformat"
+        case .focusAZ: "scope"
         }
     }
 
@@ -61,6 +65,8 @@ struct HistorySection: Identifiable {
             return byLength(sessions, longestFirst: sort == .longest)
         case .labelAZ:
             return byLabel(sessions)
+        case .focusAZ:
+            return byFocus(sessions)
         }
     }
 
@@ -147,6 +153,42 @@ struct HistorySection: Identifiable {
         return sortedKeys.compactMap { key in
             guard let group = groups[key] else { return nil }
             return HistorySection(id: key, title: group.title, colorHex: group.hex,
+                                  sessions: group.sessions.sorted { $0.startedAt > $1.startedAt })
+        }
+    }
+
+    /// Group title of a session for Focus A–Z: the first segment's focus, else the session title,
+    /// else nil ("No focus or title", sorted last).
+    static func focusTitle(of session: WorkSession) -> String? {
+        if let focus = session.sortedSegments.first(where: { !$0.isDeleted })?.focus, !focus.isBlank {
+            return focus.trimmed
+        }
+        return session.title.isBlank ? nil : session.title.trimmed
+    }
+
+    private static func byFocus(_ sessions: [WorkSession]) -> [HistorySection] {
+        let noneKey = "focus-none"
+        var groups: [String: (title: String, sessions: [WorkSession])] = [:]
+        for session in sessions {
+            let title = focusTitle(of: session)
+            // Case- and diacritic-insensitive key so "Bug fixing" and "bug fixing" share a section.
+            let key = title.map { "focus-" + $0.folding(options: [.caseInsensitive, .diacriticInsensitive],
+                                                         locale: .current) } ?? noneKey
+            if groups[key] == nil {
+                groups[key] = (title ?? "No focus or title", [])
+            }
+            groups[key]?.sessions.append(session)
+        }
+        let sortedKeys = groups.keys.sorted { a, b in
+            if a == noneKey { return false }
+            if b == noneKey { return true }
+            let ta = groups[a]?.title ?? "", tb = groups[b]?.title ?? ""
+            let order = ta.localizedCaseInsensitiveCompare(tb)
+            return order == .orderedSame ? a < b : order == .orderedAscending
+        }
+        return sortedKeys.compactMap { key in
+            guard let group = groups[key] else { return nil }
+            return HistorySection(id: key, title: group.title, colorHex: nil,
                                   sessions: group.sessions.sorted { $0.startedAt > $1.startedAt })
         }
     }

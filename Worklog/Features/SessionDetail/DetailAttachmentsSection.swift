@@ -62,11 +62,15 @@ struct DetailAttachmentsSection: View {
             dropZone(attachments)
         }
         .sheet(item: $viewerSelection) { selection in
+            // The viewer confirms deletion itself (a dialog on this view would be dropped while the sheet
+            // is dismissing) and moves to a neighbouring image before asking us to delete.
             DetailImageViewer(attachments: attachments,
                               initialID: selection.attachmentID,
                               onDelete: { attachment in
-                                  viewerSelection = nil
-                                  deleteCandidate = attachment
+                                  Task { @MainActor in
+                                      await Task.yield()
+                                      delete(attachment)
+                                  }
                               })
                 .environment(\.theme, theme)
                 .tint(theme.accent)
@@ -319,6 +323,7 @@ private struct DetailImageViewer: View {
     @State private var currentID: UUID
     @State private var image: NSImage?
     @State private var isLoading = false
+    @State private var deleteCandidate: Attachment?
 
     init(attachments: [Attachment], initialID: UUID, onDelete: @escaping (Attachment) -> Void) {
         self.attachments = attachments
@@ -394,7 +399,7 @@ private struct DetailImageViewer: View {
 
             HStack(spacing: theme.spacingS) {
                 if let current {
-                    Button("Delete…") { onDelete(current) }
+                    Button("Delete…") { deleteCandidate = current }
                         .buttonStyle(DestructiveButtonStyle())
                     Button("Save to Disk…") { AttachmentImporter.saveToDisk(current) }
                         .buttonStyle(QuietButtonStyle())
@@ -415,6 +420,29 @@ private struct DetailImageViewer: View {
         .onChange(of: items.isEmpty) { _, empty in
             if empty { dismiss() }
         }
+        .confirmationDialog("Delete this image?",
+                            isPresented: Binding(get: { deleteCandidate != nil },
+                                                 set: { if !$0 { deleteCandidate = nil } }),
+                            titleVisibility: .visible,
+                            presenting: deleteCandidate) { attachment in
+            Button("Delete Image", role: .destructive) { confirmDelete(attachment) }
+            Button("Cancel", role: .cancel) { deleteCandidate = nil }
+        } message: { _ in
+            Text("This can’t be undone.")
+        }
+    }
+
+    /// Shows the next image (or the previous one at the end) first, then deletes; closes when none is left.
+    private func confirmDelete(_ attachment: Attachment) {
+        deleteCandidate = nil
+        guard !attachment.isDeleted else { return }
+        let items = live
+        let remaining = items.filter { $0.uuid != attachment.uuid }
+        if let index = items.firstIndex(where: { $0.uuid == attachment.uuid }), !remaining.isEmpty {
+            currentID = remaining[min(index, remaining.count - 1)].uuid
+        }
+        onDelete(attachment)
+        if remaining.isEmpty { dismiss() }
     }
 
     private func step(_ offset: Int, in items: [Attachment]) {

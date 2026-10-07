@@ -2,7 +2,8 @@ import SwiftUI
 import SwiftData
 
 /// Segments of a session: a timeline strip (wall time, label colors, hover tooltips), one row per segment
-/// (label, focus, tags, times, active duration, ⋯ menu / context menu) and a boundary handle between rows.
+/// (label, focus, tags, times, active duration, a visible Split… button, ⋯ menu / context menu) and a
+/// boundary handle between rows.
 /// Every structural edit goes through `SessionEditor` (split, merge, delete, move boundary);
 /// label/tags/focus edits write to the segment directly, then touch and save.
 @MainActor
@@ -24,22 +25,9 @@ struct DetailSegmentsSection: View {
         let segments = session.sortedSegments.filter { !$0.isDeleted }
         VStack(alignment: .leading, spacing: theme.spacingS) {
             SectionHeader("Segments", systemImage: "rectangle.split.3x1") {
-                HStack(spacing: theme.spacingS) {
-                    Text("\(segments.count)")
-                        .monospacedDigit()
-                        .accessibilityLabel("\(segments.count) segments")
-                    Button {
-                        if let target = Self.longest(segments) {
-                            splitRequest = DetailSplitRequest(segmentID: target.uuid)
-                        }
-                    } label: {
-                        Image(systemName: "scissors")
-                    }
-                    .buttonStyle(IconButtonStyle(size: 22))
-                    .disabled(segments.isEmpty)
-                    .accessibilityLabel("Split a segment")
-                    .help("Split a segment at a chosen time")
-                }
+                Text("\(segments.count)")
+                    .monospacedDigit()
+                    .accessibilityLabel("\(segments.count) segments")
             }
 
             if !segments.isEmpty {
@@ -76,6 +64,13 @@ struct DetailSegmentsSection: View {
                         )
                     }
                 }
+            }
+
+            if segments.count == 1 {
+                Text("Switched to something else partway through? Use Split… to record when.")
+                    .font(theme.captionFont)
+                    .foregroundStyle(theme.textTertiary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
         }
         .sheet(item: $splitRequest) { request in
@@ -136,11 +131,6 @@ struct DetailSegmentsSection: View {
 
     private func endText(of segment: Segment) -> String {
         endDate(of: segment)?.shortTime ?? "now"
-    }
-
-    /// The default target of the header's split button: the longest segment.
-    static func longest(_ segments: [Segment]) -> Segment? {
-        segments.max { $0.interval().duration < $1.interval().duration }
     }
 
     private func merge(_ segment: Segment) {
@@ -212,6 +202,9 @@ private struct DetailSegmentRow: View {
         let focusText = segment.focus.trimmed
         let rangeText = "\(segment.startedAt.shortTime)–\(endDate?.shortTime ?? "now")"
         let duration = segment.activeDuration()
+        let spokenName: String = focusText.isEmpty ? (segment.effectiveLabel?.name ?? "Unlabeled") : focusText
+        let accessibilityText: String = "Segment " + spokenName + ", " + rangeText + ", "
+            + DesignSystemDurationSpeech.spoken(duration)
         return HStack(alignment: .center, spacing: theme.spacingM) {
             LabelBadge(label: segment.effectiveLabel, size: .small)
             VStack(alignment: .leading, spacing: 3) {
@@ -237,12 +230,23 @@ private struct DetailSegmentRow: View {
                 .frame(minWidth: 44, alignment: .trailing)
                 .fixedSize()
 
+            // Always visible: splitting after the fact is the main fix-up on this page.
+            Button(action: onSplit) {
+                Label("Split…", systemImage: "scissors")
+            }
+            .buttonStyle(QuietButtonStyle())
+            .controlSize(.small)
+            .fixedSize()
+            .help("Split this segment at a chosen time (for a switch you didn’t record live)")
+            .accessibilityLabel("Split segment")
+
             Menu {
                 menuItems
             } label: {
                 Image(systemName: "ellipsis")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
             .menuIndicator(.hidden)
             .fixedSize()
             .help("Segment actions")
@@ -265,7 +269,7 @@ private struct DetailSegmentRow: View {
                 .tint(theme.accent)
         }
         .accessibilityElement(children: .contain)
-        .accessibilityLabel("Segment \(focusText.isEmpty ? (segment.effectiveLabel?.name ?? "Unlabeled") : focusText), \(rangeText), \(DesignSystemDurationSpeech.spoken(duration))")
+        .accessibilityLabel(accessibilityText)
         .accessibilityAction(named: "Edit") { isEditing = true }
         .accessibilityAction(named: "Split") { onSplit() }
     }

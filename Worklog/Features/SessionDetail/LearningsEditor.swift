@@ -314,6 +314,7 @@ struct LearningsEditor: View {
     }
 
     private func move(_ point: LearningPoint, by offset: Int) {
+        guard isAlive, !point.isDeleted else { return }
         var points = livePoints
         guard let from = points.firstIndex(where: { $0.uuid == point.uuid }) else { return }
         let to = from + offset
@@ -324,6 +325,7 @@ struct LearningsEditor: View {
 
     /// Drop `draggedID` onto `target`: the dragged point takes the target's position.
     private func move(_ draggedID: UUID, onto target: LearningPoint) {
+        guard isAlive, !target.isDeleted else { return }
         var points = livePoints
         guard let from = points.firstIndex(where: { $0.uuid == draggedID }),
               let to = points.firstIndex(where: { $0.uuid == target.uuid }),

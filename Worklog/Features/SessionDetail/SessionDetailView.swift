@@ -13,9 +13,11 @@ struct SessionDetailView: View {
     @Environment(\.theme) private var theme
     @Environment(\.modelContext) private var environmentContext
     @Environment(WindowRouter.self) private var router: WindowRouter?
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Bindable private var session: WorkSession
 
+    @State private var isComposingNote = false
     @State private var isEditingTimes = false
     @State private var confirmDelete = false
     @State private var errorMessage: String?
@@ -36,28 +38,32 @@ struct SessionDetailView: View {
     }
 
     private var content: some View {
-        ScrollView {
-            VStack(alignment: .leading, spacing: theme.spacingXL) {
-                if session.isActive {
-                    InlineBanner("This session is still running. Times can be changed after you stop it.",
-                                 systemImage: "record.circle",
-                                 style: .info,
-                                 actionTitle: "Go to Today",
-                                 action: { router?.selection = .today })
+        ScrollViewReader { proxy in
+            ScrollView {
+                VStack(alignment: .leading, spacing: theme.spacingXL) {
+                    if session.isActive {
+                        InlineBanner("This session is still running. Times can be changed after you stop it.",
+                                     systemImage: "record.circle",
+                                     style: .info,
+                                     actionTitle: "Go to Today",
+                                     action: { router?.selection = .today })
+                    }
+                    header(proxy)
+                    DetailSegmentsSection(session: session)
+                    DetailNotesSection(session: session, isComposing: $isComposingNote)
+                        .id(DetailAnchor.notes)
+                    DetailAttachmentsSection(session: session)
+                        .id(DetailAnchor.images)
+                    VStack(alignment: .leading, spacing: theme.spacingS) {
+                        SectionHeader("Learnings", systemImage: "lightbulb")
+                        LearningsEditor(session: session, style: .full)
+                    }
                 }
-                header
-                DetailSegmentsSection(session: session)
-                DetailNotesSection(session: session)
-                DetailAttachmentsSection(session: session)
-                VStack(alignment: .leading, spacing: theme.spacingS) {
-                    SectionHeader("Learnings", systemImage: "lightbulb")
-                    LearningsEditor(session: session, style: .full)
-                }
+                .frame(maxWidth: 760, alignment: .leading)
+                .padding(.horizontal, theme.spacingXL)
+                .padding(.vertical, theme.spacingXL)
+                .frame(maxWidth: .infinity, alignment: .top)
             }
-            .frame(maxWidth: 760, alignment: .leading)
-            .padding(.horizontal, theme.spacingXL)
-            .padding(.vertical, theme.spacingXL)
-            .frame(maxWidth: .infinity, alignment: .top)
         }
         .themedBackground()
         .onChange(of: session.title) { _, _ in markEdited() }
@@ -84,7 +90,7 @@ struct SessionDetailView: View {
 
     // MARK: - Header
 
-    private var header: some View {
+    private func header(_ proxy: ScrollViewProxy) -> some View {
         VStack(alignment: .leading, spacing: theme.spacingS) {
             HStack(alignment: .center, spacing: theme.spacingS) {
                 TextField("Untitled session", text: $session.title)
@@ -115,7 +121,33 @@ struct SessionDetailView: View {
                 TagPicker(selection: $session.tagList, scopeLabel: session.label)
                     .frame(maxWidth: .infinity, alignment: .leading)
             }
+
+            actionBar(proxy)
         }
+    }
+
+    /// One-click "Add Note" / "Add Image…" (the sections below also take paste and drop).
+    private func actionBar(_ proxy: ScrollViewProxy) -> some View {
+        HStack(spacing: theme.spacingS) {
+            Button {
+                addNote(proxy)
+            } label: {
+                Label("Add Note", systemImage: "square.and.pencil")
+            }
+            .help("Add a note at a chosen time")
+
+            Button {
+                addImages(proxy)
+            } label: {
+                Label("Add Image…", systemImage: "photo.badge.plus")
+            }
+            .help("Attach images from your Mac. You can also paste or drop images on Images below.")
+
+            Spacer(minLength: 0)
+        }
+        .buttonStyle(QuietButtonStyle())
+        .controlSize(.small)
+        .padding(.top, theme.spacingXS)
     }
 
     private var moreMenu: some View {
@@ -128,7 +160,8 @@ struct SessionDetailView: View {
         } label: {
             Image(systemName: "ellipsis.circle")
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("More actions")
@@ -177,10 +210,11 @@ struct SessionDetailView: View {
         let paused = session.pausedDuration(at: date)
         var text = "· \(active.formattedShort) active"
         if paused >= 1 { text += " · \(paused.formattedShort) paused" }
+        var spoken: String = "Active " + DesignSystemDurationSpeech.spoken(active)
+        if paused >= 1 { spoken += ", paused " + DesignSystemDurationSpeech.spoken(paused) }
         return Text(text)
             .monospacedDigit()
-            .accessibilityLabel("Active \(DesignSystemDurationSpeech.spoken(active))"
-                                + (paused >= 1 ? ", paused \(DesignSystemDurationSpeech.spoken(paused))" : ""))
+            .accessibilityLabel(spoken)
     }
 
     /// "Wed, Oct 7 · 9:02 AM – 10:20 AM" (end date added when the session crosses midnight).
@@ -215,6 +249,33 @@ struct SessionDetailView: View {
 
     private var context: ModelContext { session.modelContext ?? environmentContext }
 
+    private func addNote(_ proxy: ScrollViewProxy) {
+        guard isAlive else { return }
+        isComposingNote = true
+        scroll(proxy, to: DetailAnchor.notes)
+    }
+
+    private func addImages(_ proxy: ScrollViewProxy) {
+        guard isAlive else { return }
+        let added = AttachmentImporter.addFromOpenPanel(to: session, in: context)
+        if !added.isEmpty {
+            scroll(proxy, to: DetailAnchor.images)
+        }
+    }
+
+    /// Scrolls after the next layout pass so newly shown content (e.g. the note composer) is measured.
+    private func scroll(_ proxy: ScrollViewProxy, to anchor: DetailAnchor) {
+        let animate = !reduceMotion
+        Task { @MainActor in
+            await Task.yield()
+            if animate {
+                withAnimation(.easeOut(duration: 0.2)) { proxy.scrollTo(anchor, anchor: .top) }
+            } else {
+                proxy.scrollTo(anchor, anchor: .top)
+            }
+        }
+    }
+
     private func markEdited() {
         guard isAlive else { return }
         session.touch()
@@ -229,18 +290,40 @@ struct SessionDetailView: View {
         }
     }
 
+    /// Clears the selection first (History then unmounts this view), and deletes a moment later so no
+    /// view still shows the model when it goes away. The engine refreshes the takeaway on save.
     private func deleteSession() {
         guard isAlive else { return }
         let context = self.context
-        if let router, router.selectedSessionID == session.persistentModelID {
-            router.selectedSessionID = nil
+        let session = self.session
+        let router = self.router
+        let id = session.persistentModelID
+        let wasSelected = router?.selectedSessionID == id
+        if wasSelected {
+            router?.selectedSessionID = nil
         }
-        do {
-            try SessionEditor.deleteSession(session, in: context)
-        } catch {
-            errorMessage = error.localizedDescription
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !session.isDeleted, session.modelContext != nil else { return }
+            do {
+                try SessionEditor.deleteSession(session, in: context)
+            } catch {
+                Log.persistence.error("Delete session failed: \(error.localizedDescription, privacy: .public)")
+                // Re-select the session so it is clear it still exists; the alert below shows when this
+                // view is still on screen (it was not the History selection).
+                if wasSelected, router?.selectedSessionID == nil {
+                    router?.selectedSessionID = id
+                }
+                errorMessage = error.localizedDescription
+            }
         }
     }
+}
+
+/// Scroll targets inside the session detail.
+enum DetailAnchor: Hashable {
+    case notes, images
 }
 
 // MARK: - Title field look

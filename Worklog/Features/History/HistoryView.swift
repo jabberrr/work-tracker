@@ -220,7 +220,8 @@ struct HistoryView: View {
         } label: {
             Image(systemName: "arrow.up.arrow.down")
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Sort: \(sort.title)")
@@ -245,7 +246,8 @@ struct HistoryView: View {
         } label: {
             Image(systemName: tagFilter == nil ? "line.3.horizontal.decrease" : "line.3.horizontal.decrease.circle.fill")
         }
-        .menuStyle(.borderlessButton)
+        .menuStyle(.button)
+        .buttonStyle(.borderless)
         .menuIndicator(.hidden)
         .fixedSize()
         .help("Filter by tag")
@@ -376,11 +378,19 @@ struct HistoryView: View {
         }
         resultCount = max(0, resultCount - 1)
 
-        do {
-            try SessionEditor.deleteSession(session, in: context)
-        } catch {
-            errorMessage = error.localizedDescription
-            recompute()
+        // Delete a moment later, after SwiftUI has re-rendered without the detail pane and the row that
+        // showed this session (deleting while they are still mounted can touch a detached model).
+        // The engine refreshes the takeaway itself when the store saves.
+        Task { @MainActor in
+            await Task.yield()
+            try? await Task.sleep(for: .milliseconds(60))
+            guard !session.isDeleted, session.modelContext != nil else { return }
+            do {
+                try SessionEditor.deleteSession(session, in: context)
+            } catch {
+                errorMessage = error.localizedDescription
+                recompute()
+            }
         }
     }
 }

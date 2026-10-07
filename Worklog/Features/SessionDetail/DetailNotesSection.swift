@@ -9,12 +9,14 @@ struct DetailNotesSection: View {
     @Environment(\.modelContext) private var environmentContext
     private let session: WorkSession
 
-    @State private var isComposing = false
+    /// Owned by the host so its "Add Note" button can open the composer.
+    @Binding private var isComposing: Bool
     @State private var editingNoteID: UUID?
     @State private var deleteCandidate: Note?
 
-    init(session: WorkSession) {
+    init(session: WorkSession, isComposing: Binding<Bool>) {
         self.session = session
+        self._isComposing = isComposing
     }
 
     var body: some View {
@@ -79,6 +81,10 @@ struct DetailNotesSection: View {
         } message: { _ in
             Text("This can’t be undone.")
         }
+        .onChange(of: isComposing) { _, composing in
+            // Opening the composer (also from the host's button) ends any inline edit.
+            if composing { editingNoteID = nil }
+        }
     }
 
     private func noteRow(_ note: Note) -> some View {
@@ -90,7 +96,8 @@ struct DetailNotesSection: View {
             } label: {
                 Image(systemName: "ellipsis")
             }
-            .menuStyle(.borderlessButton)
+            .menuStyle(.button)
+            .buttonStyle(.borderless)
             .menuIndicator(.hidden)
             .fixedSize()
             .padding(.top, theme.spacingXS)
@@ -214,7 +221,10 @@ private struct DetailNoteEditor: View {
         .modifier(CardSurfaceModifier(padding: theme.spacingM))
         .onChange(of: date) { _, _ in timeChanged = true }
         .onAppear {
-            DispatchQueue.main.async { textFocused = true }
+            Task { @MainActor in
+                await Task.yield()
+                textFocused = true
+            }
         }
     }
 

@@ -106,16 +106,19 @@ struct HistoryRowView: View {
 
     /// Snippet with the first query term highlighted in the accent color.
     private func snippetText(_ snippet: SearchSnippet) -> Text {
-        let prefix = Text("\(Self.fieldName(snippet.field)): ").foregroundColor(theme.textTertiary)
-        let text = snippet.text
+        let prefix: Text = Text(Self.fieldName(snippet.field) + ": ").foregroundColor(theme.textTertiary)
+        let text: String = snippet.text
         guard let term = SearchService.terms(from: query).first,
               let range = text.range(of: term, options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive]) else {
             return prefix + Text(text)
         }
-        return prefix
-            + Text(text[text.startIndex..<range.lowerBound])
-            + Text(text[range]).foregroundColor(theme.accent).fontWeight(.semibold)
-            + Text(text[range.upperBound..<text.endIndex])
+        // Typed pieces keep the `Text + Text` chain cheap for the type checker.
+        let before: Text = Text(String(text[text.startIndex..<range.lowerBound]))
+        let match: Text = Text(String(text[range])).foregroundColor(theme.accent).fontWeight(.semibold)
+        let after: Text = Text(String(text[range.upperBound..<text.endIndex]))
+        let head: Text = prefix + before
+        let tail: Text = match + after
+        return head + tail
     }
 
     static func fieldName(_ field: SearchSnippet.Field) -> String {
