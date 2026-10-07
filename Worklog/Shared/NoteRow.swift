@@ -7,6 +7,8 @@ import SwiftData
 ///             ● Refactor parser · Edited          Show more
 ///
 /// Editing (context menu, inline editor) is added by the feature that hosts the row.
+/// A deleted note renders nothing; a deleted segment or label is skipped.
+@MainActor
 struct NoteRow: View {
     @Environment(\.theme) private var theme
     @State private var isExpanded = false
@@ -19,16 +21,33 @@ struct NoteRow: View {
     }
 
     /// Heuristic for "longer than six lines" (SwiftUI can't report truncation directly).
-    private var needsExpansion: Bool {
-        let text = note.text
+    private static func needsExpansion(_ text: String) -> Bool {
         if text.count > 420 { return true }
         return text.split(separator: "\n", omittingEmptySubsequences: false).count > 6
     }
 
     var body: some View {
+        if ModelLiveness.isLive(note) {
+            content
+        }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        let text = note.text
         let time = note.createdAt.shortTime
-        let expandable = needsExpansion
-        let segment = showsSegment ? note.segment : nil
+        let expandable = Self.needsExpansion(text)
+        let segment = showsSegment ? ModelLiveness.live(note.segment) : nil
+        let segmentHex = segment.flatMap { ModelLiveness.live($0.effectiveLabel)?.colorHex }
+            ?? LabelPalette.defaultTagHex
+        let segmentFocus = segment.map { s -> String in
+            // displayFocus falls back to the label name; skip that when the label is gone.
+            if ModelLiveness.live(s.effectiveLabel) == nil {
+                let focus = s.focus.trimmingCharacters(in: .whitespacesAndNewlines)
+                return focus.isEmpty ? "Segment" : focus
+            }
+            return s.displayFocus
+        }
 
         HStack(alignment: .firstTextBaseline, spacing: theme.spacingM) {
             Text(time)
@@ -38,25 +57,25 @@ struct NoteRow: View {
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: theme.spacingXS) {
-                Text(note.text)
+                Text(text)
                     .font(theme.bodyFont)
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(isExpanded ? nil : 6)
                     .fixedSize(horizontal: false, vertical: true)
                     .textSelection(.enabled)
                     .frame(maxWidth: .infinity, alignment: .leading)
-                    .accessibilityLabel("Note at \(time): \(note.text)")
+                    .accessibilityLabel("Note at \(time): \(text)")
 
-                if segment != nil || note.editedAt != nil || expandable {
+                if segmentFocus != nil || note.editedAt != nil || expandable {
                     HStack(spacing: theme.spacingS) {
-                        if let segment {
+                        if let segmentFocus {
                             HStack(spacing: 4) {
-                                ColorDot(hex: segment.effectiveLabel?.colorHex ?? LabelPalette.defaultTagHex, size: 6)
-                                Text(segment.displayFocus)
+                                ColorDot(hex: segmentHex, size: 6)
+                                Text(segmentFocus)
                                     .lineLimit(1)
                             }
                             .accessibilityElement(children: .combine)
-                            .accessibilityLabel("Segment: \(segment.displayFocus)")
+                            .accessibilityLabel("Segment: \(segmentFocus)")
                         }
                         if let edited = note.editedAt {
                             Text("Edited")

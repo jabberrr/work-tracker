@@ -163,7 +163,7 @@ struct Theme {
         return theme
     }
 
-    static let fallback: Theme = .make(.paper, colorScheme: .light)
+    static let fallback: Theme = .make(.default, colorScheme: .light)
 }
 
 // MARK: - Helpers (extra)

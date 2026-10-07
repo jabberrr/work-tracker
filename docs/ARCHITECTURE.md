@@ -1303,7 +1303,7 @@ The designer may add more but must provide **exactly** these signatures. Every v
 ### 4.1 `ThemeID.swift`
 ```swift
 enum ThemeID: String, CaseIterable, Identifiable, Codable {
-    case paper, graphite, meadow            // FINAL case names; add new styles by adding cases
+    case graphite, paper, meadow            // FINAL case names; add new styles by adding cases
     var id: String { rawValue }
     var displayName: String { get }
     var summary: String { get }             // one-line description for Settings
@@ -1379,7 +1379,7 @@ struct Theme {
     var spacingXXL: CGFloat // ~32
 
     static func make(_ id: ThemeID, colorScheme: ColorScheme, accent: AccentChoice = .themeDefault) -> Theme
-    static let fallback: Theme   // .make(.paper, colorScheme: .light)
+    static let fallback: Theme   // .make(.default, colorScheme: .light)
 }
 ```
 Per-theme definitions go in `Themes/PaperTheme.swift`, `GraphiteTheme.swift` and `MeadowTheme.swift`, for example `extension Theme { static func paper(_ scheme: ColorScheme) -> Theme }`. `make` switches on `id` and then applies `accent.color` if it is non-nil.
@@ -1389,7 +1389,7 @@ Per-theme definitions go in `Themes/PaperTheme.swift`, `GraphiteTheme.swift` and
 @MainActor @Observable
 final class ThemeManager {
     init(defaults: UserDefaults = .standard)
-    var themeID: ThemeID           // key "appearance.themeID", default .paper
+    var themeID: ThemeID           // key "appearance.themeID", default ThemeID.default (.graphite)
     var appearance: AppearanceMode // key "appearance.mode", default .system; didSet → applyAppearance()
     var accent: AccentChoice       // key "appearance.accent", default .themeDefault
     func theme(for colorScheme: ColorScheme) -> Theme

@@ -1,9 +1,10 @@
 import SwiftUI
 
-/// Graphite — an instrument panel.
-/// Cool aluminium greys (light) or near-black anodised panels (dark), one signal-cyan accent that
-/// the running timer also uses, SF Mono readouts, uppercase tracked section labels on a rule,
-/// tight radii, solid (non-translucent) panels for deterministic contrast.
+/// Graphite — a precise instrument (the default theme).
+/// Crisp neutral white panels on a barely-grey ground (light) or near-black anodised panels (dark),
+/// SF Pro for all running text, SF Mono only for readouts (timers, small uppercase section labels on
+/// a rule), one teal signal accent that the running timer also uses, tight radii, hairline borders,
+/// no shadows, solid (non-translucent) panels for deterministic contrast.
 extension Theme {
     static func graphite(_ scheme: ColorScheme) -> Theme {
         var t = Theme(id: .graphite, colorScheme: scheme)
@@ -26,21 +27,22 @@ extension Theme {
             t.danger = Color(hex: "#FF6B5E")
             t.timerPaused = Color(hex: "#E3B341")
         } else {
-            t.background = Color(hex: "#E8E9EB")
-            t.sidebarBackground = Color(hex: "#DEE0E3")
-            t.surface = Color(hex: "#F3F4F5")
-            t.elevatedSurface = Color(hex: "#F8F9FA")
-            t.insetSurface = Color(hex: "#E0E2E5")
-            t.textPrimary = Color(hex: "#16181B")
-            t.textSecondary = Color(hex: "#4C5158")
-            t.textTertiary = Color(hex: "#71767E")
-            t.accent = Color(hex: "#08707C")
+            // Crisp neutral: white cards on a barely-grey ground, cool hairlines.
+            t.background = Color(hex: "#F6F7F8")
+            t.sidebarBackground = Color(hex: "#EEF0F2")
+            t.surface = Color(hex: "#FFFFFF")
+            t.elevatedSurface = Color(hex: "#FFFFFF")
+            t.insetSurface = Color(hex: "#F0F2F4")
+            t.textPrimary = Color(hex: "#15171A")
+            t.textSecondary = Color(hex: "#4E545C")
+            t.textTertiary = Color(hex: "#6B7179")
+            t.accent = Color(hex: "#0B6C78")
             t.onAccent = .white
-            t.separator = Color(hex: "#C6C9CE")
-            t.success = Color(hex: "#246B34")
-            t.warning = Color(hex: "#805400")
-            t.danger = Color(hex: "#AC2D24")
-            t.timerPaused = Color(hex: "#805400")
+            t.separator = Color(hex: "#DADDE1")
+            t.success = Color(hex: "#22703A")
+            t.warning = Color(hex: "#8A5700")
+            t.danger = Color(hex: "#B42318")
+            t.timerPaused = Color(hex: "#8A5700")
         }
         t.timerUsesAccent = true
         t.timerRunning = t.accent
@@ -48,7 +50,7 @@ extension Theme {
 
         // Signal set: mid-tone, high separation, readable on both panels.
         t.chartPalette = [
-            Color(hex: dark ? "#35C6D4" : "#08707C"),   // signal cyan
+            Color(hex: dark ? "#35C6D4" : "#0B6C78"),   // signal teal
             Color(hex: "#D9A441"),                        // amber
             Color(hex: "#7C8CF0"),                        // periwinkle
             Color(hex: "#5BB974"),                        // green
@@ -77,7 +79,7 @@ extension Theme {
 
         t.fontRecipe = ThemeFontRecipe(
             displayDesign: .default, largeTitleWeight: .semibold, titleWeight: .semibold,
-            textDesign: .default, labelDesign: .monospaced, labelWeight: .medium,
+            textDesign: .default, labelDesign: .default, labelWeight: .medium,
             sectionDesign: .monospaced, sectionWeight: .semibold, sectionSize: 10.5,
             timerDesign: .monospaced, timerHeroWeight: .light, timerWeight: .regular, timerCompactWeight: .medium,
             timerHeroSize: 60, timerSize: 30)

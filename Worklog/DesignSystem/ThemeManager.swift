@@ -15,7 +15,7 @@ final class ThemeManager {
 
     @ObservationIgnored private let defaults: UserDefaults
 
-    /// Key "appearance.themeID", default `.paper`.
+    /// Key "appearance.themeID", default `ThemeID.default` (`.graphite`).
     var themeID: ThemeID {
         didSet { defaults.set(themeID.rawValue, forKey: Keys.themeID) }
     }
@@ -40,7 +40,7 @@ final class ThemeManager {
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
-        self.themeID = defaults.string(forKey: Keys.themeID).flatMap(ThemeID.init(rawValue:)) ?? .paper
+        self.themeID = defaults.string(forKey: Keys.themeID).flatMap(ThemeID.init(rawValue:)) ?? .default
         self.appearance = defaults.string(forKey: Keys.mode).flatMap(AppearanceMode.init(rawValue:)) ?? .system
         self.accent = defaults.string(forKey: Keys.accent).flatMap(AccentChoice.init(rawValue:)) ?? .themeDefault
         self.textSize = defaults.string(forKey: Keys.textSize).flatMap(ThemeTextSize.init(rawValue:)) ?? .standard
@@ -58,7 +58,7 @@ final class ThemeManager {
 
     /// (Extra) Restores theme, appearance, accent and text size to their defaults.
     func resetToDefaults() {
-        themeID = .paper
+        themeID = .default
         appearance = .system
         accent = .themeDefault
         textSize = .standard

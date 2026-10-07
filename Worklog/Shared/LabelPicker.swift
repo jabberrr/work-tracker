@@ -5,8 +5,13 @@ import AppKit
 /// Menu-style picker of non-archived labels (sorted by sortIndex) with color dot + symbol; optional "None".
 /// Shows the current selection even if archived.
 ///
+/// A selection that was deleted (or merged away) while the caller still holds it is treated as nil:
+/// it is never read, never offered, and nil is written back to the binding (on appear and whenever
+/// the label list changes).
+///
 /// Native pop-up button (full keyboard support, type-to-select). Its title shows on the left like any
 /// macOS picker; add `.labelsHidden()` when the context already says what it is.
+@MainActor
 struct LabelPicker: View {
     @Query(sort: \WorkLabel.sortIndex) private var allLabels: [WorkLabel]
     @Binding private var selection: WorkLabel?
@@ -19,20 +24,35 @@ struct LabelPicker: View {
         self.title = title
     }
 
+    /// The selection when it still exists; nil when it was deleted.
+    private var liveSelection: WorkLabel? { ModelLiveness.live(selection) }
+
+    /// Live labels (the query can briefly include deleted-but-unsaved ones).
+    private var liveLabels: [WorkLabel] { ModelLiveness.live(allLabels) }
+
     /// Active labels, plus the current selection when it is archived (so the button can display it).
     private var options: [WorkLabel] {
-        var list = allLabels.filter { !$0.isArchived }
-        if let current = selection,
+        var list = liveLabels.filter { !$0.isArchived }
+        if let current = liveSelection,
            !list.contains(where: { $0.persistentModelID == current.persistentModelID }) {
             list.append(current)
         }
         return list
     }
 
+    /// Picker binding that never hands a deleted model to the menu.
+    private var safeSelection: Binding<WorkLabel?> {
+        Binding(
+            get: { ModelLiveness.live(selection) },
+            set: { selection = $0 }
+        )
+    }
+
     var body: some View {
         let items = options
-        Picker(selection: $selection) {
-            if includeNone || selection == nil {
+        let current = liveSelection
+        Picker(selection: safeSelection) {
+            if includeNone || current == nil {
                 Text(includeNone ? "None" : "Choose a label")
                     .tag(Optional<WorkLabel>.none)
             }
@@ -53,7 +73,18 @@ struct LabelPicker: View {
         }
         .pickerStyle(.menu)
         .accessibilityLabel(title)
-        .accessibilityValue(selection?.name ?? "None")
+        .accessibilityValue(current?.name ?? "None")
+        .onAppear(perform: dropDeletedSelection)
+        .onChange(of: liveLabels.map(\.persistentModelID)) { _, _ in
+            dropDeletedSelection()
+        }
+    }
+
+    /// Writes nil back when the bound label no longer exists.
+    private func dropDeletedSelection() {
+        if let current = selection, !ModelLiveness.isLive(current) {
+            selection = nil
+        }
     }
 }
 
@@ -61,6 +92,7 @@ struct LabelPicker: View {
 /// (NSMenu renders SwiftUI `Image(systemName:)` as monochrome templates). Use in any `Menu`/`Picker`:
 /// `Image(nsImage: LabelMenuIcon.image(symbol: label.symbolName, hex: label.colorHex))`.
 /// Call from the main thread (views).
+@MainActor
 enum LabelMenuIcon {
     private static var cache: [String: NSImage] = [:]
 

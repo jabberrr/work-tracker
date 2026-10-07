@@ -6,7 +6,7 @@ enum BadgeSize {
 }
 
 /// The label's symbol (in the label color) + its name on a faint tint of the label color.
-/// The name is always shown, so color is never the only signal. `nil` → "Unlabeled".
+/// The name is always shown, so color is never the only signal. `nil` (or a deleted label) → "Unlabeled".
 struct LabelBadge: View {
     @Environment(\.theme) private var theme
     private let label: WorkLabel?
@@ -18,6 +18,7 @@ struct LabelBadge: View {
     }
 
     var body: some View {
+        let label = ModelLiveness.live(self.label)
         let name: String = label.map { l in
             let n = l.name.trimmingCharacters(in: .whitespacesAndNewlines)
             return n.isEmpty ? "Untitled label" : n

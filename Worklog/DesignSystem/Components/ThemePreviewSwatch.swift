@@ -3,17 +3,23 @@ import SwiftUI
 /// A miniature of a theme for the Appearance settings grid: a light and a dark half, each with a
 /// sidebar strip, a display-face "Aa", a timer readout in the theme's timer face and an accent pill;
 /// below, the theme name and summary. Selected → accent ring + checkmark.
+///
+/// `compact: true` (Welcome screen): 124 pt wide, one preview in the current appearance, name only.
+///
 /// Not interactive by itself: wrap it in `Button { manager.themeID = id } label: { ThemePreviewSwatch(…) }
-/// .buttonStyle(.plain)`.
+/// .buttonStyle(.plain)` — or use `ThemeSwatchRow`, which does that for every theme.
 struct ThemePreviewSwatch: View {
     @Environment(\.theme) private var theme
+    @Environment(\.colorScheme) private var colorScheme
     @Environment(ThemeManager.self) private var manager: ThemeManager?
     private let themeID: ThemeID
     private let isSelected: Bool
+    private let compact: Bool
 
-    init(themeID: ThemeID, isSelected: Bool) {
+    init(themeID: ThemeID, isSelected: Bool, compact: Bool = false) {
         self.themeID = themeID
         self.isSelected = isSelected
+        self.compact = compact
     }
 
     var body: some View {
@@ -22,14 +28,18 @@ struct ThemePreviewSwatch: View {
         let dark = Theme.make(themeID, colorScheme: .dark, accent: accent)
         let frameShape = RoundedRectangle(cornerRadius: theme.radiusM + 2, style: .continuous)
 
-        VStack(alignment: .leading, spacing: theme.spacingS) {
+        VStack(alignment: .leading, spacing: compact ? theme.spacingXS + 2 : theme.spacingS) {
             HStack(spacing: 0) {
-                ThemeMiniPreview(preview: light)
-                    .environment(\.colorScheme, .light)
-                ThemeMiniPreview(preview: dark)
-                    .environment(\.colorScheme, .dark)
+                if compact {
+                    ThemeMiniPreview(preview: colorScheme == .dark ? dark : light)
+                } else {
+                    ThemeMiniPreview(preview: light)
+                        .environment(\.colorScheme, .light)
+                    ThemeMiniPreview(preview: dark)
+                        .environment(\.colorScheme, .dark)
+                }
             }
-            .frame(height: 92)
+            .frame(height: compact ? 64 : 92)
             .clipShape(frameShape)
             .overlay {
                 frameShape.strokeBorder(isSelected ? theme.accent : theme.separator,
@@ -48,16 +58,19 @@ struct ThemePreviewSwatch: View {
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(themeID.displayName)
-                    .font(theme.headlineFont)
-                    .foregroundStyle(theme.textPrimary)
-                Text(themeID.summary)
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.textSecondary)
-                    .lineLimit(2, reservesSpace: true)
-                    .fixedSize(horizontal: false, vertical: true)
+                    .font(compact ? theme.calloutFont.weight(.semibold) : theme.headlineFont)
+                    .foregroundStyle(isSelected && compact ? theme.accent : theme.textPrimary)
+                if !compact {
+                    Text(themeID.summary)
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(2, reservesSpace: true)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
             }
         }
-        .frame(width: 196)
+        .frame(width: compact ? 124 : 196)
+        .help(compact ? themeID.summary : "")
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(themeID.displayName) theme")

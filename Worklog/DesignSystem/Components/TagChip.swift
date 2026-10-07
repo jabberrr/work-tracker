@@ -31,8 +31,10 @@ struct TagChip: View {
 
     var body: some View {
         // Read model properties in body so the chip observes renames/recolors.
-        let name = tag?.name ?? rawName
-        let hex = tag?.colorHex ?? rawHex
+        // A deleted tag is never read (that traps); it renders as an empty neutral chip.
+        let liveTag = ModelLiveness.live(tag)
+        let name = liveTag?.name ?? rawName
+        let hex = liveTag?.colorHex ?? rawHex
         let showsDot = LabelPalette.normalized(hex) != LabelPalette.normalized(LabelPalette.defaultTagHex)
 
         HStack(spacing: 4) {

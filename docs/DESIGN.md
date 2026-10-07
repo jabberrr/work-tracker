@@ -23,8 +23,9 @@ exception is a label's or tag's own color, which you get from `label.color` / `t
 4. **Native first.** System materials and vibrancy for the menu bar panel and overlay; native `Picker`,
    `Toggle`, `DatePicker`, `Form`, `Table`/`List`, sheets, popovers, alerts and `confirmationDialog`.
    Custom only where it adds character: timers, badges, chips, cards, buttons, empty states.
-5. **Not an "AI app".** No cream/beige backgrounds with terracotta accents, no soft multicolor gradient
-   cards, no glow, no emoji in UI chrome, no sparkles. Neutral paper, ink, graphite and moss.
+5. **Not an "AI app".** No cream/beige backgrounds with terracotta accents, no serif-on-paper "editorial
+   assistant" default, no soft multicolor gradient cards, no glow, no emoji in UI chrome, no sparkles.
+   The default is a crisp, neutral, sans-serif tool (Graphite); Paper and Meadow are opt-in alternatives.
 6. **Every style is a theme.** All three themes work in light and dark appearance, and a fourth is one enum
    case plus one factory (§15).
 
@@ -32,10 +33,30 @@ exception is a label's or tag's own color, which you get from `label.color` / `t
 
 ## 2. Themes
 
-Selected in Settings → Appearance (`ThemeManager.themeID`), combined with appearance mode (System / Light /
-Dark) and an accent override (`AccentChoice`). Default: **Paper**, System, Theme Default accent.
+Selected in Settings → Appearance (`ThemeManager.themeID`) or on the Welcome screen (`ThemeSwatchRow`),
+combined with appearance mode (System / Light / Dark) and an accent override (`AccentChoice`).
+Default: **Graphite** (`ThemeID.default`), System, Theme Default accent. Pickers list themes in
+`ThemeID.allCases` order: Graphite, Paper, Meadow.
 
-### 2.1 Paper — editorial, ink on paper (default)
+**Brief check (all three):** simple (one accent, one display face, no gradients), pleasing (tuned contrast,
+calm chroma), unintrusive (no motion or color that competes with the user's text), distinct from each other
+(sans/mono · serif · rounded) and not generic (each has one signature: Graphite's mono readouts and ruled
+legends, Paper's serif numerals, Meadow's soft depth). None uses the cream + terracotta + serif combination
+typical of AI-assistant apps; Paper keeps serif type but on neutral white with a blue ink accent.
+
+### 2.1 Graphite — a precise instrument (default)
+- **Look (light):** crisp and neutral — white cards (`#FFFFFF`) on a barely-grey ground (`#F6F7F8`), sidebar
+  `#EEF0F2`, cool hairlines (`#DADDE1`), near-black text (`#15171A`). One **teal signal** accent
+  (`#0B6C78`, 6.1:1 on white) that the running timer also uses. Paused readouts turn amber (`#8A5700`).
+- **Look (dark):** near-black anodised panels (`#121315`, cards `#1A1C1F`), accent `#35C6D4`.
+- **Type:** SF Pro for all running text, titles and chips. SF Mono (`.monospaced`) only for **readouts**:
+  timers and the small section legends, which are `UPPERCASE`, tracked, secondary-colored, on a rule.
+- **Shape:** tight radii (3/5/8), 1 pt hairline borders, no shadows. **Solid panels**
+  (`usesMaterials == false`): the overlay and menu bar panel use `elevatedSurface` for deterministic contrast.
+- **Why default:** the least decorated and most neutral option; reads as a precise tool, not a
+  document or a chat app. The mono readouts give it character without color or ornament.
+
+### 2.2 Paper — editorial, ink on paper
 - **Look:** near-white *neutral* paper (`#FBFBFA`, not cream), blue-black ink text (`#15171A`), a
   fountain-pen blue accent (`#2C44B8`). Dark: charcoal reading-mode (`#141517`) with soft white ink and a
   periwinkle accent (`#93A6FF`).
@@ -44,17 +65,8 @@ Dark) and an accent override (`AccentChoice`). Default: **Paper**, System, Theme
 - **Shape:** small radii (4/6/10), 1 pt hairline borders, **no shadows**. Section headers sit on a hairline
   rule that runs to the trailing edge, like a printed page.
 - **Running timer** is ink (`textPrimary`-like), not accent: the accent is reserved for actions.
-- **Why:** the most neutral, readable, "document-like" default; serif display gives character without color.
-
-### 2.2 Graphite — instrument panel
-- **Look:** cool aluminium greys (light `#E8E9EB`) or near-black anodised panels (dark `#121315`). One
-  **signal-cyan** accent (`#08707C` light / `#35C6D4` dark) that the running timer also uses (readout
-  glow). Paused readouts turn amber.
-- **Type:** SF Mono (`.monospaced`) for timers, chips/badges (`labelFont`) and section labels; SF Pro for
-  text. Section headers are `UPPERCASE`, tracked, secondary-colored, on a rule — like panel legends.
-- **Shape:** tight radii (3/5/8), 1 pt borders, no shadows. **Solid panels** (`usesMaterials == false`):
-  the overlay and menu bar panel use `elevatedSurface` for deterministic contrast.
-- **Why:** for people who like a dark, technical, high-information-density tool.
+- **Why:** for people who like a "document-like" journal; serif display gives character without color.
+  Kept as an option, not the default (serif-on-paper is the look the brief asked to avoid by default).
 
 ### 2.3 Meadow — soft natural green
 - **Look:** pale sage (`#F3F6F2`) with off-white cards; deep forest in dark (`#111612`). Moss-green accent
@@ -120,7 +132,7 @@ controls scale too. When you need a custom size (rare), multiply by `theme.textS
 | `bodyFont` | 13 | SF Pro | SF Pro | SF Pro | Notes, learnings, fields |
 | `calloutFont` | 12 | SF Pro | SF Pro | SF Pro | Secondary lines, banners, messages |
 | `captionFont` | 11 | SF Pro | SF Pro | SF Pro | Timestamps, metadata, chart axes |
-| `labelFont` | 11 medium | SF Pro | SF Mono | Rounded | Chips, badges |
+| `labelFont` | 11 medium | SF Pro | SF Pro | Rounded | Chips, badges |
 | `monoFont` | 12 | SF Mono | SF Mono | SF Mono | IDs, file sizes, keyboard hints |
 | `timerHeroFont` | 68 / 60 / 64 light | New York | SF Mono | Rounded | Today hero timer |
 | `timerFont` | 34 / 30 / 32 | New York | SF Mono | Rounded | Overlay, menu bar panel |
@@ -185,6 +197,17 @@ symbol (`label.symbolName`). Standard symbols — use these so the app speaks on
 
 Menu bar label (A): `timer` idle, `record.circle` running, `pause.circle` paused (contract §5.3).
 
+### 6.1 App icon (`Assets.xcassets/AppIcon.appiconset`)
+
+A **segmented session dial**: a flat graphite tile (`#1A1D21`, standard macOS 824/1024 rounded-square grid,
+hairline inner edge, soft system-style drop shadow, no gradient) carrying a ring track (`#2A2E34`) with
+three work segments separated by gaps — teal `#35C6D4` (the Graphite accent, leading from 12 o'clock),
+off-white `#E6E8EB`, amber `#D9A441` — a short stopwatch crown above 12 o'clock and a teal live dot in the
+centre. It reads as "a timer split into segments", the app's core idea, and stays legible at 16 px (the
+16/32 px renders use 25 % heavier strokes). PNGs for all ten mac slots (16–512 @1x/@2x) are rendered
+programmatically at 4× supersampling (Pillow) and downscaled with Lanczos; to change the icon, regenerate
+all ten sizes together rather than editing single PNGs by hand.
+
 ---
 
 ## 7. Motion
@@ -219,7 +242,8 @@ All inits are exactly as in ARCHITECTURE.md §4.6. Usage is explicit: `.buttonSt
 | `StatTile(…)` | Stats and Today totals, in an adaptive grid (min 150). |
 | `FlowLayout(spacing:lineSpacing:)` | Wrapping chips and swatches. |
 | `InlineBanner(…)` | Top-of-pane notices (storage mode, auto-pause, long session, errors). Max two stacked. |
-| `ThemePreviewSwatch(themeID:isSelected:)` | Appearance tab; wrap in a `.plain` Button. |
+| `ThemePreviewSwatch(themeID:isSelected:compact:)` | Appearance tab (`compact: false`, default: light + dark halves, name + summary, 196 pt); Welcome (`compact: true`: one preview in the current appearance, name only, summary as tooltip, 124 pt). Wrap in a `.plain` Button — or use `ThemeSwatchRow`. |
+| `ThemeSwatchRow(compact:)` | Extra. One swatch per `ThemeID` that sets `ThemeManager.themeID` on click (reads `ThemeManager` from the environment; renders nothing without it). Default `compact: true` ≈ 396 pt wide — Welcome screen. |
 
 **Extras (beyond the contract) — available to all features:**
 
@@ -234,7 +258,8 @@ All inits are exactly as in ARCHITECTURE.md §4.6. Usage is explicit: `.buttonSt
 | `ThemeManager.textSize` | `ThemeTextSize` (`.small/.standard/.large/.extraLarge`, `displayName`, `scale`), key `"appearance.textSize"`; `resetToDefaults()`. |
 | `ThemeID.systemImage`, `AppearanceMode.systemImage`, `AccentChoice.nsColor`, `AccentChoice.prefersDarkForeground` | Small helpers for Settings. |
 | `LabelPalette.swatches` (`[LabelSwatch]` name+hex), `name(forHex:)`, `normalized(_:)`, `accessibilityName(forSymbol:)`, `defaultTagHex` | Palette helpers. |
-| `WorkTag.hasCustomColor` | False for the default gray. |
+| `WorkTag.hasCustomColor` | False for the default gray (and for a deleted tag). |
+| `ModelLiveness.isLive(_:)`, `.live(_ model:)`, `.live(_ models:)` | Is a SwiftData model still readable (`!isDeleted && modelContext != nil`)? Use before reading a label/tag/note a view may still hold after it was deleted or merged (e.g. `@State var startLabel`). Shared controls, `LabelBadge`, `TagChip`, `label.color`/`tag.color` already guard. |
 | `LabelMenuIcon.image(symbol:hex:pointSize:)` / `.dot(color:diameter:)` | Colored non-template `NSImage`s for native menus (`Image(nsImage:)`), e.g. A's Split menu. |
 | `DesignSystemDurationSpeech.spoken(_:)` | "1 hour, 5 minutes" for `.accessibilityValue` on custom duration displays. |
 
@@ -246,6 +271,14 @@ All inits are exactly as in ARCHITECTURE.md §4.6. Usage is explicit: `.buttonSt
 | `TagPicker(selection:scopeLabel:allowsCreate:)` | Selected tags as removable chips + a dashed "+ Add tag" chip that opens a popover: search field (focused), **scope label's tags**, **Global**, and while searching **Other labels**; rows toggle (multi-select, popover stays open); "Create “x” ⏎" creates a *global* tag via `TaxonomyOps.createTag(name:in:)` and selects it. Return = toggle exact/only match or create. Bind with `$session.tagList`, `$segment.tagList`, `$point.tagList`. The picker does not call `touch()`. |
 | `TagChipsRow(tags:)` | Read-only chips; renders nothing when empty. |
 | `NoteRow(note:showsSegment:)` | `10:42` (caption, tabular, tertiary) · selectable body text (6 lines + "Show more") · optional segment caption (dot + focus) · "Edited". Read-only; add `.contextMenu` (Edit / Change time / Delete) in your feature. |
+
+**Deleted models.** A label or tag can be deleted or merged in Settings while another view still holds it
+(Today's start label in `@State`, the menu bar picker, an open editor). Reading such a model traps, so:
+`LabelPicker` treats a deleted selection as nil, `TagPicker` drops deleted tags — both never read them,
+never offer them, and write the cleaned value back to the binding (on appear and whenever the label/tag
+list changes). `TagChipsRow`, `TagChip`, `LabelBadge` (→ "Unlabeled") and `NoteRow` (renders nothing for a
+deleted note; skips a deleted segment/label) also guard. Feature code that reads a held model outside these
+controls checks `ModelLiveness.isLive(_:)` first.
 | `LabelColorPicker(hex:)` | 15 swatches (wrapping) + system color well for custom; selected ring. |
 | `SymbolPicker(symbolName:)` | Adaptive grid (30 pt cells) of `LabelPalette.symbols`; current custom symbol shown first. Put it in a popover or a fixed-height area (~240 pt). |
 
@@ -288,10 +321,10 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
   │                                                  [ ▶ Start session ]  │
   └─────────────────────────────────────────────────────────────────────┘
 
-  ┌ Card ─ “ Last takeaway ─────────────────────────────────────────────┐
+  ┌ Card ─ “ Last takeaway ──────────────────────────────────────── ✓ ─┐
   │  Batch review comments before replying.          ← bodyFont          │
-  │  Refactor parser · Yesterday                     ← caption tertiary  │
-  └─────────────────────────────────────────────────────────────────────┘
+  │  Refactor parser · Yesterday                     ← caption tertiary, │
+  └──────────────────────────────────────────────────  link to session ──┘
 
   [StatTile Today 2h 15m · of 4h goal]  [StatTile Sessions 3]  ProportionBar(today, total: goal)
 
@@ -305,6 +338,13 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
 - Today's sessions: plain rows (no cards), hover highlight `textPrimary.opacity(0.05)`, click →
   `router.showSession`. Times `captionFont` tabular; duration `timerCompactFont`.
 - No sessions today: a single `textTertiary` line "Nothing logged yet today." (not a full EmptyStateView).
+- **Takeaway (`LiveTakeawayView`)**: the meta line ("Refactor parser · Yesterday") is a plain button that
+  opens the source session in History. A trailing **Done** control (`checkmark`, `IconButtonStyle`, 24; 20 in
+  compact places, `textTertiary`, help "Done: stop showing this takeaway") calls `engine.dismissTakeaway()`,
+  which clears the source session's "Show in overlay & menu bar" — so it disappears everywhere (Today, menu
+  bar, overlay), not just in this view. The same control appears in the menu bar panel and the overlay.
+  Lifetime: by default a takeaway shows during the **next session only** (Settings ▸ General ▸ "Show takeaway
+  for the next session only"); off = until a newer takeaway replaces it.
 
 ### 10.3 Today — active (A)
 
@@ -315,6 +355,7 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
 
   ◉ Deep work (large)                                   Started 09:02 · 3 segments
   Refactor parser ✎                                    ← titleFont, click to edit focus
+  ⌨ Running on another Mac                             ← only when controlled elsewhere (caption, tertiary)
 
                         1:12:40                         ← TimerText(.hero), centered
                         ● Running   ·   this segment 0:24:10   ← LiveDot + caption + TimerText(.medium)
@@ -325,9 +366,11 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
   09:02 Deep work · 10:15 Review · 10:48 Deep work   ← caption, tertiary
 
   NOTES ──────────────────────────────────────────────── ⊡ photo.badge.plus
+  ┌ scroll box (max 320 pt, grows with content) ────────────────────────┐
+  │ 10:15  Switching to review for Maya's PR.          ← oldest first    │
+  │ 10:42  Found the off-by-one in the tokenizer.      ← newest at bottom│
+  └─────────────────────────────────────────────────────────────────────┘
   [ Add a note…                                               ⏎ ]   ← insetField, focus via router
-   10:42  Found the off-by-one in the tokenizer.
-   10:15  Switching to review for Maya's PR.
 ```
 - Paused: hero digits use `timerPaused` (TimerText does), LiveDot shows the pause glyph, the caption
   reads "Paused" (never color only), and Pause becomes `( ▶ Resume )`.
@@ -346,26 +389,44 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
   └──────────────────────────────────────┘   width 300, padding spacingL, elevatedSurface
 ```
 - Note composer: Return adds, field clears and keeps focus; Shift-Return is not needed (single line,
-  `axis: .vertical` with `lineLimit(1...4)` is fine). Notes newest first while live.
+  `axis: .vertical` with `lineLimit(1...4)` is fine).
+- **Live notes are oldest first** (a log that reads top to bottom, like a chat transcript), in a bounded
+  scroll box (max 320 pt; shorter while there are few notes) directly above the composer. The box opens
+  scrolled to the bottom (`defaultScrollAnchor(.bottom)`) and **auto-scrolls** to a newly added note
+  (200 ms ease-out; no animation with Reduce Motion). Context menu per note: Copy, Edit (inline: Return
+  saves, Esc cancels), Delete.
+- **"Running on another Mac"**: when the active session was started or last changed on another Mac
+  (synced via iCloud; `engine.isActiveSessionOnAnotherMac`), a quiet `Label("Running on another Mac",
+  systemImage: "laptopcomputer")` in `captionFont` / `textTertiary` sits under the title (also in the menu
+  bar panel and the regular overlay). Help: "This session was started or last changed on another Mac.
+  Pausing, splitting or stopping it here takes it over." No color, no banner — it is information, not a
+  warning. Controls stay enabled; using one takes the session over. If both Macs edited it, RootView shows
+  `engine.handoffNotice` once as an info `InlineBanner`.
 
 ### 10.4 End-of-session sheet (A: `EndSessionSheet`) — min width 520
 
+Built to be finished in about ten seconds: the essentials up front, everything else one click away.
 ```
   ┌───────────────────────────────────────────────────────────────┐
   │  Session complete                                 ← titleFont │
   │  1h 12m active · 6m paused · 3 segments · 4 notes ← callout    │
   │  [Short session — discard it?]  (warning banner if < 60 s)     │
   │                                                               │
-  │  Title   [ Refactor parser_____________________________ ]     │
-  │  Label   ▾ ◉ Deep work                                        │
-  │  Tags    #coding #review (+ Add tag)                          │
+  │  Title     [ Refactor parser___________________________ ]     │
+  │  Label     ▾ ◉ Deep work                                      │
+  │  Tags      #coding #review (+ Add tag)                        │
+  │  Takeaway  [ Batch review comments…______________ ] 42/140    │
+  │            ☑ Show in overlay & menu bar                        │
   │                                                               │
-  │  LEARNINGS ─────────────────────────────────────────────────  │
-  │  LearningsEditor(session:, style: .compact)  (B)              │
+  │  ███████████▌████████▌██████   ▸ 3 segments   ← ProportionBar  │
+  │  ▸ 4 notes                                     ← disclosures   │
+  │  ▸ Add learning points  (LearningsEditor .compact, B)          │
   │                                                               │
   │  {!Discard}            ( Resume session )   [ Save  ⌘↩ ]      │
   └───────────────────────────────────────────────────────────────┘
 ```
+- Discard is two-phase: the sheet closes first (`engine.discardPendingSession()`), and RootView's sheet
+  `onDismiss` deletes the session (`engine.finishPendingDiscard()`), so nothing on screen reads a deleted model.
 - Use `Form { … }.formStyle(.grouped)` *or* a plain VStack with leading labels column (width 64,
   `calloutFont`, `textSecondary`). Sheet background: system (do not override).
 - Title field takes focus on appear; placeholder "Untitled session".
@@ -390,7 +451,11 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
   │ Quit Worklog                       ⌘Q  │
   └────────────────────────────────────────┘
 ```
-- Idle: status line "Not tracking", LabelPicker (`.labelsHidden()`) + `[ ▶ Start ]`.
+- Idle: status line "Not tracking", LabelPicker (`.labelsHidden()`) + `[ ▶ Start · Deep work ]` (the
+  Start button names the label it will use). "Show overlay" while idle with "hide when idle" on adds the
+  hint "Appears when a session starts".
+- Takeaway row has the same Done control (`checkmark`, 20) as Today; "Running on another Mac" hint under
+  the timer when it applies.
 - Bottom rows are menu-like: `Button` with a private full-width row style (hover
   `textPrimary.opacity(0.06)`, radiusS), keyboard hints in `monoFont` `textTertiary`.
 - Padding `spacingL`; sections separated by 1 pt `separator` rules with `spacingM` around them.
@@ -413,7 +478,8 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
 - Background: `themedPanelBackground(cornerRadius: theme.radiusL)`; padding `spacingM` (compact `spacingS`).
 - Timer: `TimerText(.large)` regular, `.compact` in compact mode. Controls: `IconButtonStyle(size: 26)`
   (22 compact) with labels + help. Close `xmark` top-trailing, `IconButtonStyle(size: 18)`, `textTertiary`.
-- Every section obeys its `overlayShow…` setting. Idle: takeaway + `[ ▶ Start ]` (small).
+- Every section obeys its `overlayShow…` setting. Idle: takeaway (with Done ✓) + `[ ▶ Start · Deep work ]`
+  (small). "Running on another Mac" hint in the regular layout only.
 - Whole panel is draggable (window background); don't put drag-sensitive gestures on it.
 
 ### 10.7 History (B: `HistoryView`)
@@ -533,7 +599,7 @@ Use native `Form { }.formStyle(.grouped)` in every tab, `themedBackground()` on 
 
   Appearance
   ┌ Theme ────────────────────────────────────────────────────────────┐
-  │ [Paper swatch ✓]   [Graphite swatch]   [Meadow swatch]            │ ← ThemePreviewSwatch in HStack
+  │ [Graphite swatch ✓]   [Paper swatch]   [Meadow swatch]            │ ← ThemePreviewSwatch in HStack
   └───────────────────────────────────────────────────────────────────┘
   Appearance      [ System | Light | Dark ]                    ← segmented, with systemImage
   Accent          ● ● ● ● ● ● ● ● ●   Theme Default             ← 16 pt circles, ring on selected;
@@ -547,8 +613,23 @@ Use native `Form { }.formStyle(.grouped)` in every tab, `themedBackground()` on 
 - Delete label: sheet "Delete “Meetings”? 42 sessions use it. Move them to: ▾ [Unlabeled]" `{!Delete}`.
 - Data: grouped sections Export / Import / Backups (list rows: date `shortDateTime`, reason, size in
   `monoFont`) / Danger zone (`DestructiveButtonStyle`, double confirm).
+- **Data ▸ Recovery** (only while the store couldn't be opened, i.e. in-memory mode): a first section with an
+  error `InlineBanner` "Worklog couldn’t open its data store, so nothing you change now is saved." and the
+  action **Recover…**, plus a footnote. Recover… opens a sheet (`SettingsRecoverySheet`, width 540):
+  "After relaunching" picker — restore a backup (from the list or a file) or start fresh (re-downloads from
+  iCloud when sync is on); a consequence line ("Worklog moves the damaged store into the Recovered folder,
+  quits, opens again and …"); reveal buttons (Damaged Data Store / Recovered Folder / Backups Folder); then
+  ( Cancel ) [ **Move Aside and Relaunch…** ] → confirmation dialog. Nothing is ever deleted. After the
+  relaunch RootView shows `persistence.launchNotice` once as an info banner (dismissable).
 - Account: status row with `person.crop.circle` + name/“Guest”; `SignInWithAppleButton` styled
   `.signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)`, height 32, width 220.
+- **Account ▸ iCloud sync status line** (from `SyncMonitor`), under the sync toggle: a small
+  `ProgressView` while syncing, else `checkmark.icloud` (`textSecondary`) or `exclamationmark.icloud`
+  (`warning`) after an error, + one `calloutFont` `textSecondary` line, refreshed every 30 s: "Syncing…" ·
+  "Downloading your data from iCloud…" (first import) · "Last synced 5 minutes ago" · "Up to date" ·
+  "Waiting for the first sync with iCloud…". The iCloud account state ("This Mac isn’t signed in to
+  iCloud …") is its own row; a sync error is a warning `InlineBanner`. The "applies next time Worklog
+  opens" note matters only when the toggle differs from what this launch used.
 
 ### 10.12 Welcome (C: `WelcomeView`)
 
@@ -560,10 +641,20 @@ Use native `Form { }.formStyle(.grouped)` in every tab, `themedBackground()` on 
                    [  Sign in with Apple  ]           ← SignInWithAppleButton 260×36
                    ( Continue without signing in )   ← QuietButtonStyle
 
-     Your data syncs with iCloud on this Mac's Apple ID either way.   ← captionFont tertiary
+     Your data syncs with iCloud on this Mac's Apple Account either way.   ← captionFont tertiary
+                                                       (only when CloudKit is in use; see below)
      [InlineBanner error …]                            (if auth.lastError)
+
+                        Pick a look                  ← sectionHeaderFont, textSecondary
+         [Graphite ✓]     [Paper]     [Meadow]       ← ThemeSwatchRow() (compact swatches, 124 pt)
+          You can change it any time in Settings ▸ Appearance.   ← captionFont tertiary
 ```
 Full-window `themedBackground()`, content vertically centered, no illustration, no gradients.
+- The storage line is truthful: it mentions iCloud sync only when this launch actually uses CloudKit;
+  otherwise "Your data is saved on this Mac." (+ where to turn sync on, or why iCloud isn't available).
+- Theme picker: `ThemeSwatchRow()` — compact swatches show the theme in the current appearance with the
+  name below; the summary is the tooltip. Clicking applies the theme immediately (the Welcome screen
+  re-themes live), so the choice is self-explanatory. Graphite is preselected.
 
 ---
 
@@ -666,4 +757,4 @@ Banner copy (InlineBanner):
    Settings (it renders automatically). No feature code changes are needed.
 
 Theme ids persist by raw value (`"appearance.themeID"`); never rename or remove a case — unknown values
-fall back to `.paper`.
+fall back to `ThemeID.default` (`.graphite`).

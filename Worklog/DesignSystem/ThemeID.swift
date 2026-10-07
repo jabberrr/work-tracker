@@ -5,8 +5,12 @@ import AppKit
 
 /// The selectable visual styles. Add a new style by adding a case here, a factory in `Themes/`,
 /// and one line in `Theme.make` (see docs/DESIGN.md, "Adding a theme").
+/// Case order is the display order in pickers; `.graphite` is the default (`ThemeID.default`).
 enum ThemeID: String, CaseIterable, Identifiable, Codable {
-    case paper, graphite, meadow
+    case graphite, paper, meadow
+
+    /// The theme used on first launch, after "Reset", and for unknown stored values.
+    static let `default`: ThemeID = .graphite
 
     var id: String { rawValue }
 
@@ -22,7 +26,7 @@ enum ThemeID: String, CaseIterable, Identifiable, Codable {
     var summary: String {
         switch self {
         case .paper: return "Ink on paper. Serif headings, hairline rules, no shadows."
-        case .graphite: return "An instrument panel. Monospaced readouts and a signal-cyan accent."
+        case .graphite: return "Crisp and neutral. Clean sans type, mono readouts, a teal signal."
         case .meadow: return "Soft greens and rounded type. Gentle depth for long days."
         }
     }

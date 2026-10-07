@@ -7,6 +7,11 @@ import SwiftData
 /// Keyboard: in the popover, type to filter; Return toggles an exact/only match or creates the tag;
 /// Esc clears the query, Esc again closes the popover.
 /// The picker only edits the binding. Callers own `session.touch()` (e.g. `.onChange(of: session.tagList)`).
+///
+/// Tags in the binding that were deleted (or merged away) are treated as absent: they are never read or
+/// shown, and the cleaned list is written back to the binding (on appear and whenever the tag list changes).
+/// A deleted `scopeLabel` is treated as nil.
+@MainActor
 struct TagPicker: View {
     @Environment(\.theme) private var theme
     @Environment(\.modelContext) private var modelContext
@@ -22,9 +27,24 @@ struct TagPicker: View {
         self.allowsCreate = allowsCreate
     }
 
+    /// Live tags (the query can briefly include deleted-but-unsaved ones).
+    private var liveTags: [WorkTag] { ModelLiveness.live(allTags) }
+
+    /// The selection without deleted tags.
+    private var liveSelection: [WorkTag] { ModelLiveness.live(selection) }
+
+    /// Popover binding that never hands deleted tags to the list.
+    private var safeSelection: Binding<[WorkTag]> {
+        Binding(
+            get: { ModelLiveness.live(selection) },
+            set: { selection = $0 }
+        )
+    }
+
     var body: some View {
+        let chips = liveSelection
         FlowLayout(spacing: 6, lineSpacing: 6) {
-            ForEach(selection) { tag in
+            ForEach(chips) { tag in
                 TagChip(tag: tag, onRemove: { remove(tag) })
             }
             Button {
@@ -33,7 +53,7 @@ struct TagPicker: View {
                 HStack(spacing: 3) {
                     Image(systemName: "plus")
                         .font(.system(size: 9 * theme.textScale, weight: .bold))
-                    if selection.isEmpty {
+                    if chips.isEmpty {
                         Text("Add tag")
                     }
                 }
@@ -42,9 +62,9 @@ struct TagPicker: View {
             .accessibilityLabel("Add tag")
             .help("Add tag")
             .popover(isPresented: $isPresented, arrowEdge: .bottom) {
-                TagPickerPopover(selection: $selection,
-                                 allTags: allTags,
-                                 scopeLabel: scopeLabel,
+                TagPickerPopover(selection: safeSelection,
+                                 allTags: liveTags,
+                                 scopeLabel: ModelLiveness.live(scopeLabel),
                                  allowsCreate: allowsCreate,
                                  onCreate: create)
                     .environment(\.theme, theme)
@@ -53,24 +73,40 @@ struct TagPicker: View {
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Tags")
+        .onAppear(perform: dropDeletedTags)
+        .onChange(of: liveTags.map(\.persistentModelID)) { _, _ in
+            dropDeletedTags()
+        }
+    }
+
+    /// Writes the selection back without tags that no longer exist.
+    private func dropDeletedTags() {
+        let cleaned = ModelLiveness.live(selection)
+        if cleaned.count != selection.count {
+            selection = cleaned
+        }
     }
 
     private func remove(_ tag: WorkTag) {
-        selection.removeAll { $0.persistentModelID == tag.persistentModelID }
+        let id = tag.persistentModelID
+        selection = ModelLiveness.live(selection).filter { $0.persistentModelID != id }
     }
 
     private func create(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
         let tag = TaxonomyOps.createTag(name: trimmed, in: modelContext)
-        if !selection.contains(where: { $0.persistentModelID == tag.persistentModelID }) {
-            selection.append(tag)
+        var current = ModelLiveness.live(selection)
+        if !current.contains(where: { $0.persistentModelID == tag.persistentModelID }) {
+            current.append(tag)
         }
+        selection = current
     }
 }
 
 // MARK: - Popover
 
+@MainActor
 private struct TagPickerPopover: View {
     @Environment(\.theme) private var theme
     @Binding var selection: [WorkTag]
@@ -98,20 +134,25 @@ private struct TagPickerPopover: View {
         trimmedQuery.isEmpty || tag.name.localizedStandardContains(trimmedQuery)
     }
 
+    /// A tag's scope label, nil when global or when that label was deleted.
+    private func parentLabel(of tag: WorkTag) -> WorkLabel? {
+        ModelLiveness.live(tag.label)
+    }
+
     private var scopedTags: [WorkTag] {
         guard let scope = scopeLabel else { return [] }
-        return activeTags.filter { $0.label?.persistentModelID == scope.persistentModelID && matches($0) }
+        return activeTags.filter { parentLabel(of: $0)?.persistentModelID == scope.persistentModelID && matches($0) }
     }
 
     private var globalTags: [WorkTag] {
-        activeTags.filter { $0.label == nil && matches($0) }
+        activeTags.filter { parentLabel(of: $0) == nil && matches($0) }
     }
 
     /// Tags scoped to other labels: only offered while searching, to keep the list short.
     private var otherTags: [WorkTag] {
         guard !trimmedQuery.isEmpty else { return [] }
         return activeTags.filter { tag in
-            guard let parent = tag.label else { return false }
+            guard let parent = parentLabel(of: tag) else { return false }
             return parent.persistentModelID != scopeLabel?.persistentModelID && matches(tag)
         }
     }
@@ -185,7 +226,11 @@ private struct TagPickerPopover: View {
         .frame(width: 260)
         .background(theme.elevatedSurface)
         .onAppear {
-            DispatchQueue.main.async { searchFocused = true }
+            // Let the popover window become key before focusing the field.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(30))
+                searchFocused = true
+            }
         }
     }
 
@@ -224,7 +269,7 @@ private struct TagPickerPopover: View {
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                if showsParent, let parent = tag.label {
+                if showsParent, let parent = parentLabel(of: tag) {
                     Text(parent.name)
                         .font(theme.captionFont)
                         .foregroundStyle(theme.textTertiary)
