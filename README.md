@@ -46,9 +46,10 @@ The project is signed with team `6W4ZKDHBVD` and bundle id `app.dabora.worktrack
 (`Worklog/Resources/Worklog.entitlements`: iCloud/CloudKit container `iCloud.app.dabora.worktracker`, push for CloudKit,
 Sign in with Apple). That needs a paid Apple Developer Program membership.
 
-To build **without** a team, copy `Config/Local.xcconfig.example` to `Config/Local.xcconfig` (git-ignored). That switches to
-ad-hoc signing with `WorklogLocal.entitlements`; the app then uses a local-only store, Sign in with Apple shows a hint to
-continue without signing in, and everything else (backups, export, import) still works.
+To build **without** a paid team: in Xcode ▸ Worklog target ▸ Build Settings set *Code Signing Entitlements* to
+`Worklog/Resources/WorklogLocal.entitlements` and pick your Personal Team (or "Sign to Run Locally") under Signing &
+Capabilities. The app then uses a local-only store, Sign in with Apple shows a hint to continue without signing in, and
+everything else (backups, export, import) still works.
 
 Add and remove files in Xcode as usual. (`scripts/generate_xcodeproj.py` can rebuild the project from the folders on
 disk, which is useful only when files were added outside Xcode, e.g. by tooling on a machine without Xcode.)
@@ -61,7 +62,7 @@ disk, which is useful only when files were added outside Xcode, e.g. by tooling 
    |---|---|
    | Bundle id `app.dabora.worktracker` (tests: `app.dabora.worktracker.tests`) | Xcode ▸ target ▸ Signing & Capabilities; `AppConstants.bundleID`; `BUNDLE_ID` in `scripts/generate_xcodeproj.py` |
    | CloudKit container `iCloud.app.dabora.worktracker` | `Worklog/Resources/Worklog.entitlements`; `AppConstants.cloudKitContainerID` (fallback only — at runtime the id is read from the entitlements) |
-   | Team `6W4ZKDHBVD` | Xcode ▸ target ▸ Signing & Capabilities; `WORKLOG_TEAM` in `Config/Signing.xcconfig` |
+   | Team `6W4ZKDHBVD` | Xcode ▸ target ▸ Signing & Capabilities (both targets); `DEVELOPMENT_TEAM` in `scripts/generate_xcodeproj.py` |
 
 2. **First signed build.** In Xcode ▸ Worklog target ▸ Signing & Capabilities, check that *Sign in with Apple*, *iCloud*
    (CloudKit, container `iCloud.app.dabora.worktracker` ticked) and *Push Notifications* are listed. If the container is red,

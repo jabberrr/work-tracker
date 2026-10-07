@@ -16,7 +16,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 PROJECT = "Worklog"
 APP_DIR = "Worklog"
 TEST_DIR = "WorklogTests"
-CONFIG_DIR = "Config"
+DEVELOPMENT_TEAM = "6W4ZKDHBVD"  # requires a paid Apple Developer Program team (iCloud + Sign in with Apple)
 BUNDLE_ID = "app.dabora.worktracker"  # CHANGE ME (also AppConstants.swift and the entitlements files)
 DEPLOYMENT_TARGET = "14.0"
 
@@ -142,24 +142,6 @@ def main():
     app_group = make_group(APP_DIR, "app")
     test_group = make_group(TEST_DIR, "test")
 
-    # Config group (xcconfig files; Local.xcconfig is optional and git-ignored, so it is not referenced).
-    config_children = []
-    signing_ref = None
-    for f in walk(CONFIG_DIR)[1]:
-        if f == "Local.xcconfig":
-            continue
-        ref = b.add(f"ref:{CONFIG_DIR}/{f}", "PBXFileReference", {
-            "lastKnownFileType": file_type(f), "path": f, "sourceTree": "<group>",
-        })
-        config_children.append(ref)
-        if f == "Signing.xcconfig":
-            signing_ref = ref
-    if signing_ref is None:
-        sys.exit("Config/Signing.xcconfig is missing")
-    config_group = b.add(f"group:{CONFIG_DIR}", "PBXGroup", {
-        "children": config_children, "path": CONFIG_DIR, "sourceTree": "<group>",
-    })
-
     docs = [f for f in ["README.md"] if os.path.exists(os.path.join(ROOT, f))]
     doc_refs = [b.add(f"ref:{f}", "PBXFileReference", {
         "lastKnownFileType": file_type(f), "path": f, "sourceTree": "<group>",
@@ -177,7 +159,7 @@ def main():
         "children": [app_product, test_product], "name": "Products", "sourceTree": "<group>",
     })
     main_group = b.add("group:main", "PBXGroup", {
-        "children": doc_refs + [config_group, app_group, test_group, products_group], "sourceTree": "<group>",
+        "children": doc_refs + [app_group, test_group, products_group], "sourceTree": "<group>",
     })
 
     # Build phases
@@ -264,13 +246,13 @@ def main():
     app_settings = {
         "ASSETCATALOG_COMPILER_APPICON_NAME": "AppIcon",
         "ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME": "AccentColor",
-        # Signing values come from Config/Signing.xcconfig (+ the optional, git-ignored Config/Local.xcconfig).
-        "CODE_SIGN_ENTITLEMENTS": "$(WORKLOG_ENTITLEMENTS)",
-        "CODE_SIGN_IDENTITY": "$(WORKLOG_SIGN_IDENTITY)",
+        # Literal values (not variables) so Xcode's Signing & Capabilities editor can read the entitlements.
+        "CODE_SIGN_ENTITLEMENTS": f"{APP_DIR}/Resources/Worklog.entitlements",
+        "CODE_SIGN_IDENTITY": "Apple Development",
         "CODE_SIGN_STYLE": "Automatic",
         "COMBINE_HIDPI_IMAGES": "YES",
         "CURRENT_PROJECT_VERSION": "1",
-        "DEVELOPMENT_TEAM": "$(WORKLOG_TEAM)",
+        "DEVELOPMENT_TEAM": DEVELOPMENT_TEAM,
         "ENABLE_PREVIEWS": "YES",
         "GENERATE_INFOPLIST_FILE": "NO",
         "INFOPLIST_FILE": f"{APP_DIR}/Resources/Info.plist",
@@ -282,10 +264,10 @@ def main():
     }
     test_settings = {
         "BUNDLE_LOADER": "$(TEST_HOST)",
-        "CODE_SIGN_IDENTITY": "$(WORKLOG_SIGN_IDENTITY)",
+        "CODE_SIGN_IDENTITY": "Apple Development",
         "CODE_SIGN_STYLE": "Automatic",
         "CURRENT_PROJECT_VERSION": "1",
-        "DEVELOPMENT_TEAM": "$(WORKLOG_TEAM)",
+        "DEVELOPMENT_TEAM": DEVELOPMENT_TEAM,
         "GENERATE_INFOPLIST_FILE": "YES",
         "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/../Frameworks", "@loader_path/../Frameworks"],
         "MARKETING_VERSION": "1.0.0",
@@ -307,12 +289,11 @@ def main():
         })
 
     project_configs = config_list("project", [("Debug", project_debug), ("Release", project_release)])
-    # Hardened runtime is for distribution; leaving it off in Debug keeps ad-hoc ("Sign to Run Locally") builds able to
-    # load the ad-hoc signed test bundle (library validation would otherwise reject it: no Team ID).
+    # Hardened runtime is for distribution; Debug leaves it off so the test bundle always loads into the host app.
     app_debug = dict(app_settings, ENABLE_HARDENED_RUNTIME="NO")
     app_release = dict(app_settings, ENABLE_HARDENED_RUNTIME="YES")
-    app_configs = config_list("app", [("Debug", app_debug), ("Release", app_release)], signing_ref)
-    test_configs = config_list("tests", [("Debug", test_settings), ("Release", test_settings)], signing_ref)
+    app_configs = config_list("app", [("Debug", app_debug), ("Release", app_release)])
+    test_configs = config_list("tests", [("Debug", test_settings), ("Release", test_settings)])
 
     project_id = oid("project")
     app_target = b.add("target:app", "PBXNativeTarget", {

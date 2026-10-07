@@ -1,6 +1,3 @@
-# Per-developer signing (team id) — see Config/Local.xcconfig.example
-Config/Local.xcconfig
-
 # Xcode
 DerivedData/
 xcuserdata/

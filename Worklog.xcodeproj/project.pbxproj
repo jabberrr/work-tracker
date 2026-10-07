@@ -150,7 +150,6 @@
 		370A5A5F7BCAEFD70E1A720E /* HistoryRowView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = HistoryRowView.swift; sourceTree = "<group>"; };
 		3AC7C0EF6733FFCF1F8AF74C /* Worklog.entitlements */ = {isa = PBXFileReference; lastKnownFileType = text.plist.entitlements; path = Worklog.entitlements; sourceTree = "<group>"; };
 		3D9979F589DF893DB8BC2C81 /* SettingsTagsPane.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsTagsPane.swift; sourceTree = "<group>"; };
-		458448C8CDD5DA518A35C9AB /* Local.xcconfig.example */ = {isa = PBXFileReference; lastKnownFileType = text; path = Local.xcconfig.example; sourceTree = "<group>"; };
 		491ADA26F3316FDD919003FF /* LearningPoint.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = LearningPoint.swift; sourceTree = "<group>"; };
 		4CAE938190EACAA54610D96A /* DetailNotesSection.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DetailNotesSection.swift; sourceTree = "<group>"; };
 		5327E5289672553ED4FEDFBC /* ExportRoundTripTests.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ExportRoundTripTests.swift; sourceTree = "<group>"; };
@@ -180,7 +179,6 @@
 		8509DD790DE7D4A444D69168 /* README.md */ = {isa = PBXFileReference; lastKnownFileType = net.daringfireball.markdown; path = README.md; sourceTree = "<group>"; };
 		85BA22FC0EFD1603E0514325 /* ThemeSwatchRow.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ThemeSwatchRow.swift; sourceTree = "<group>"; };
 		860BEC6021950998000B382C /* AuthService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AuthService.swift; sourceTree = "<group>"; };
-		87D39FEF249CCCD3045BF7B9 /* Signing.xcconfig */ = {isa = PBXFileReference; lastKnownFileType = text.xcconfig; path = Signing.xcconfig; sourceTree = "<group>"; };
 		898313FD4806FDB9F25136E8 /* WorklogApp.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = WorklogApp.swift; sourceTree = "<group>"; };
 		8A07A151C187DB60793171CE /* PauseInterval.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PauseInterval.swift; sourceTree = "<group>"; };
 		8A13BF582982BA121933FD95 /* SessionEditor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SessionEditor.swift; sourceTree = "<group>"; };
@@ -349,7 +347,6 @@
 			isa = PBXGroup;
 			children = (
 				8509DD790DE7D4A444D69168 /* README.md */,
-				BD13AA3ACFF3D0C2ED6E4720 /* Config */,
 				22C62EDEAB3E472EED56ABC3 /* Worklog */,
 				ACC3A4AF915655D7D4A80916 /* WorklogTests */,
 				2F3A6B1E78F896718625FF06 /* Products */,
@@ -452,15 +449,6 @@
 				9E9C480630C17BE835576D40 /* SessionMathTests.swift */,
 			);
 			path = WorklogTests;
-			sourceTree = "<group>";
-		};
-		BD13AA3ACFF3D0C2ED6E4720 /* Config */ = {
-			isa = PBXGroup;
-			children = (
-				458448C8CDD5DA518A35C9AB /* Local.xcconfig.example */,
-				87D39FEF249CCCD3045BF7B9 /* Signing.xcconfig */,
-			);
-			path = Config;
 			sourceTree = "<group>";
 		};
 		C550055E9D4805ADD0A271BA /* Utilities */ = {
@@ -783,12 +771,11 @@
 /* Begin XCBuildConfiguration section */
 		0615050D04BD2DC4E6CFFAFF /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 87D39FEF249CCCD3045BF7B9 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "$(WORKLOG_ENTITLEMENTS)";
-				CODE_SIGN_IDENTITY = "$(WORKLOG_SIGN_IDENTITY)";
+				CODE_SIGN_ENTITLEMENTS = Worklog/Resources/Worklog.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -810,12 +797,11 @@
 		};
 		2761849A6D0E26CA4E1817A1 /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 87D39FEF249CCCD3045BF7B9 /* Signing.xcconfig */;
 			buildSettings = {
 				ASSETCATALOG_COMPILER_APPICON_NAME = AppIcon;
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
-				CODE_SIGN_ENTITLEMENTS = "$(WORKLOG_ENTITLEMENTS)";
-				CODE_SIGN_IDENTITY = "$(WORKLOG_SIGN_IDENTITY)";
+				CODE_SIGN_ENTITLEMENTS = Worklog/Resources/Worklog.entitlements;
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
 				CURRENT_PROJECT_VERSION = 1;
@@ -837,11 +823,9 @@
 		};
 		3B9DBBBF25E35C4FAE79C30C /* Release */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 87D39FEF249CCCD3045BF7B9 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_IDENTITY = "$(WORKLOG_SIGN_IDENTITY)";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6W4ZKDHBVD;
@@ -983,11 +967,9 @@
 		};
 		FC45C70AF9BBBC9692F6FCD0 /* Debug */ = {
 			isa = XCBuildConfiguration;
-			baseConfigurationReference = 87D39FEF249CCCD3045BF7B9 /* Signing.xcconfig */;
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
-				CODE_SIGN_IDENTITY = "$(WORKLOG_SIGN_IDENTITY)";
-				"CODE_SIGN_IDENTITY[sdk=macosx*]" = "-";
+				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				CURRENT_PROJECT_VERSION = 1;
 				DEVELOPMENT_TEAM = 6W4ZKDHBVD;
