@@ -98,24 +98,35 @@ struct LabelPicker: View {
 /// popover list). Same options as `LabelPicker`: "None", then the non-archived labels offered in `profileID`
 /// (global + local; nil = every label) in sortIndex order, plus the current selection when it is archived or
 /// not offered. A selection that was deleted reads as "None" and nil is written back.
+///
+/// `globalOnly` (e.g. the parent label of a global tag) offers only global labels; a local selection stays listed
+/// as "Name (Work)".
 @MainActor
 struct LabelValuePicker: View {
     @Query(sort: \WorkLabel.sortIndex) private var allLabels: [WorkLabel]
     @Binding private var selection: WorkLabel?
     private let prefix: String
     private let profileID: UUID?
+    private let globalOnly: Bool
 
-    init(_ prefix: String, selection: Binding<WorkLabel?>, profileID: UUID?) {
+    init(_ prefix: String, selection: Binding<WorkLabel?>, profileID: UUID?, globalOnly: Bool = false) {
         self.prefix = prefix
         self._selection = selection
         self.profileID = profileID
+        self.globalOnly = globalOnly
     }
 
     private var liveLabels: [WorkLabel] { ModelLiveness.live(allLabels) }
 
+    /// Whether `label` (live) is offered: in the profile scope, and global when `globalOnly`.
+    private func isOffered(_ label: WorkLabel, in scope: ProfileScope) -> Bool {
+        guard scope.offers(label) else { return false }
+        return !globalOnly || ModelLiveness.live(label.profile) == nil
+    }
+
     /// Offered active labels, plus the current selection when it is archived or not offered.
     private func options(in scope: ProfileScope) -> [WorkLabel] {
-        var list = liveLabels.filter { !$0.isArchived && scope.offers($0) }
+        var list = liveLabels.filter { !$0.isArchived && isOffered($0, in: scope) }
         if let current = ModelLiveness.live(selection),
            !list.contains(where: { $0.persistentModelID == current.persistentModelID }) {
             list.append(current)
@@ -136,7 +147,7 @@ struct LabelValuePicker: View {
     var body: some View {
         let scope = ProfileScope(profileID: profileID)
         let items = options(in: scope)
-        let names = Dictionary(items.map { ($0.uuid, ScopedItemTitle.title(for: $0, in: scope)) },
+        let names = Dictionary(items.map { ($0.uuid, ScopedItemTitle.title(for: $0, offered: isOffered($0, in: scope))) },
                                uniquingKeysWith: { first, _ in first })
         let ids: [UUID?] = [nil] + items.map { $0.uuid }
         ValuePicker(prefix, selection: idSelection, options: ids,
@@ -161,8 +172,13 @@ struct LabelValuePicker: View {
 @MainActor
 enum ScopedItemTitle {
     static func title(for label: WorkLabel, in scope: ProfileScope) -> String {
+        title(for: label, offered: scope.offers(label))
+    }
+
+    /// `offered: false` names the profile that owns the label ("Name (Work)"), if any.
+    static func title(for label: WorkLabel, offered: Bool) -> String {
         title(name: label.name, isArchived: label.isArchived,
-              owner: scope.offers(label) ? nil : ModelLiveness.live(label.profile))
+              owner: offered ? nil : ModelLiveness.live(label.profile))
     }
 
     static func title(for tag: WorkTag, in scope: ProfileScope) -> String {

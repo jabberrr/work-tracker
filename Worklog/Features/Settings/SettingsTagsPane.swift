@@ -108,7 +108,12 @@ struct SettingsTagsPane: View {
     }
 
     private func row(_ tag: WorkTag) -> some View {
-        HStack(spacing: theme.spacingS) {
+        // Uses in the current profile only (a global tag's other profiles aren't counted).
+        let uses: Int = SettingsScopedUsage.of(tag, in: profileStore.activeScope).total
+        let isGlobalShown: Bool = showsScope && tag.isAvailableEverywhere
+        let a11yValue: String = "\(uses) uses" + (tag.isArchived ? ", archived" : "")
+            + (isGlobalShown ? ", all profiles" : "")
+        return HStack(spacing: theme.spacingS) {
             Image(systemName: "number")
                 .foregroundStyle(tag.hasCustomColor ? tag.color : theme.textTertiary)
                 .frame(width: 16)
@@ -126,18 +131,17 @@ struct SettingsTagsPane: View {
                 }
             }
             Spacer(minLength: theme.spacingXS)
-            if showsScope && tag.isAvailableEverywhere {
+            if isGlobalShown {
                 SettingsGlobalMark()
             }
-            Text("\(tag.usageCount)")
+            Text("\(uses)")
                 .font(theme.captionFont)
                 .monospacedDigit()
                 .foregroundStyle(theme.textTertiary)
                 .help("Times used")
         }
         .accessibilityElement(children: .combine)
-        .accessibilityValue("\(tag.usageCount) uses\(tag.isArchived ? ", archived" : "")"
-                            + (showsScope && tag.isAvailableEverywhere ? ", all profiles" : ""))
+        .accessibilityValue(a11yValue)
     }
 
     private func addTag() {
@@ -185,6 +189,33 @@ private struct SettingsTagEditor: View {
     private var currentProfile: WorkProfile? { ModelLiveness.live(profileStore.activeProfile) }
     /// "Available in" appears once there is more than one profile (archived ones count).
     private var showsScope: Bool { profileStore.profiles.count + profileStore.archivedProfiles.count > 1 }
+    /// Archive, merge and delete of a global tag affect every profile; say so once profiles are shown.
+    private var changesAllProfiles: Bool { showsScope && tag.isAvailableEverywhere }
+
+    /// "Make “x” Work only?"
+    private var makeLocalTitle: String {
+        let name: String = profileStore.profile(withID: pendingLocalProfileID)?.displayName ?? "this profile"
+        return "Make “\(tag.name)” \(name) only?"
+    }
+
+    /// "Merge “a” into “b”?"
+    private var mergeTitle: String {
+        guard let target = mergeTarget, ModelLiveness.isLive(target) else { return "Merge tags?" }
+        return "Merge “\(tag.name)” into “\(target.name)”?"
+    }
+
+    private var mergeMessage: String {
+        let name: String = mergeTarget.flatMap { ModelLiveness.live($0)?.name } ?? ""
+        return changesAllProfiles
+            ? "Moves its uses in all profiles to “\(name)” and deletes it."
+            : "Moves its uses to “\(name)” and deletes it."
+    }
+
+    private var deleteMessage: String {
+        changesAllProfiles
+            ? "Sessions in all profiles are kept, but this can’t be undone."
+            : "Sessions are kept, but this can’t be undone."
+    }
 
     private var scopeSelection: Binding<SettingsTaxonomyScope> {
         Binding(
@@ -227,7 +258,9 @@ private struct SettingsTagEditor: View {
                 if showsScope, let profile = currentProfile {
                     SettingsScopePicker(selection: scopeSelection, profileName: profile.displayName)
                 }
-                LabelValuePicker("Parent label", selection: $tag.label, profileID: profileStore.activeProfileID)
+                // A global tag's parent must be global too: other profiles can't see local labels.
+                LabelValuePicker("Parent label", selection: $tag.label,
+                                 profileID: profileStore.activeProfileID, globalOnly: tag.isAvailableEverywhere)
                 SettingsFootnote("Offered first when that label is picked.")
             }
 
@@ -265,6 +298,9 @@ private struct SettingsTagEditor: View {
                     Button("Delete…") { confirmsDelete = true }
                         .buttonStyle(DestructiveButtonStyle())
                 }
+                if changesAllProfiles {
+                    SettingsFootnote("Changes it in all profiles.")
+                }
             }
         }
         .formStyle(.grouped)
@@ -285,19 +321,22 @@ private struct SettingsTagEditor: View {
         }
         .onChange(of: tag.label) { save() }
         .confirmationDialog(
-            mergeTarget.map { "Merge “\(tag.name)” into “\($0.name)”?" } ?? "Merge tags?",
+            mergeTitle,
             isPresented: Binding(get: { mergeTarget != nil }, set: { if !$0 { mergeTarget = nil } }),
             titleVisibility: .visible
         ) {
             Button("Merge", role: .destructive) {
-                guard let target = mergeTarget else { return }
+                guard let target = mergeTarget, ModelLiveness.isLive(target), ModelLiveness.isLive(tag) else {
+                    mergeTarget = nil
+                    return
+                }
                 mergeTarget = nil
                 TaxonomyOps.mergeTag(tag, into: target, in: context)
                 onMerged(target)
             }
             Button("Cancel", role: .cancel) { mergeTarget = nil }
         } message: {
-            Text("Moves its uses to “\(mergeTarget?.name ?? "")” and deletes it.")
+            Text(mergeMessage)
         }
         .confirmationDialog("Delete “\(tag.name)”?", isPresented: $confirmsDelete, titleVisibility: .visible) {
             Button("Delete Tag", role: .destructive) {
@@ -306,10 +345,10 @@ private struct SettingsTagEditor: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Sessions are kept, but this can’t be undone.")
+            Text(deleteMessage)
         }
         .confirmationDialog(
-            "Make “\(tag.name)” \(profileStore.profile(withID: pendingLocalProfileID)?.displayName ?? "this profile") only?",
+            makeLocalTitle,
             isPresented: Binding(get: { pendingLocalProfileID != nil }, set: { if !$0 { pendingLocalProfileID = nil } }),
             titleVisibility: .visible
         ) {
@@ -332,6 +371,10 @@ private struct SettingsTagEditor: View {
         switch scope {
         case .allProfiles:
             guard !tag.isAvailableEverywhere else { return }
+            // A local parent label isn't offered in the other profiles: drop it so the global tag stays consistent.
+            if let parent = ModelLiveness.live(tag.label), !parent.isAvailableEverywhere {
+                tag.label = nil
+            }
             TaxonomyOps.setScope(of: tag, to: nil, in: context)
         case .thisProfile:
             guard tag.isAvailableEverywhere, let profile = currentProfile else { return }
@@ -343,13 +386,9 @@ private struct SettingsTagEditor: View {
         }
     }
 
-    private var counts: (sessions: Int, segments: Int, points: Int) {
-        (tag.sessions?.count ?? 0, tag.segments?.count ?? 0, tag.learningPoints?.count ?? 0)
-    }
-
-    /// "3 sessions · 2 segments · 4 learning points".
+    /// "3 sessions · 2 segments · 4 learning points", counted in the current profile.
     private var usageDescription: String {
-        let c = counts
+        let c = SettingsScopedUsage.of(tag, in: profileStore.activeScope)
         return "\(c.sessions) \(c.sessions == 1 ? "session" : "sessions") · "
             + "\(c.segments) \(c.segments == 1 ? "segment" : "segments") · "
             + "\(c.points) learning \(c.points == 1 ? "point" : "points")"

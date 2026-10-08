@@ -18,6 +18,8 @@ struct ProfileCreateSheet: View {
     @State private var colorHex = LabelPalette.hexColors.first ?? "#5B8DEF"
     @State private var symbolName = "briefcase.fill"
     @State private var didPickDefaults = false
+    /// Set by the first Create: Return + click (or a double click) before the sheet closes must not create twice.
+    @State private var didCreate = false
     @FocusState private var nameFocused: Bool
 
     init(selectsNewProfile: Bool = true) {
@@ -62,7 +64,7 @@ struct ProfileCreateSheet: View {
                 Button("Create", action: create)
                     .buttonStyle(PrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
-                    .disabled(trimmedName.isEmpty)
+                    .disabled(trimmedName.isEmpty || didCreate)
             }
         }
         .padding(theme.spacingXL)
@@ -96,7 +98,8 @@ struct ProfileCreateSheet: View {
     }
 
     private func create() {
-        guard !trimmedName.isEmpty else { return }
+        guard !trimmedName.isEmpty, !didCreate else { return }
+        didCreate = true
         profiles.createProfile(name: trimmedName, colorHex: colorHex, symbolName: symbolName,
                                select: selectsNewProfile)
         dismiss()

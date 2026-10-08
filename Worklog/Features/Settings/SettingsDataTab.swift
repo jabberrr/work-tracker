@@ -14,6 +14,7 @@ struct SettingsDataTab: View {
     @Environment(BackupService.self) private var backups
     @Environment(AppSettings.self) private var settings
     @Environment(PersistenceController.self) private var persistence
+    @Environment(ProfileStore.self) private var profileStore
     @Environment(\.theme) private var theme
 
     @AppStorage("settingsWindow.exportIncludesImages") private var exportIncludesImages = true
@@ -116,6 +117,9 @@ struct SettingsDataTab: View {
                     .buttonStyle(QuietButtonStyle())
                 Button("Export Segments CSV…") { export(kind: .segmentsCSV) }
                     .buttonStyle(QuietButtonStyle())
+            }
+            if profileStore.profiles.count + profileStore.archivedProfiles.count > 1 {
+                SettingsFootnote("Includes all profiles.")
             }
             if let url = lastExportURL {
                 InlineBanner("Exported “\(url.lastPathComponent)”.", style: .success,

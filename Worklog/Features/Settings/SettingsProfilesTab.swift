@@ -113,6 +113,8 @@ struct SettingsProfilesTab: View {
     private func row(_ profile: WorkProfile) -> some View {
         let isCurrent = profileStore.activeProfileID == profile.uuid
         let count = profile.sessionCount
+        let a11yValue: String = "\(count) \(count == 1 ? "session" : "sessions")"
+            + (isCurrent ? ", current" : "") + (profile.isArchived ? ", archived" : "")
         return HStack(spacing: theme.spacingS) {
             Image(systemName: "checkmark")
                 .imageScale(.small)
@@ -135,8 +137,7 @@ struct SettingsProfilesTab: View {
                 .help("Sessions")
         }
         .accessibilityElement(children: .combine)
-        .accessibilityValue("\(count) \(count == 1 ? "session" : "sessions")"
-                            + (isCurrent ? ", current" : "") + (profile.isArchived ? ", archived" : ""))
+        .accessibilityValue(a11yValue)
     }
 
     // MARK: Actions
@@ -180,8 +181,10 @@ private struct SettingsProfileEditor: View {
     @State private var draftName = ""
     @FocusState private var nameFocused: Bool
     @State private var showsDeleteSheet = false
-    /// Why the last archive attempt was refused ("Keep at least one profile.").
+    /// Why the last archive attempt was refused ("Keep at least one profile.", "Stop the session first.").
     @State private var refusal: String?
+    /// Bumped by local color edits only; drives the debounced save (a synced change never saves or touches).
+    @State private var colorEdits = 0
 
     private var isCurrent: Bool { profileStore.activeProfileID == profile.uuid }
 
@@ -202,6 +205,32 @@ private struct SettingsProfileEditor: View {
             set: { newValue in
                 guard ModelLiveness.isLive(profile), profile.defaultLabelUUID != newValue?.uuid else { return }
                 profile.defaultLabelUUID = newValue?.uuid
+                profile.touch()
+                save()
+            }
+        )
+    }
+
+    /// Local color edits: set + touch now, save once the color settles (see `colorEdits`).
+    private var colorHex: Binding<String> {
+        Binding(
+            get: { profile.colorHex },
+            set: { newValue in
+                guard ModelLiveness.isLive(profile), profile.colorHex != newValue else { return }
+                profile.colorHex = newValue
+                profile.touch()
+                colorEdits += 1
+            }
+        )
+    }
+
+    /// Local symbol edits: set + touch + save.
+    private var symbolName: Binding<String> {
+        Binding(
+            get: { profile.symbolName },
+            set: { newValue in
+                guard ModelLiveness.isLive(profile), profile.symbolName != newValue else { return }
+                profile.symbolName = newValue
                 profile.touch()
                 save()
             }
@@ -229,12 +258,12 @@ private struct SettingsProfileEditor: View {
             }
 
             Section("Color") {
-                LabelColorPicker(hex: $profile.colorHex)
+                LabelColorPicker(hex: colorHex)
             }
 
             Section("Symbol") {
                 ScrollView {
-                    SymbolPicker(symbolName: $profile.symbolName, symbols: LabelPalette.profileSymbolChoices)
+                    SymbolPicker(symbolName: symbolName, symbols: LabelPalette.profileSymbolChoices)
                         .padding(theme.spacingXS)
                 }
                 .frame(height: 240)
@@ -290,15 +319,11 @@ private struct SettingsProfileEditor: View {
             // Flush a color change still waiting in the debounce below.
             if ModelLiveness.isLive(profile), context.hasChanges { save() }
         }
-        .onChange(of: profile.colorHex) { profile.touch() }
-        .task(id: profile.colorHex) {
-            // The color wheel reports every drag tick: save once the color settles.
+        .task(id: colorEdits) {
+            // The color wheel reports every drag tick: save once the color settles. Only local edits count.
+            guard colorEdits > 0 else { return }
             try? await Task.sleep(for: .milliseconds(400))
-            if !Task.isCancelled, context.hasChanges { save() }
-        }
-        .onChange(of: profile.symbolName) {
-            profile.touch()
-            save()
+            if !Task.isCancelled, ModelLiveness.isLive(profile), context.hasChanges { save() }
         }
         .sheet(isPresented: $showsDeleteSheet) {
             SettingsDeleteProfileSheet(profile: profile) {
@@ -358,6 +383,7 @@ private struct SettingsDeleteProfileSheet: View {
     }
 
     @Environment(ProfileStore.self) private var profileStore
+    @Environment(BackupService.self) private var backups
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     let profile: WorkProfile
@@ -387,6 +413,11 @@ private struct SettingsDeleteProfileSheet: View {
         return .deleteSessions
     }
 
+    /// A session of this profile is still running (ProfileOps refuses `.deleteSessions` then).
+    private var hasRunningSession: Bool {
+        ModelLiveness.live(profile.sessions ?? []).contains { $0.endedAt == nil }
+    }
+
     private var hasOwnTaxonomy: Bool {
         !ModelLiveness.live(profile.labels ?? []).isEmpty || !ModelLiveness.live(profile.tags ?? []).isEmpty
     }
@@ -402,12 +433,16 @@ private struct SettingsDeleteProfileSheet: View {
     private var content: some View {
         let count = profile.sessionCount
         let selected = effectiveChoice
+        let usesText: String = count == 0
+            ? "No sessions use it."
+            : "\(count) \(count == 1 ? "session uses" : "sessions use") it."
+        let confirmTitle: String = "Delete \(count) \(count == 1 ? "session" : "sessions")?"
         return VStack(alignment: .leading, spacing: theme.spacingL) {
             Text("Delete “\(profile.displayName)”?")
                 .font(theme.titleFont)
                 .foregroundStyle(theme.textPrimary)
                 .lineLimit(2)
-            Text(count == 0 ? "No sessions use it." : "\(count) \(count == 1 ? "session uses" : "sessions use") it.")
+            Text(usesText)
                 .font(theme.calloutFont)
                 .foregroundStyle(theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -457,7 +492,7 @@ private struct SettingsDeleteProfileSheet: View {
         }
         .padding(theme.spacingXL)
         .frame(width: 460)
-        .confirmationDialog("Delete \(count) \(count == 1 ? "session" : "sessions")?",
+        .confirmationDialog(confirmTitle,
                             isPresented: $confirmsDeleteSessions, titleVisibility: .visible) {
             Button("Delete Sessions", role: .destructive) { perform(.deleteSessions) }
             Button("Cancel", role: .cancel) {}
@@ -472,6 +507,17 @@ private struct SettingsDeleteProfileSheet: View {
         switch choice {
         case .move(let id): deletion = .moveSessions(toProfileID: id)
         case .deleteSessions: deletion = .deleteSessions
+        }
+        if deletion == .deleteSessions, profile.sessionCount > 0 {
+            // Refuse before writing a backup, then keep a safety copy of the sessions about to go.
+            if hasRunningSession {
+                errorText = ProfileOpResult.sessionRunning.message
+                return
+            }
+            guard backups.backupNow(reason: .manual) != nil else {
+                errorText = backups.lastError ?? "The safety backup failed."
+                return
+            }
         }
         let result = profileStore.delete(profile, deletion)
         if result == .ok {

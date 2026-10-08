@@ -1109,7 +1109,7 @@ visual and interaction spec. The UI stays quiet with one profile: badges only ap
 | `ProfilePicker` | `ProfilePicker(selection: Binding<UUID?>, title: String = "Profile")` | Native `.menu` `Picker` over the non-archived profiles (+ an archived current selection as "Name (archived)"), tagged by UUID, symbols in color (`LabelMenuIcon`). An unresolved selection shows "No profile"; nil is never written. Session detail's profile row (the caller confirms and moves in the binding's setter). Reads `ProfileStore`. |
 | `ProfileValuePicker` | `ProfileValuePicker(_ prefix: String, selection: Binding<UUID?>, nilTitle: String)` | Value sentence ("Quick start in **Current profile ⌄**"): options nil (= `nilTitle`) + the non-archived profiles. A selection that no longer resolves reads as `nilTitle` and nil is written back (only once profiles are loaded). Reads `ProfileStore`. |
 | `LabelPicker` | `LabelPicker(selection:includeNone:title:profileID:)` | `profileID` is required: see §16.3. |
-| `LabelValuePicker` | `LabelValuePicker(_:selection:profileID:)` | Same scoping. |
+| `LabelValuePicker` | `LabelValuePicker(_:selection:profileID:globalOnly: = false)` | Same scoping. `globalOnly` offers only global labels (a global tag's parent label); a local selection stays listed as "Name (Work)". |
 | `TagPicker` | `TagPicker(selection:scopeLabel:profileID:allowsCreate:)` | Same scoping; "Create “x”" makes a tag local to that profile. |
 | `ScopedItemTitle` (extra) | `ScopedItemTitle.title(for: WorkLabel/WorkTag, in: ProfileScope) -> String`, `.foreignProfileName(of: WorkTag, in:)` | The option titles the pickers use: "Name", "Name (Personal)" (not offered here), "Name (archived)". Use it if a feature builds its own label/tag menu (e.g. `LiveTagMenu`). |
 | `SymbolPicker` | `+ init(symbolName:symbols:)` | Pass `LabelPalette.profileSymbolChoices` in profile editors. |
@@ -1219,8 +1219,12 @@ dot in the profile color and the name in `captionFont` `textTertiary`, truncatin
 - Archive and Delete are disabled for the last active profile (help "Keep at least one profile").
 - Delete sheet: "Delete “Personal”?" / "12 sessions use it." / Picker "Move sessions to" (other non-archived
   profiles, then "Delete sessions") / ( Cancel ) {!Delete}. "Delete sessions" with sessions asks again:
-  "Delete 12 sessions?" / "This can’t be undone." / "Delete Sessions". A `.sessionRunning` result shows "Stop the
-  session first." under the picker (`danger`, `captionFont`).
+  "Delete 12 sessions?" / "This can’t be undone." / "Delete Sessions". A safety backup (`backupNow(reason: .manual)`)
+  is written first; if it fails nothing is deleted and the error shows under the picker. A running session in that
+  profile shows "Stop the session first." there instead (`danger`, `captionFont`), before any backup. Archiving a
+  profile whose session is running shows the same refusal under the action row.
+- Color and symbol edits save (and bump `modifiedAt`) only from the user's own edits, never when a synced change
+  arrives.
 
 **Settings ▸ Labels & Tags** (F3): lists show the items offered in the current profile; global rows end with the
 `globe` icon. The editor adds `ValuePicker("Available in", …)` with "All profiles" / "Work only". Making an item
@@ -1229,6 +1233,15 @@ local that other profiles use asks: "Make “Meetings” Work only?" / "Other pr
 ```
   Available in **All profiles ⌄**
 ```
+- Usage counts (list rows, the editor's Usage footnote, the delete sheet) count only the current profile's
+  sessions, segments and learning points.
+- With 2+ profiles, a global item's action row ends with the footnote "Changes it in all profiles." (archive,
+  merge, delete); the delete sheet repeats it, and the merge / tag-delete dialogs say "in all profiles".
+- A global tag's parent label picker offers only global labels (`globalOnly`). Making a tag global drops a local
+  parent label.
+
+**Settings ▸ Data** (F3): with 2+ profiles (archived ones count) the Export section ends with the footnote
+"Includes all profiles."
 
 **Stats** (F3): with 2+ profiles, a native menu `Picker` (labels hidden) in the header: "Work" / "All profiles".
 In All-profiles mode a "By profile" chart (horizontal bars in profile colors, profile names as the axis labels,
@@ -1257,6 +1270,8 @@ elsewhere.
 | Results / disabled help | "Keep at least one profile." (help without the period) · "Stop the session first." · "Choose another profile." |
 | Delete | "Delete “X”?" · "N sessions use it." · "Move sessions to" · "Delete sessions" · "Delete N sessions?" · "This can’t be undone." · "Delete Sessions" |
 | Stats | "All profiles" · "By profile" |
+| Global items (2+ profiles) | "Changes it in all profiles." · "Moves its sessions in all profiles to “X” and deletes it." · "Moves its uses in all profiles to “X” and deletes it." · "Sessions in all profiles are kept, but this can’t be undone." |
+| Data ▸ Export (2+ profiles) | "Includes all profiles." |
 
 ### 16.6 Do / Don't
 

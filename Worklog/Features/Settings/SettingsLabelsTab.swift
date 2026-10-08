@@ -155,7 +155,12 @@ struct SettingsLabelsPane: View {
     }
 
     private func row(_ label: WorkLabel) -> some View {
-        HStack(spacing: theme.spacingS) {
+        // Uses in the current profile only (a global label's other profiles aren't counted).
+        let uses: Int = SettingsScopedUsage.of(label, in: profileStore.activeScope).total
+        let isGlobalShown: Bool = showsScope && label.isAvailableEverywhere
+        let a11yValue: String = "\(uses) uses" + (label.isArchived ? ", archived" : "")
+            + (isGlobalShown ? ", all profiles" : "")
+        return HStack(spacing: theme.spacingS) {
             Image(systemName: label.symbolName)
                 .foregroundStyle(label.color)
                 .frame(width: 18)
@@ -172,18 +177,17 @@ struct SettingsLabelsPane: View {
                     .accessibilityLabel("Default")
             }
             Spacer(minLength: theme.spacingXS)
-            if showsScope && label.isAvailableEverywhere {
+            if isGlobalShown {
                 SettingsGlobalMark()
             }
-            Text("\(label.usageCount)")
+            Text("\(uses)")
                 .font(theme.captionFont)
                 .monospacedDigit()
                 .foregroundStyle(theme.textTertiary)
                 .help("Times used")
         }
         .accessibilityElement(children: .combine)
-        .accessibilityValue("\(label.usageCount) uses\(label.isArchived ? ", archived" : "")"
-                            + (showsScope && label.isAvailableEverywhere ? ", all profiles" : ""))
+        .accessibilityValue(a11yValue)
     }
 
     // MARK: Actions
@@ -256,6 +260,27 @@ private struct SettingsLabelEditor: View {
     private var currentProfile: WorkProfile? { ModelLiveness.live(profileStore.activeProfile) }
     /// "Available in" appears once there is more than one profile (archived ones count).
     private var showsScope: Bool { profileStore.profiles.count + profileStore.archivedProfiles.count > 1 }
+    /// Archive, merge and delete of a global label affect every profile; say so once profiles are shown.
+    private var changesAllProfiles: Bool { showsScope && label.isAvailableEverywhere }
+
+    /// "Make “Meetings” Work only?"
+    private var makeLocalTitle: String {
+        let name: String = profileStore.profile(withID: pendingLocalProfileID)?.displayName ?? "this profile"
+        return "Make “\(label.name)” \(name) only?"
+    }
+
+    /// "Merge “A” into “B”?"
+    private var mergeTitle: String {
+        guard let target = mergeTarget, ModelLiveness.isLive(target) else { return "Merge labels?" }
+        return "Merge “\(label.name)” into “\(target.name)”?"
+    }
+
+    private var mergeMessage: String {
+        let name: String = mergeTarget.flatMap { ModelLiveness.live($0)?.name } ?? ""
+        return changesAllProfiles
+            ? "Moves its sessions in all profiles to “\(name)” and deletes it."
+            : "Moves its sessions to “\(name)” and deletes it."
+    }
 
     /// Default label of the current profile.
     private var isDefault: Binding<Bool> {
@@ -345,6 +370,9 @@ private struct SettingsLabelEditor: View {
                     Button("Delete…") { showsDeleteSheet = true }
                         .buttonStyle(DestructiveButtonStyle())
                 }
+                if changesAllProfiles {
+                    SettingsFootnote("Changes it in all profiles.")
+                }
             }
         }
         .formStyle(.grouped)
@@ -364,28 +392,32 @@ private struct SettingsLabelEditor: View {
         }
         .onChange(of: label.symbolName) { save() }
         .sheet(isPresented: $showsDeleteSheet) {
-            SettingsDeleteLabelSheet(label: label, candidates: otherLabels) {
+            SettingsDeleteLabelSheet(label: label, candidates: otherLabels, scope: profileStore.activeScope,
+                                     changesAllProfiles: changesAllProfiles) {
                 showsDeleteSheet = false
                 onDeleted()
             }
         }
         .confirmationDialog(
-            mergeTarget.map { "Merge “\(label.name)” into “\($0.name)”?" } ?? "Merge labels?",
+            mergeTitle,
             isPresented: Binding(get: { mergeTarget != nil }, set: { if !$0 { mergeTarget = nil } }),
             titleVisibility: .visible
         ) {
             Button("Merge", role: .destructive) {
-                guard let target = mergeTarget else { return }
+                guard let target = mergeTarget, ModelLiveness.isLive(target), ModelLiveness.isLive(label) else {
+                    mergeTarget = nil
+                    return
+                }
                 mergeTarget = nil
                 TaxonomyOps.mergeLabel(label, into: target, settings: settings, in: context)
                 onMerged(target)
             }
             Button("Cancel", role: .cancel) { mergeTarget = nil }
         } message: {
-            Text("Moves its sessions to “\(mergeTarget?.name ?? "")” and deletes it.")
+            Text(mergeMessage)
         }
         .confirmationDialog(
-            "Make “\(label.name)” \(profileStore.profile(withID: pendingLocalProfileID)?.displayName ?? "this profile") only?",
+            makeLocalTitle,
             isPresented: Binding(get: { pendingLocalProfileID != nil }, set: { if !$0 { pendingLocalProfileID = nil } }),
             titleVisibility: .visible
         ) {
@@ -419,10 +451,13 @@ private struct SettingsLabelEditor: View {
         }
     }
 
+    /// "12 sessions · 3 segments · 2 tags", counted in the current profile.
     private var usageDescription: String {
-        let sessions = label.sessions?.count ?? 0
-        let segments = label.segments?.count ?? 0
-        let tags = label.tags?.count ?? 0
+        let scope = profileStore.activeScope
+        let usage = SettingsScopedUsage.of(label, in: scope)
+        let sessions = usage.sessions
+        let segments = usage.segments
+        let tags = ModelLiveness.live(label.tags ?? []).filter { scope.offers($0) }.count
         var parts = [
             "\(sessions) \(sessions == 1 ? "session" : "sessions")",
             "\(segments) \(segments == 1 ? "segment" : "segments")",
@@ -472,6 +507,10 @@ private struct SettingsDeleteLabelSheet: View {
     @Environment(\.dismiss) private var dismiss
     let label: WorkLabel
     let candidates: [WorkLabel]
+    /// Counts are of this profile's sessions.
+    let scope: ProfileScope
+    /// A global label with profiles shown: deleting or archiving it changes every profile.
+    let changesAllProfiles: Bool
     let onDeleted: () -> Void
 
     @State private var targetID: PersistentIdentifier?
@@ -490,15 +529,17 @@ private struct SettingsDeleteLabelSheet: View {
 
     @ViewBuilder
     private var content: some View {
-        let sessions = label.sessions?.count ?? 0
-        let segments = label.segments?.count ?? 0
+        let usage = SettingsScopedUsage.of(label, in: scope)
+        let sessions = usage.sessions
+        let segments = usage.segments
+        let usesText: String = sessions + segments == 0
+            ? "No sessions use this label."
+            : "\(sessions) \(sessions == 1 ? "session" : "sessions") and \(segments) \(segments == 1 ? "segment" : "segments") use it."
         VStack(alignment: .leading, spacing: theme.spacingL) {
             Text("Delete “\(label.name)”?")
                 .font(theme.titleFont)
                 .foregroundStyle(theme.textPrimary)
-            Text(sessions + segments == 0
-                 ? "No sessions use this label."
-                 : "\(sessions) \(sessions == 1 ? "session" : "sessions") and \(segments) \(segments == 1 ? "segment" : "segments") use it.")
+            Text(usesText)
                 .font(theme.calloutFont)
                 .foregroundStyle(theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -516,6 +557,9 @@ private struct SettingsDeleteLabelSheet: View {
                 SettingsFootnote("Its tags move along, or become global.")
             }
             SettingsFootnote("Archiving only hides it from pickers.")
+            if changesAllProfiles {
+                SettingsFootnote("Changes it in all profiles.")
+            }
 
             HStack(spacing: theme.spacingS) {
                 Button("Cancel", role: .cancel) { dismiss() }
@@ -561,6 +605,38 @@ struct SettingsScopePicker: View {
         let name = profileName
         ValuePicker("Available in", selection: $selection, options: [.allProfiles, .thisProfile],
                     title: { $0 == .allProfiles ? "All profiles" : "\(name) only" })
+    }
+}
+
+/// Uses of a label or tag counted in one profile scope: sessions, segments and learning points whose session the
+/// scope contains. `ProfileScope.allProfiles` counts every live use.
+struct SettingsScopedUsage {
+    var sessions = 0
+    var segments = 0
+    var points = 0
+    var total: Int { sessions + segments + points }
+
+    @MainActor static func of(_ label: WorkLabel, in scope: ProfileScope) -> SettingsScopedUsage {
+        var usage = SettingsScopedUsage()
+        guard ModelLiveness.isLive(label) else { return usage }
+        usage.sessions = (label.sessions ?? []).filter { scope.contains($0) }.count
+        usage.segments = (label.segments ?? []).filter { contains($0, in: scope) }.count
+        return usage
+    }
+
+    @MainActor static func of(_ tag: WorkTag, in scope: ProfileScope) -> SettingsScopedUsage {
+        var usage = SettingsScopedUsage()
+        guard ModelLiveness.isLive(tag) else { return usage }
+        usage.sessions = (tag.sessions ?? []).filter { scope.contains($0) }.count
+        usage.segments = (tag.segments ?? []).filter { contains($0, in: scope) }.count
+        usage.points = (tag.learningPoints ?? []).filter { scope.contains($0) }.count
+        return usage
+    }
+
+    @MainActor private static func contains(_ segment: Segment, in scope: ProfileScope) -> Bool {
+        guard ModelLiveness.isLive(segment) else { return false }
+        guard let session = ModelLiveness.live(segment.session) else { return scope.isAllProfiles }
+        return scope.contains(session)
     }
 }
 
