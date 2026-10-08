@@ -83,6 +83,10 @@ private struct LiveIdlePane: View {
             // Nothing to split while idle; mark it handled so it doesn't fire on the next active pane.
             LiveRequestLedger.handledSplitRequest = newValue
         }
+        .onChange(of: router.discardRequest) { _, newValue in
+            // Nothing to discard while idle; mark it handled so it doesn't fire on the next active pane.
+            LiveRequestLedger.handledDiscardRequest = newValue
+        }
     }
 
     private var header: some View {
@@ -149,6 +153,7 @@ private struct LiveIdlePane: View {
             handleNoteFocusRequest()
         }
         LiveRequestLedger.handledSplitRequest = router.splitRequest
+        LiveRequestLedger.handledDiscardRequest = router.discardRequest
     }
 
     /// No session to take notes in: focus the start form's focus field instead.
@@ -327,6 +332,7 @@ private struct LiveActivePane: View {
         .onAppear(perform: handlePendingRequests)
         .onChange(of: router.noteFocusRequest) { _, _ in handlePendingRequests() }
         .onChange(of: router.splitRequest) { _, _ in handlePendingRequests() }
+        .onChange(of: router.discardRequest) { _, _ in handlePendingRequests() }
     }
 
     // MARK: Banners
@@ -501,13 +507,7 @@ private struct LiveActivePane: View {
         .controlSize(.large)
         .frame(maxWidth: .infinity)
         .overlay(alignment: .trailing) {
-            Button {
-                if settings.confirmBeforeDiscard {
-                    confirmDiscard = true
-                } else {
-                    onDiscard()
-                }
-            } label: {
+            Button(action: requestDiscard) {
                 Image(systemName: "trash")
             }
             .buttonStyle(IconButtonStyle())
@@ -519,6 +519,15 @@ private struct LiveActivePane: View {
             } message: {
                 Text("Its notes and time will be deleted.")
             }
+        }
+    }
+
+    /// The trash button and Session ▸ Discard Session… (`router.discardRequest`) share this.
+    private func requestDiscard() {
+        if settings.confirmBeforeDiscard {
+            confirmDiscard = true
+        } else {
+            onDiscard()
         }
     }
 
@@ -654,6 +663,15 @@ private struct LiveActivePane: View {
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(150))
                 showSplit = true
+            }
+        }
+        if router.discardRequest > LiveRequestLedger.handledDiscardRequest {
+            LiveRequestLedger.handledDiscardRequest = router.discardRequest
+            // Like split: let the window come forward before the confirmation dialog anchors to it.
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(150))
+                guard LiveModelGuard.isUsable(session), engine.activeSession === session else { return }
+                requestDiscard()
             }
         }
     }

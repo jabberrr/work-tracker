@@ -505,7 +505,7 @@ private struct LearningsPointRow: View {
 // MARK: - Mastery
 
 /// "Mastery" caption + five small circles, filled up to the rating in the accent color; clicking the
-/// current value clears it. Each dot's tooltip names its value ("Mastery 3 of 5").
+/// current value clears it. Each dot's tooltip names its value ("How well you know this: 3 of 5").
 @MainActor
 private struct LearningsMasteryControl: View {
     @Environment(\.theme) private var theme
@@ -553,7 +553,7 @@ private struct LearningsMasteryControl: View {
                         .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help(rating == value ? "Clear mastery" : "Mastery \(value) of 5")
+                .help(rating == value ? "Clear mastery" : "How well you know this: \(value) of 5")
             }
         }
     }

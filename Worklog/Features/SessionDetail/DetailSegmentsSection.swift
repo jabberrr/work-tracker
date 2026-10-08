@@ -67,7 +67,7 @@ struct DetailSegmentsSection: View {
             }
 
             if segments.count == 1 {
-                Text("Use Split… to record a switch you didn’t log live.")
+                Text("Split to add a switch you missed.")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)

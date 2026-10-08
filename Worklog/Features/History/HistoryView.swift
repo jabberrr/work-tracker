@@ -281,23 +281,23 @@ struct HistoryView: View {
 
     private var labelChips: some View {
         let visibleLabels = ModelLiveness.live(labels).filter { !$0.isArchived || $0.persistentModelID == labelFilter }
-        return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: 6) {
-                FilterChip("All", colorHex: nil, isSelected: labelFilter == nil) {
-                    labelFilter = nil
-                }
-                .help("All")
-                ForEach(visibleLabels) { label in
-                    let selected = labelFilter == label.persistentModelID
-                    let title = label.name.isBlank ? "Untitled label" : label.name
-                    FilterChip(title, colorHex: label.colorHex, isSelected: selected) {
-                        labelFilter = selected ? nil : label.persistentModelID
-                    }
-                    .help(title)
-                }
+        // Wraps onto more lines rather than scrolling sideways, so every label stays reachable with a mouse.
+        return FlowLayout(spacing: 6, lineSpacing: 6) {
+            FilterChip("All", colorHex: nil, isSelected: labelFilter == nil) {
+                labelFilter = nil
             }
-            .padding(.vertical, 2)
+            .help("All")
+            ForEach(visibleLabels) { label in
+                let selected = labelFilter == label.persistentModelID
+                let title = label.name.isBlank ? "Untitled label" : label.name
+                FilterChip(title, colorHex: label.colorHex, isSelected: selected) {
+                    labelFilter = selected ? nil : label.persistentModelID
+                }
+                .help(title)
+            }
         }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(.vertical, 2)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Filter by label")
     }
@@ -462,6 +462,11 @@ fileprivate struct HistoryColumnDivider: View {
                         isHovering = inside
                         updateCursor()
                     }
+                    // AppKit cursor rects of neighbouring views (text, list) can reset the pushed cursor;
+                    // re-assert it while the pointer moves over the handle.
+                    .onContinuousHover { phase in
+                        if case .active = phase { NSCursor.resizeLeftRight.set() }
+                    }
                     .onTapGesture(count: 2) {
                         setWidth(HistoryColumnLayout.defaultListWidth)
                     }
@@ -484,6 +489,7 @@ fileprivate struct HistoryColumnDivider: View {
                     dragStartWidth = start
                     updateCursor()
                 }
+                NSCursor.resizeLeftRight.set()
                 let proposed = start + Double(value.translation.width)
                 setWidth(HistoryColumnLayout.clampedListWidth(proposed, total: total))
             }

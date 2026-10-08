@@ -653,10 +653,11 @@ private struct LiveHoverRowBody: View {
 
 // MARK: - Request ledger
 
-/// `WindowRouter.noteFocusRequest` / `splitRequest` are counters. LiveSessionView may be created *after* the
+/// `WindowRouter.noteFocusRequest` / `splitRequest` / `discardRequest` are counters. LiveSessionView may be created *after* the
 /// increment (the request also switches to Today), so `.onChange` alone would miss it; remember what was handled.
 @MainActor
 enum LiveRequestLedger {
     static var handledNoteFocusRequest = 0
     static var handledSplitRequest = 0
+    static var handledDiscardRequest = 0
 }

@@ -26,6 +26,8 @@ struct OverlayLayoutEditor: View {
     @State private var isEditing = false
     @State private var previewStatus: OverlayPreviewStatus = .running
     @State private var dragging: OverlayElement?
+    /// A reference (not view state): its bookkeeping must not re-render the editor on every drag update.
+    @State private var reorderGuard = OverlayReorderGuard()
     @State private var isAddPresented = false
 
     init() {}
@@ -36,6 +38,8 @@ struct OverlayLayoutEditor: View {
             stage
         }
         .onDisappear(perform: endEditing)
+        // Every drag (and its end) starts the reorder debounce clean.
+        .onChange(of: dragging) { _, _ in reorderGuard.reset() }
     }
 
     // MARK: Header
@@ -89,19 +93,8 @@ struct OverlayLayoutEditor: View {
                 mode: isEditing ? .editing : .preview,
                 panelOpacity: settings.overlayOpacity
             ) { element, index, view in
-                OverlayEditableElement(
-                    element: element,
-                    content: view,
-                    seed: index,
-                    isEditing: isEditing,
-                    canMoveUp: index > 0,
-                    canMoveDown: index < layout.count - 1,
-                    dragging: $dragging,
-                    dragPreview: dragPreview(element, data: data, isCompact: isCompact),
-                    onMove: move,
-                    onStep: step,
-                    onRemove: remove
-                )
+                editableElement(element, index: index, view: view, count: layout.count,
+                                data: data, isCompact: isCompact)
             }
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Overlay preview")
@@ -117,6 +110,24 @@ struct OverlayLayoutEditor: View {
             .strokeBorder(theme.separator, lineWidth: 1))
         // A drop anywhere else on the stage just ends the drag.
         .onDrop(of: [.plainText], delegate: OverlayStageDropDelegate(dragging: $dragging))
+    }
+
+    private func editableElement(_ element: OverlayElement, index: Int, view: OverlayElementView, count: Int,
+                                 data: OverlayDisplayData, isCompact: Bool) -> some View {
+        OverlayEditableElement(
+            element: element,
+            content: view,
+            seed: index,
+            isEditing: isEditing,
+            canMoveUp: index > 0,
+            canMoveDown: index < count - 1,
+            dragging: $dragging,
+            reorderGuard: reorderGuard,
+            dragPreview: dragPreview(element, data: data, isCompact: isCompact),
+            onMove: { move($0, to: $1) },
+            onStep: { step($0, by: $1) },
+            onRemove: { remove($0) }
+        )
     }
 
     private var previewData: OverlayDisplayData {
@@ -248,13 +259,15 @@ private struct OverlayEditableElement<DragPreview: View>: View {
     private let canMoveUp: Bool
     private let canMoveDown: Bool
     @Binding private var dragging: OverlayElement?
+    private let reorderGuard: OverlayReorderGuard
     private let dragPreview: DragPreview
     private let onMove: (OverlayElement, OverlayElement) -> Void
     private let onStep: (OverlayElement, Int) -> Void
     private let onRemove: (OverlayElement) -> Void
 
     init(element: OverlayElement, content: OverlayElementView, seed: Int, isEditing: Bool,
-         canMoveUp: Bool, canMoveDown: Bool, dragging: Binding<OverlayElement?>, dragPreview: DragPreview,
+         canMoveUp: Bool, canMoveDown: Bool, dragging: Binding<OverlayElement?>,
+         reorderGuard: OverlayReorderGuard, dragPreview: DragPreview,
          onMove: @escaping (OverlayElement, OverlayElement) -> Void,
          onStep: @escaping (OverlayElement, Int) -> Void,
          onRemove: @escaping (OverlayElement) -> Void) {
@@ -265,6 +278,7 @@ private struct OverlayEditableElement<DragPreview: View>: View {
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
         self._dragging = dragging
+        self.reorderGuard = reorderGuard
         self.dragPreview = dragPreview
         self.onMove = onMove
         self.onStep = onStep
@@ -310,7 +324,8 @@ private struct OverlayEditableElement<DragPreview: View>: View {
                 dragPreview
             }
             .onDrop(of: [.plainText],
-                    delegate: OverlayReorderDropDelegate(target: element, dragging: $dragging, move: onMove))
+                    delegate: OverlayReorderDropDelegate(target: element, dragging: $dragging,
+                                                         reorderGuard: reorderGuard, move: onMove))
             .contextMenu {
                 if isEditing {
                     Button("Move Up") { onStep(element, -1) }
@@ -324,16 +339,71 @@ private struct OverlayEditableElement<DragPreview: View>: View {
     }
 }
 
-/// Live reorder: entering another element moves the dragged one to its position.
+/// Debounces live reorder. A move reflows the preview (an element can switch between inline and full width),
+/// which can put the pointer over another element, or back over the same one, and move it again (jitter).
+/// - Right after a move, entering the same target again is ignored.
+/// - Entering a different target during the cooldown is remembered and done on a later `dropUpdated` there,
+///   so a fast drag still lands where the pointer rests.
+private final class OverlayReorderGuard {
+    private static let cooldown: TimeInterval = 0.3
+
+    private var lastDragging: OverlayElement?
+    private var lastTarget: OverlayElement?
+    private var lastMoveAt: Date = .distantPast
+    private var pendingTarget: OverlayElement?
+
+    func reset() {
+        lastDragging = nil
+        lastTarget = nil
+        lastMoveAt = .distantPast
+        pendingTarget = nil
+    }
+
+    /// The pointer entered `target`: whether to move `dragging` there now.
+    func shouldMoveOnEnter(_ dragging: OverlayElement, onto target: OverlayElement, now: Date = Date()) -> Bool {
+        pendingTarget = nil
+        guard now.timeIntervalSince(lastMoveAt) < Self.cooldown else {
+            record(dragging, target, now)
+            return true
+        }
+        if lastDragging != dragging || lastTarget != target {
+            pendingTarget = target
+        }
+        return false
+    }
+
+    /// The pointer is still over `target`: whether a move deferred by the cooldown is due now.
+    func shouldMoveOnUpdate(_ dragging: OverlayElement, onto target: OverlayElement, now: Date = Date()) -> Bool {
+        guard pendingTarget == target, now.timeIntervalSince(lastMoveAt) >= Self.cooldown else { return false }
+        pendingTarget = nil
+        record(dragging, target, now)
+        return true
+    }
+
+    func exited(_ target: OverlayElement) {
+        if pendingTarget == target { pendingTarget = nil }
+    }
+
+    private func record(_ dragging: OverlayElement, _ target: OverlayElement, _ now: Date) {
+        lastDragging = dragging
+        lastTarget = target
+        lastMoveAt = now
+    }
+}
+
+/// Live reorder: entering another element moves the dragged one to its position (debounced by
+/// `OverlayReorderGuard`).
 private struct OverlayReorderDropDelegate: DropDelegate {
     private let target: OverlayElement
     @Binding private var dragging: OverlayElement?
+    private let reorderGuard: OverlayReorderGuard
     private let move: (OverlayElement, OverlayElement) -> Void
 
-    init(target: OverlayElement, dragging: Binding<OverlayElement?>,
+    init(target: OverlayElement, dragging: Binding<OverlayElement?>, reorderGuard: OverlayReorderGuard,
          move: @escaping (OverlayElement, OverlayElement) -> Void) {
         self.target = target
         self._dragging = dragging
+        self.reorderGuard = reorderGuard
         self.move = move
     }
 
@@ -343,11 +413,20 @@ private struct OverlayReorderDropDelegate: DropDelegate {
 
     func dropEntered(info: DropInfo) {
         guard let dragging, dragging != target else { return }
-        move(dragging, target)
+        if reorderGuard.shouldMoveOnEnter(dragging, onto: target) {
+            move(dragging, target)
+        }
     }
 
     func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
+        if let dragging, dragging != target, reorderGuard.shouldMoveOnUpdate(dragging, onto: target) {
+            move(dragging, target)
+        }
+        return DropProposal(operation: .move)
+    }
+
+    func dropExited(info: DropInfo) {
+        reorderGuard.exited(target)
     }
 
     func performDrop(info: DropInfo) -> Bool {

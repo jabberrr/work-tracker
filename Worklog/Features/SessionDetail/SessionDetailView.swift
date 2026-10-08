@@ -398,7 +398,7 @@ struct DetailTimesEditor: View {
             }
 
             Text(end > start
-                 ? "Wall time \(end.timeIntervalSince(start).formattedShort); segments and pauses adjust to fit."
+                 ? "Total \(end.timeIntervalSince(start).formattedShort). Segments adjust to fit."
                  : "The end must be after the start.")
                 .font(theme.captionFont)
                 .foregroundStyle(end > start ? theme.textTertiary : theme.danger)

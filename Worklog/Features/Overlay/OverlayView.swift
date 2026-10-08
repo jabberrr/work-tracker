@@ -76,10 +76,10 @@ struct OverlayView: View {
         OverlayActions(
             hide: { overlay.hide() },
             togglePause: { engine.togglePause() },
-            toggleSplit: toggleSplit,
+            toggleSplit: { toggleSplit() },
             endSplit: { isSplitting = false },
-            stop: stop,
-            start: start,
+            stop: { stop() },
+            start: { start() },
             review: { router.showMainWindow() }
         )
     }
