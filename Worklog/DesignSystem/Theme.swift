@@ -169,8 +169,6 @@ struct Theme {
 // MARK: - Helpers (extra)
 
 extension Theme {
-    var isDark: Bool { colorScheme == .dark }
-
     /// Fill for a `SurfaceLevel`.
     func color(for level: SurfaceLevel) -> Color {
         switch level {

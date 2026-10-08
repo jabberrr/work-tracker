@@ -4,6 +4,8 @@ import SwiftData
 /// Chips for selected tags (removable) + "+" popover: search field, tags scoped to `scopeLabel` first,
 /// then tags for any label; if allowsCreate, "Create “x”" → `TaxonomyOps.createTag(name:profile:in:)` via
 /// @Environment(\.modelContext): the new tag is local to `profileID`'s profile (global when `profileID` is nil).
+/// When the query names an ARCHIVED tag offered there, the row reads "Unarchive “x”" instead: it brings that tag
+/// back and selects it (no second tag with the same name).
 ///
 /// Profile scope: only tags offered in `profileID` (global + local to it) are listed; `profileID == nil` offers
 /// every tag. Selected tags that aren't offered (local to another profile) keep their chip and are listed under
@@ -81,7 +83,9 @@ struct TagPicker: View {
                                  foreignProfileNames: foreignNames,
                                  scopeLabel: ModelLiveness.live(scopeLabel),
                                  allowsCreate: allowsCreate,
-                                 onCreate: create)
+                                 profileScoped: profileID != nil,
+                                 onCreate: create,
+                                 onUnarchive: unarchive)
                     .environment(\.theme, theme)
                     .tint(theme.accent)
             }
@@ -119,6 +123,17 @@ struct TagPicker: View {
         }
         selection = current
     }
+
+    /// "Unarchive “x”": brings the archived tag back (`TaxonomyOps.unarchive(_:)`, saves) and selects it.
+    private func unarchive(_ tag: WorkTag) {
+        guard ModelLiveness.isLive(tag) else { return }
+        TaxonomyOps.unarchive(tag)
+        var current = ModelLiveness.live(selection)
+        if !current.contains(where: { $0.persistentModelID == tag.persistentModelID }) {
+            current.append(tag)
+        }
+        selection = current
+    }
 }
 
 // MARK: - Popover
@@ -135,21 +150,27 @@ private struct TagPickerPopover: View {
     let foreignProfileNames: [PersistentIdentifier: String]
     let scopeLabel: WorkLabel?
     let allowsCreate: Bool
+    /// Mirrors `TaxonomyOps.createTag`: with a profile, any offered tag counts; without one, global tags only.
+    let profileScoped: Bool
     let onCreate: (String) -> Void
+    let onUnarchive: (WorkTag) -> Void
 
     @State private var query = ""
     @FocusState private var searchFocused: Bool
 
     init(selection: Binding<[WorkTag]>, allTags: [WorkTag], foreignTags: [WorkTag],
          foreignProfileNames: [PersistentIdentifier: String], scopeLabel: WorkLabel?,
-         allowsCreate: Bool, onCreate: @escaping (String) -> Void) {
+         allowsCreate: Bool, profileScoped: Bool,
+         onCreate: @escaping (String) -> Void, onUnarchive: @escaping (WorkTag) -> Void) {
         self._selection = selection
         self.allTags = allTags
         self.foreignTags = foreignTags
         self.foreignProfileNames = foreignProfileNames
         self.scopeLabel = scopeLabel
         self.allowsCreate = allowsCreate
+        self.profileScoped = profileScoped
         self.onCreate = onCreate
+        self.onUnarchive = onUnarchive
     }
 
     private var trimmedQuery: String { query.trimmingCharacters(in: .whitespacesAndNewlines) }
@@ -194,8 +215,22 @@ private struct TagPickerPopover: View {
         }
     }
 
+    /// An archived tag named like the query (trimmed, case-/diacritic-insensitive) when no active one is: the tag
+    /// `TaxonomyOps.createTag` would unarchive (same rule as `TaxonomyOps.archivedTag(named:profile:in:)`, computed
+    /// from the offered tags so `body` doesn't fetch). The profile's own tag wins over a global one.
+    private var archivedMatch: WorkTag? {
+        guard allowsCreate, !trimmedQuery.isEmpty, exactMatch == nil else { return nil }
+        let named = allTags.filter { tag in
+            tag.name.trimmingCharacters(in: .whitespacesAndNewlines)
+                .compare(trimmedQuery, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+                && (profileScoped || ModelLiveness.live(tag.profile) == nil)
+        }
+        guard !named.contains(where: { !$0.isArchived }) else { return nil }
+        return named.first { ModelLiveness.live($0.profile) != nil } ?? named.first
+    }
+
     private var canCreate: Bool {
-        allowsCreate && !trimmedQuery.isEmpty && exactMatch == nil
+        allowsCreate && !trimmedQuery.isEmpty && exactMatch == nil && archivedMatch == nil
     }
 
     var body: some View {
@@ -204,6 +239,7 @@ private struct TagPickerPopover: View {
         let others = otherTags
         let foreign = otherProfileTags
         let nothing = scoped.isEmpty && global.isEmpty && others.isEmpty && foreign.isEmpty
+        let archived = archivedMatch
 
         VStack(spacing: 0) {
             SearchField(text: $query,
@@ -222,7 +258,7 @@ private struct TagPickerPopover: View {
                     group(title: scopeLabel == nil ? "Tags" : "Any label", tags: global, caption: { _ in nil })
                     group(title: "Other labels", tags: others, caption: { parentLabel(of: $0)?.name })
                     group(title: "Other profiles", tags: foreign, caption: { foreignProfileNames[$0.persistentModelID] })
-                    if nothing && !canCreate {
+                    if nothing && !canCreate && archived == nil {
                         Text(trimmedQuery.isEmpty ? "No tags yet." : "No matching tags.")
                             .font(theme.calloutFont)
                             .foregroundStyle(theme.textTertiary)
@@ -243,6 +279,22 @@ private struct TagPickerPopover: View {
                         Image(systemName: "plus.circle.fill")
                             .foregroundStyle(theme.accent)
                         Text("Create “\(trimmedQuery)”")
+                            .foregroundStyle(theme.textPrimary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .buttonStyle(TagPickerRowStyle())
+                .padding(6)
+            } else if let archived {
+                Rectangle().fill(theme.separator).frame(height: 1)
+                Button {
+                    unarchive(archived)
+                } label: {
+                    HStack(spacing: theme.spacingS) {
+                        Image(systemName: "arrow.uturn.backward.circle.fill")
+                            .foregroundStyle(theme.accent)
+                        Text("Unarchive “\(archived.name)”")
                             .foregroundStyle(theme.textPrimary)
                             .lineLimit(1)
                         Spacer(minLength: 0)
@@ -330,12 +382,20 @@ private struct TagPickerPopover: View {
         query = ""
     }
 
-    /// Return: exact match → toggle; else create if allowed; else the single visible match → toggle.
+    private func unarchive(_ tag: WorkTag) {
+        onUnarchive(tag)
+        query = ""
+    }
+
+    /// Return: exact match → toggle; else unarchive an archived match; else create if allowed;
+    /// else the single visible match → toggle.
     private func submit() {
         guard !trimmedQuery.isEmpty else { return }
         if let exact = exactMatch {
             toggle(exact)
             query = ""
+        } else if let archived = archivedMatch {
+            unarchive(archived)
         } else if canCreate {
             createFromQuery()
         } else {

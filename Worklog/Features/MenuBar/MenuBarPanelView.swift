@@ -30,7 +30,7 @@ struct MenuBarPanelView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
             Group {
-                if let session = engine.activeSession, LiveModelGuard.isUsable(session) {
+                if let session = engine.activeSession, ModelLiveness.isLive(session) {
                     activeSection
                 } else {
                     idleSection
@@ -53,6 +53,10 @@ struct MenuBarPanelView: View {
             if !isActive { isSplitting = false }
         }
         .onChange(of: profiles.quickStartProfileID) { _, _ in
+            resetStartLabel()
+        }
+        // The quick start profile's default label changed (Settings ▸ Profiles).
+        .onChange(of: ModelLiveness.live(profiles.quickStartProfile)?.defaultLabelUUID) { _, _ in
             resetStartLabel()
         }
     }
@@ -110,7 +114,7 @@ struct MenuBarPanelView: View {
                 LiveOtherMacHint()
             }
 
-            LiveClock(isTicking: !isPaused) { date in
+            LiveTicker(isTicking: !isPaused) { date in
                 VStack(alignment: .leading, spacing: theme.spacingXS) {
                     TimerText(engine.elapsed(at: date), style: .large, isPaused: isPaused)
                     HStack(spacing: theme.spacingXS) {
@@ -124,6 +128,11 @@ struct MenuBarPanelView: View {
                     .font(theme.calloutFont)
                     .foregroundStyle(theme.textSecondary)
                     .accessibilityElement(children: .combine)
+                    if let session = engine.activeSession,
+                       let hours = LiveLongSessionRule.warningHours(engine: engine, settings: settings, now: date) {
+                        LiveLongSessionLine(hours: hours) { engine.dismissLongSessionWarning(for: session) }
+                            .padding(.top, theme.spacingXS)
+                    }
                 }
             }
 
@@ -180,13 +189,10 @@ struct MenuBarPanelView: View {
         return engine.currentLabel?.name ?? "No focus"
     }
 
+    /// The single stop path (brings the main window forward when a review is pending).
     private func stop() {
-        _ = engine.stop()
         isSplitting = false
-        // The review sheet lives in the main window.
-        if engine.pendingEndSession != nil {
-            router.showMainWindow()
-        }
+        router.stopSession(engine)
     }
 
     // MARK: Idle
@@ -209,7 +215,7 @@ struct MenuBarPanelView: View {
                         .foregroundStyle(theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
                     Spacer(minLength: 0)
-                    Button("Review…") { router.showMainWindow() }
+                    Button("Review…") { router.requestReview() }
                         .buttonStyle(QuietButtonStyle())
                         .controlSize(.small)
                         .help("Review session")
@@ -351,7 +357,7 @@ private struct MenuBarTodayRow: View {
     }
 
     var body: some View {
-        LiveClock(isTicking: engine.isRunning) { date in
+        LiveTicker(isTicking: engine.isRunning) { date in
             let total = LiveDayMath.totalToday(sessions, active: engine.activeSession, now: date, scope: scope)
             let goal = LiveDayMath.goalSeconds(settings)
             VStack(alignment: .leading, spacing: theme.spacingXS) {

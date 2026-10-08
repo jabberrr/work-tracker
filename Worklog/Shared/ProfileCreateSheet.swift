@@ -5,8 +5,9 @@ import SwiftUI
 /// Create (default action, disabled while the name is blank) calls
 /// `ProfileStore.createProfile(name:colorHex:symbolName:select:)` and dismisses.
 ///
-/// Presented from `ProfileSwitcher` (selects the new profile) and Settings ▸ Profiles
-/// (`selectsNewProfile: false`). Reads `ProfileStore` from the environment.
+/// Presented from `ProfileSwitcher` (selects the new profile; the switcher reports it to `WindowRouter` as a child
+/// sheet so the end-of-session review waits) and Settings ▸ Profiles (`selectsNewProfile: false`).
+/// Reads `ProfileStore` from the environment.
 @MainActor
 struct ProfileCreateSheet: View {
     @Environment(ProfileStore.self) private var profiles

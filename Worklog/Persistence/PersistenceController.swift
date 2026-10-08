@@ -104,7 +104,15 @@ final class PersistenceController {
     /// not be moved aside); the user installs the newer version instead.
     let isStoreFromNewerVersion: Bool
     /// Shown once (RootView info banner) after a recovery/restore performed at launch; the banner's dismiss sets nil.
-    var launchNotice: String? = nil
+    /// Setting a different text resets `launchNoticeOffersRestore`.
+    var launchNotice: String? = nil {
+        didSet {
+            if launchNotice != oldValue { launchNoticeOffersRestore = false }
+        }
+    }
+    /// The launch notice points at a backup in Settings ▸ Data (data shrank, a restore failed): RootView's banner
+    /// then offers "Restore…". Set right after `launchNotice`.
+    var launchNoticeOffersRestore = false
 
     var mainContext: ModelContext { container.mainContext }
     var isSyncingWithICloud: Bool { storeMode == .cloudKit }

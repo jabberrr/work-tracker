@@ -15,35 +15,44 @@ enum TaxonomyScopeImpact: Equatable {
 /// session counts as its effective profile's (`ProfileOps.effectiveProfile(of:)`).
 @MainActor enum TaxonomyOps {
     /// profile nil = global (existing callers). sortIndex = max+1 over ALL labels.
+    /// A same-name ARCHIVED label offered in `profile` (profile nil: among GLOBAL labels only) is unarchived and
+    /// returned instead of creating a duplicate (bug 24; its color and symbol are kept). Active same-name labels are
+    /// not deduplicated here (Settings picks unique names itself).
     @discardableResult
     static func createLabel(name: String, colorHex: String, symbolName: String, profile: WorkProfile? = nil,
                             in context: ModelContext) -> WorkLabel {
+        let trimmedName = name.trimmed
+        let owner = ModelLiveness.live(profile)
+        if !trimmedName.isEmpty, let archived = archivedLabel(named: trimmedName, profile: owner, in: context) {
+            unarchive(archived)
+            return archived
+        }
         let labels = (try? context.fetch(FetchDescriptor<WorkLabel>())) ?? []
         let nextIndex = (ModelLiveness.live(labels).map(\.sortIndex).max() ?? -1) + 1
-        let trimmedName = name.trimmed
         let label = WorkLabel(name: trimmedName.isEmpty ? "New label" : trimmedName, colorHex: colorHex,
                               symbolName: symbolName.isBlank ? "circle.fill" : symbolName, sortIndex: nextIndex)
         context.insert(label)
-        label.profile = ModelLiveness.live(profile)
+        label.profile = owner
         save(context)
         return label
     }
 
     /// Returns an existing non-archived same-name tag (case-insensitive, trimmed) offered in `profile` (profile nil:
-    /// among GLOBAL tags only) instead of duplicating; else a new tag local to `profile` (nil = global).
+    /// among GLOBAL tags only) instead of duplicating; else a same-name ARCHIVED tag offered there, unarchived (bug 24);
+    /// else a new tag local to `profile` (nil = global). The profile's own tag is preferred over a global one.
     @discardableResult
     static func createTag(name: String, colorHex: String = "#8E8E93", label: WorkLabel? = nil,
                           profile: WorkProfile? = nil, in context: ModelContext) -> WorkTag {
         let trimmedName = name.trimmed
         let owner = ModelLiveness.live(profile)
-        let scope = ProfileScope(profileID: owner?.uuid)
-        let candidates = allTags(in: context).filter { tag in
-            guard !tag.isArchived, sameName(tag.name, trimmedName) else { return false }
-            return owner == nil ? isGlobal(tag) : scope.offers(tag)
-        }
+        let candidates = sameNameTags(trimmedName, profile: owner, in: context).filter { !$0.isArchived }
         // Prefer the profile's own tag over a global one with the same name.
         if let existing = candidates.first(where: { !isGlobal($0) }) ?? candidates.first {
             return existing
+        }
+        if !trimmedName.isEmpty, let archived = archivedTag(named: trimmedName, profile: owner, in: context) {
+            unarchive(archived)
+            return archived
         }
         let tag = WorkTag(name: trimmedName.isEmpty ? "tag" : trimmedName, colorHex: colorHex)
         context.insert(tag)
@@ -53,12 +62,51 @@ enum TaxonomyScopeImpact: Equatable {
         return tag
     }
 
-    /// Case-/diacritic-insensitive, trimmed name lookup. Prefers a non-archived tag.
-    static func findTag(named name: String, in context: ModelContext) -> WorkTag? {
+    /// The archived tag `createTag(name:profile:in:)` would unarchive: same name (trimmed, case/diacritic-insensitive),
+    /// offered in `profile` (nil: GLOBAL tags only), and no active same-name tag offered there. The profile's own tag is
+    /// preferred. For pickers that offer "Unarchive “x”" (then call `unarchive(_:)` or just `createTag`).
+    static func archivedTag(named name: String, profile: WorkProfile?, in context: ModelContext) -> WorkTag? {
         let trimmedName = name.trimmed
         guard !trimmedName.isEmpty else { return nil }
-        let matches = allTags(in: context).filter { sameName($0.name, trimmedName) }
-        return matches.first(where: { !$0.isArchived }) ?? matches.first
+        let matches = sameNameTags(trimmedName, profile: ModelLiveness.live(profile), in: context)
+        guard !matches.contains(where: { !$0.isArchived }) else { return nil }
+        return matches.first(where: { !isGlobal($0) }) ?? matches.first
+    }
+
+    /// Same as `archivedTag(named:profile:in:)` for labels (no active same-name label offered there).
+    static func archivedLabel(named name: String, profile: WorkProfile?, in context: ModelContext) -> WorkLabel? {
+        let trimmedName = name.trimmed
+        guard !trimmedName.isEmpty else { return nil }
+        let owner = ModelLiveness.live(profile)
+        let scope = ProfileScope(profileID: owner?.uuid)
+        let all = ModelLiveness.live((try? context.fetch(FetchDescriptor<WorkLabel>(
+            sortBy: [SortDescriptor(\WorkLabel.sortIndex)]))) ?? [])
+        let matches = all.filter { label in
+            guard sameName(label.name, trimmedName) else { return false }
+            return owner == nil ? ModelLiveness.live(label.profile) == nil : scope.offers(label)
+        }
+        guard !matches.contains(where: { !$0.isArchived }) else { return nil }
+        return matches.first(where: { ModelLiveness.live($0.profile) != nil }) ?? matches.first
+    }
+
+    /// isArchived = false; saves. No-op for a deleted or already active tag.
+    static func unarchive(_ tag: WorkTag) {
+        guard ModelLiveness.isLive(tag), tag.isArchived, let context = tag.modelContext else { return }
+        tag.isArchived = false
+        save(context)
+    }
+
+    /// isArchived = false; saves. No-op for a deleted or already active label.
+    static func unarchive(_ label: WorkLabel) {
+        guard ModelLiveness.isLive(label), label.isArchived, let context = label.modelContext else { return }
+        label.isArchived = false
+        save(context)
+    }
+
+    /// Clears every profile's default label that points to `label` (e.g. it was archived). Does not save.
+    static func clearDefaultLabel(_ label: WorkLabel, in context: ModelContext) {
+        guard ModelLiveness.isLive(label) else { return }
+        clearDefaultLabel(uuid: label.uuid, in: context)
     }
 
     /// Sessions/segments using `label` move to `reassignTo` (nil = become Unlabeled), then label is deleted.
@@ -81,10 +129,7 @@ enum TaxonomyScopeImpact: Equatable {
         if settings.defaultLabelID == label.uuid {
             settings.defaultLabelID = nil
         }
-        for profile in ProfileOps.allProfiles(in: context) where profile.defaultLabelUUID == label.uuid {
-            profile.defaultLabelUUID = nil
-            profile.touch()
-        }
+        clearDefaultLabel(uuid: label.uuid, in: context)
         context.delete(label)
         save(context)
     }
@@ -503,6 +548,22 @@ enum TaxonomyScopeImpact: Equatable {
     private static func allTags(in context: ModelContext) -> [WorkTag] {
         let descriptor = FetchDescriptor<WorkTag>(sortBy: [SortDescriptor(\WorkTag.createdAt)])
         return ModelLiveness.live((try? context.fetch(descriptor)) ?? [])
+    }
+
+    /// Live tags (archived included) named `name` offered in `owner` (nil: GLOBAL tags only), oldest first.
+    private static func sameNameTags(_ name: String, profile owner: WorkProfile?, in context: ModelContext) -> [WorkTag] {
+        let scope = ProfileScope(profileID: owner?.uuid)
+        return allTags(in: context).filter { tag in
+            guard sameName(tag.name, name) else { return false }
+            return owner == nil ? isGlobal(tag) : scope.offers(tag)
+        }
+    }
+
+    private static func clearDefaultLabel(uuid: UUID, in context: ModelContext) {
+        for profile in ProfileOps.allProfiles(in: context) where profile.defaultLabelUUID == uuid {
+            profile.defaultLabelUUID = nil
+            profile.touch()
+        }
     }
 
     /// Effective profile (`ProfileOps.effectiveProfile(of:)`) of each live session, by persistentModelID.

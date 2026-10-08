@@ -10,8 +10,8 @@ import AppKit
 ///   - Esc without modifiers → cancel
 ///   - ⌫ or ⌦ without modifiers → onClear()
 ///   - otherwise StoredShortcut(event:) → onRecord (unsupported keys: NSSound.beep(), keep recording)
-/// - Recording also ends on a second click, window resign-key, onDisappear, or when another recorder begins
-///   (one at a time).
+/// - Recording also ends on a second click, the recorder's OWN window resigning key (other windows — the overlay,
+///   the menu bar panel — don't count), onDisappear, or when another recorder begins (one at a time).
 /// - The monitor lives in a @State reference object; it is removed on every exit path and in deinit.
 ///
 /// (Extra) A click anywhere else in the app also ends recording (the click itself goes through), so keys are
@@ -48,10 +48,13 @@ struct ShortcutRecorder: View {
     }
 
     var body: some View {
-        Button(action: toggleRecording) {
+        Button {
+            toggleRecording()
+        } label: {
             keycap
         }
         .buttonStyle(.plain)
+        .background(ShortcutRecorderWindowReader(monitor: recorder))
         .onHover { isHovering = isEnabled && $0 }
         .help(isRecording ? "Esc cancels, ⌫ clears" : "Record shortcut")
         .accessibilityLabel(accessibilityName)
@@ -118,6 +121,7 @@ struct ShortcutRecorder: View {
 
     // MARK: Recording
 
+    @MainActor
     private func toggleRecording() {
         if isRecording {
             recorder.stop()
@@ -126,8 +130,9 @@ struct ShortcutRecorder: View {
         // The mouse-down of this very click already ended a recording (see ShortcutRecorderMonitor): stay stopped.
         guard !recorder.consumeEndedByClick(matching: NSApp.currentEvent) else { return }
         heldModifiers = ""
+        // The recorder's own window (never "whichever window is key"): only it resigning key ends recording.
         recorder.start(
-            in: NSApp.keyWindow,
+            in: recorder.hostWindow ?? NSApp.currentEvent?.window,
             onKeyEvent: { event in handle(event) },
             onEnd: {
                 isRecording = false
@@ -138,6 +143,7 @@ struct ShortcutRecorder: View {
     }
 
     /// Called for every keyDown / flagsChanged while recording (the event is swallowed).
+    @MainActor
     private func handle(_ event: NSEvent) {
         let modifiers = event.modifierFlags.intersection([.control, .option, .shift, .command])
         if event.type == .flagsChanged {
@@ -206,10 +212,14 @@ struct ResetToDefaultButton: View {
 /// starting one stops the other. Every exit path goes through `stop()`, which removes both and calls `onEnd`
 /// once; `deinit` removes them too.
 ///
-/// Not actor-isolated on purpose (so `deinit` can clean up); it is only used on the main thread
-/// (views, the local event monitor and a `.main`-queue observer).
+/// The class is not actor-isolated on purpose (so `deinit` can clean up); it is only used on the main thread
+/// (views, the local event monitor and a `.main`-queue observer). The shared `active` slot and the methods that
+/// touch it are `@MainActor`.
 private final class ShortcutRecorderMonitor {
-    private static weak var active: ShortcutRecorderMonitor?
+    @MainActor private static weak var active: ShortcutRecorderMonitor?
+
+    /// The window hosting the recorder (set by `ShortcutRecorderWindowReader`).
+    weak var hostWindow: NSWindow?
 
     private var eventMonitor: Any?
     private var resignObserver: NSObjectProtocol?
@@ -231,6 +241,9 @@ private final class ShortcutRecorderMonitor {
         return dx * dx + dy * dy < 100
     }
 
+    /// `window`: the recorder's own window; only its resign-key ends recording. Nil → no resign-key observer
+    /// (clicks, Esc, onDisappear and other recorders still end it).
+    @MainActor
     func start(in window: NSWindow?, onKeyEvent: @escaping (NSEvent) -> Void, onEnd: @escaping () -> Void) {
         if let other = Self.active, other !== self {
             other.stop()
@@ -251,18 +264,21 @@ private final class ShortcutRecorderMonitor {
             default:
                 // A click (on this recorder or anywhere else) ends recording and goes through.
                 self.endingClick = (Date(), event.windowNumber, event.locationInWindow)
-                self.stop()
+                MainActor.assumeIsolated { () -> Void in self.stop() }
                 return event
             }
         }
-        resignObserver = NotificationCenter.default.addObserver(
-            forName: NSWindow.didResignKeyNotification, object: window, queue: .main
-        ) { [weak self] _ in
-            self?.stop()
+        if let window {
+            resignObserver = NotificationCenter.default.addObserver(
+                forName: NSWindow.didResignKeyNotification, object: window, queue: .main
+            ) { [weak self] _ in
+                MainActor.assumeIsolated { () -> Void in self?.stop() }
+            }
         }
     }
 
     /// Removes the monitor and observer and calls `onEnd` (once). Safe to call when not recording.
+    @MainActor
     func stop() {
         if let eventMonitor {
             NSEvent.removeMonitor(eventMonitor)
@@ -287,5 +303,35 @@ private final class ShortcutRecorderMonitor {
         if let resignObserver {
             NotificationCenter.default.removeObserver(resignObserver)
         }
+    }
+}
+
+/// Reports the window hosting a `ShortcutRecorder` to its monitor (kept current as the view moves windows).
+private struct ShortcutRecorderWindowReader: NSViewRepresentable {
+    let monitor: ShortcutRecorderMonitor
+
+    func makeNSView(context: Context) -> ReaderView {
+        let view = ReaderView()
+        view.monitor = monitor
+        return view
+    }
+
+    func updateNSView(_ nsView: ReaderView, context: Context) {
+        nsView.monitor = monitor
+        if let window = nsView.window {
+            monitor.hostWindow = window
+        }
+    }
+
+    final class ReaderView: NSView {
+        weak var monitor: ShortcutRecorderMonitor?
+
+        override func viewDidMoveToWindow() {
+            super.viewDidMoveToWindow()
+            monitor?.hostWindow = window
+        }
+
+        /// Layout only: never takes clicks from the key cap.
+        override func hitTest(_ point: NSPoint) -> NSView? { nil }
     }
 }

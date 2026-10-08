@@ -250,7 +250,7 @@ All inits are exactly as in ARCHITECTURE.md §4.6. Usage is explicit: `.buttonSt
 | `LabelBadge(label:size:)` | Anywhere a label is shown. `.small` in rows, `.regular` default, `.large` for the Today active header. |
 | `TagChip(tag:isSelected:onRemove:)` | Single tag. Dot appears only for tags with a non-default color. Remove (×) help "Remove", a11y "Remove tag *name*". Not a filter: use `FilterChip`. |
 | `ColorDot(hex:size:)` | Decorative dot; pair with text. |
-| `TimerText(_:style:isPaused:)` | Pure display. Wrap in `TimelineView(.periodic(from: .now, by: 1))` when running; render statically when paused. |
+| `TimerText(_:style:isPaused:)` | Pure display. Wrap in `TimelineView(.periodic(from: .now, by: 1))` when running; render statically when paused. One line, no `fixedSize()`: it takes layout priority 1 over neighbouring text, and in a cell too narrow for it shrinks to 70 % and then truncates instead of overflowing. |
 | `PrimaryButtonStyle` | The one primary action (Start, Save, Create). Add `.keyboardShortcut(.defaultAction)` where it's the default. |
 | `QuietButtonStyle` | Secondary actions (Pause, Split, Cancel, Attach, Restore…). |
 | `DestructiveButtonStyle` | Discard / Delete. Always followed by a confirmation (`confirmationDialog`). |
@@ -272,12 +272,12 @@ All inits are exactly as in ARCHITECTURE.md §4.6. Usage is explicit: `.buttonSt
 | `View.themedPanelBackground(cornerRadius:)` | Material (or `elevatedSurface` when `!theme.usesMaterials`) panel fill. Overlay: `cornerRadius: theme.radiusL`; menu bar panel: `nil`. |
 | `View.insetField(isFocused:)` | Inset well styling for `TextField(...).textFieldStyle(.plain)` (note composer, quick note, titles). |
 | `CardSurfaceModifier(padding:)` | The modifier behind `Card`/`cardStyle()` with custom padding. |
-| `Theme` extras | `sectionHeaderFont`, `timerMediumFont`, `displayNumberFont`, `chipShape`, `chipRadius`, `tintOpacity`, `textScale`, `timerUsesAccent`, `sectionHeaderUppercased/Ruled`, `fontRecipe`, `isDark`, `color(for: SurfaceLevel)`, `chartColor(_ index:)`, `applyFonts(scale:)`, `applyAccent(_:)`, `Theme.make(_:colorScheme:accent:textSize:)`. |
+| `Theme` extras | `sectionHeaderFont`, `timerMediumFont`, `displayNumberFont`, `chipShape`, `chipRadius`, `tintOpacity`, `textScale`, `timerUsesAccent`, `sectionHeaderUppercased/Ruled`, `fontRecipe`, `color(for: SurfaceLevel)`, `chartColor(_ index:)`, `applyFonts(scale:)`, `applyAccent(_:)`, `Theme.make(_:colorScheme:accent:textSize:)`. |
 | `ThemeManager.textSize` | `ThemeTextSize` (`.small/.standard/.large/.extraLarge`, `displayName`, `scale`), key `"appearance.textSize"`; `resetToDefaults()`. |
 | `ThemeID.systemImage`, `AppearanceMode.systemImage`, `AccentChoice.nsColor`, `AccentChoice.prefersDarkForeground` | Small helpers for Settings. |
 | `LabelPalette.swatches` (`[LabelSwatch]` name+hex), `name(forHex:)`, `normalized(_:)`, `accessibilityName(forSymbol:)`, `defaultTagHex` | Palette helpers. |
 | `WorkTag.hasCustomColor` | False for the default gray (and for a deleted tag). |
-| `ModelLiveness.isLive(_:)`, `.live(_ model:)`, `.live(_ models:)` | Is a SwiftData model still readable (`!isDeleted && modelContext != nil`)? Use before reading a label/tag/note a view may still hold after it was deleted or merged (e.g. `@State var startLabel`). Shared controls, `LabelBadge`, `TagChip`, `label.color`/`tag.color` already guard. |
+| `ModelLiveness.isLive(_:)`, `.live(_ model:)`, `.live(_ models:)` (`Utilities/ModelLiveness.swift`) | The one liveness check (no inline `isDeleted || modelContext == nil` copies). Is a SwiftData model still readable (`!isDeleted && modelContext != nil`)? Use before reading a label/tag/note a view may still hold after it was deleted or merged (e.g. `@State var startLabel`). Shared controls, `LabelBadge`, `TagChip`, `label.color`/`tag.color` already guard. |
 | `LabelMenuIcon.image(symbol:hex:pointSize:)` / `.dot(color:diameter:)` | Colored non-template `NSImage`s for native menus (`Image(nsImage:)`), e.g. A's Split menu. |
 | `DesignSystemDurationSpeech.spoken(_:)` | "1 hour, 5 minutes" for `.accessibilityValue` on custom duration displays. |
 
@@ -308,7 +308,7 @@ need no Reduce Transparency handling (no materials). Signatures are final (ARCHI
 |---|---|
 | `LabelPicker(selection:includeNone:title:profileID:)` | Native pop-up `Picker` (`.menu`): "None", divider, the non-archived labels **offered in `profileID`** (global + local to it, §16.3) by `sortIndex` with colored symbol; an archived current selection is listed as "Name (archived)", a current selection local to another profile as "Name (Personal)". Shows its `title` on the left; use `.labelsHidden()` in compact places. |
 | `LabelValuePicker(_:selection:profileID:)` | Settings value sentence over labels ("Default label **Work ⌄**", "Parent label **None ⌄**"): a `ValuePicker` with "None" + the same options as `LabelPicker`; a deleted selection reads "None" and nil is written back. |
-| `TagPicker(selection:scopeLabel:profileID:allowsCreate:)` | Selected tags as removable chips + a dashed "+ Add tag" chip that opens a popover: search field (focused), **scope label's tags**, **Any label** (tags without a parent label), while searching **Other labels**, and selected tags of other profiles under **Other profiles**; only tags offered in `profileID` are listed otherwise. Rows toggle (multi-select, popover stays open); "Create “x”" creates a tag **local to `profileID`'s profile** (global when nil) via `TaxonomyOps.createTag(name:profile:in:)` and selects it. Return = toggle exact/only match or create. Bind with `$session.tagList`, `$segment.tagList`, `$point.tagList`. The picker does not call `touch()`. |
+| `TagPicker(selection:scopeLabel:profileID:allowsCreate:)` | Selected tags as removable chips + a dashed "+ Add tag" chip that opens a popover: search field (focused), **scope label's tags**, **Any label** (tags without a parent label), while searching **Other labels**, and selected tags of other profiles under **Other profiles**; only tags offered in `profileID` are listed otherwise. Rows toggle (multi-select, popover stays open); "Create “x”" creates a tag **local to `profileID`'s profile** (global when nil) via `TaxonomyOps.createTag(name:profile:in:)` and selects it; a name matching an archived tag offers "Unarchive “x”" instead (§16.3). Return = toggle exact/only match, unarchive or create. Bind with `$session.tagList`, `$segment.tagList`, `$point.tagList`. The picker does not call `touch()`. |
 | `TagChipsRow(tags:)` | Read-only chips; renders nothing when empty. |
 | `NoteRow(note:showsSegment:)` | `10:42` (caption, tabular, tertiary) · selectable body text (6 lines + "Show more") · optional segment caption (dot + focus) · "Edited". Read-only; add `.contextMenu` (Edit / Change time / Delete) in your feature. |
 | `LabelColorPicker(hex:)` | 15 swatches (wrapping) + system color well for custom; selected ring. |
@@ -955,9 +955,10 @@ modifier. Glyph order is ⌃⌥⇧⌘ + key.
 - While recording, a local `NSEvent` monitor swallows every key (including ⌘Q): **Esc** (no modifiers)
   cancels; **⌫ / ⌦** (no modifiers) clears the shortcut; any other supported key combination is handed to
   `onRecord` and validated by the store; unsupported keys (F-keys, keypad-only) beep and keep recording.
-- Recording ends on a second click, a click anywhere else (the click goes through), the window resigning
-  key, the field disappearing, or another recorder starting (one at a time). The monitor is removed on
-  every exit path.
+- Recording ends on a second click, a click anywhere else (the click goes through), **the recorder's own
+  window** resigning key (the overlay or menu bar panel losing key doesn't count; with no window known,
+  only the other exits apply), the field disappearing, or another recorder starting (one at a time). The
+  monitor is removed on every exit path.
 - VoiceOver: label = the action's title, value = the shortcut ("None" / "Recording"), hint "Records a new
   shortcut."
 
@@ -1194,7 +1195,11 @@ Rules (all pickers):
   and the cleaned value is written back (§9).
 - **Creating a tag** from `TagPicker` resolves the profile in the action (`ProfileOps.profile(withID:in:)`) and
   calls `TaxonomyOps.createTag(name:profile:in:)`: the tag is local to that profile, or global with no profile.
-  A same-name tag already offered there is reused.
+  A same-name tag already offered there is reused. If the typed name matches an **archived** tag offered there
+  (trimmed, case-/diacritic-insensitive; with no profile, global tags only), the bottom row reads
+  **Unarchive “x”** (`arrow.uturn.backward.circle.fill`, accent) instead of "Create “x”": it calls
+  `TaxonomyOps.unarchive(_:)` and selects the tag, so no duplicate is made. Return does the same. (Calling
+  `createTag` with that name also unarchives it instead of duplicating.)
 - In the tag popover the section for tags without a parent label is titled **Any label** (was "Global"), so
   "global" only ever means "all profiles".
 
@@ -1254,6 +1259,8 @@ above itself, inside the same bottom inset.
   ┌ SymbolPicker (profileSymbolChoices), 160 pt, scrolls ┐
   ( Cancel )                          [ Create ]   ← Create = default action, disabled while the name is blank
 ```
+Opened from the sidebar switcher it is a sheet in the main window, so `ProfileSwitcher` reports it with
+`router.childSheetDidAppear()` / `childSheetDidDisappear()`: an end-of-session review waits until it closes.
 
 **Today** (F1): idle, with 2+ profiles, `ProfileBadge(profile: profiles.activeProfile, size: .small)` sits next to
 the date in the header. If the profile offers no labels, the start card shows "No labels yet." (caption,

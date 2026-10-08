@@ -1,12 +1,14 @@
 import Combine
+import CoreData
 import SwiftData
 import SwiftUI
 
 /// Stats page (sidebar ▸ Stats): range picker, summary tiles and Swift Charts.
 ///
 /// All aggregation lives in `StatsCalculator` and runs off the main actor (`StatsModel`). The body only reads the
-/// cached `StatsResult`. Recomputation is triggered by: range/bucket/goal/week-start changes, a cheap fingerprint of
-/// the queried sessions/labels/tags, `ModelContext.didSave`, imports, and once a minute while a session is running.
+/// cached `StatsResult`. Recomputation is triggered by: range/bucket/goal/week-start changes, `ModelContext.didSave`,
+/// imports, CloudKit imports (persistent-store remote changes, coalesced), midnight (so "today" rolls over while the
+/// window stays open) and once a minute while a session is running.
 ///
 /// Scoped to the current profile. With more than one profile a header menu switches to "All profiles", which
 /// adds a "By profile" card.
@@ -19,14 +21,13 @@ struct StatsView: View {
     @Environment(ProfileStore.self) private var profileStore
 
     @Query(sort: \WorkSession.startedAt) private var sessions: [WorkSession]
-    @Query private var labels: [WorkLabel]
-    @Query private var tags: [WorkTag]
 
     @AppStorage("stats.range") private var range: StatsRange = .last30Days
     @AppStorage("stats.allProfiles") private var prefersAllProfiles = false
     @State private var bucketChoice: StatsBucket?
     @State private var model = StatsModel()
     @State private var dataVersion = 0
+    @State private var remoteChangeCount = 0
 
     init() {}
 
@@ -41,10 +42,22 @@ struct StatsView: View {
             .frame(maxWidth: .infinity)
         }
         .themedBackground()
-        .onChange(of: dataFingerprint) { dataVersion &+= 1 }
         .onChange(of: range) { bucketChoice = nil }
         .onReceive(NotificationCenter.default.publisher(for: ModelContext.didSave)) { _ in dataVersion &+= 1 }
         .onReceive(NotificationCenter.default.publisher(for: .worklogDataDidImport)) { _ in dataVersion &+= 1 }
+        // Midnight: the snapshot's "now" (today, streaks, window) must move to the new day.
+        .onReceive(LiveDayChange.publisher) { _ in dataVersion &+= 1 }
+        .onReceive(NotificationCenter.default.publisher(for: .NSPersistentStoreRemoteChange)
+            .receive(on: DispatchQueue.main)) { _ in
+            remoteChangeCount &+= 1
+        }
+        .task(id: remoteChangeCount) {
+            // CloudKit imports: wait for the merge into the view context, then rebuild once per burst.
+            guard remoteChangeCount > 0 else { return }
+            try? await Task.sleep(for: .seconds(1))
+            if Task.isCancelled { return }
+            dataVersion &+= 1
+        }
         .task(id: engine.isActive) {
             // Keep the running session's time roughly current.
             guard engine.isActive else { return }
@@ -68,9 +81,7 @@ struct StatsView: View {
 
     /// The profile menu is offered when there is more than one profile (archived ones count: their time shows
     /// under "All profiles").
-    private var offersProfileScope: Bool {
-        profileStore.profiles.count + profileStore.archivedProfiles.count > 1
-    }
+    private var offersProfileScope: Bool { profileStore.showsProfileScope }
 
     private var showsAllProfiles: Bool { prefersAllProfiles && offersProfileScope }
 
@@ -94,32 +105,6 @@ struct StatsView: View {
     }
 
     private var refreshKey: RefreshKey { RefreshKey(options: options, scope: scope, dataVersion: dataVersion) }
-
-    /// Cheap change detector over the queried models (attribute reads only, no relationship traversal).
-    private var dataFingerprint: Int {
-        var hasher = Hasher()
-        hasher.combine(sessions.count)
-        for session in sessions {
-            hasher.combine(session.uuid)
-            hasher.combine(session.modifiedAt)
-            hasher.combine(session.endedAt)
-            hasher.combine(session.pauseIntervalsData)
-        }
-        hasher.combine(labels.count)
-        for label in labels {
-            hasher.combine(label.uuid)
-            hasher.combine(label.name)
-            hasher.combine(label.colorHex)
-            hasher.combine(label.sortIndex)
-        }
-        hasher.combine(tags.count)
-        for tag in tags {
-            hasher.combine(tag.uuid)
-            hasher.combine(tag.name)
-            hasher.combine(tag.colorHex)
-        }
-        return hasher.finalize()
-    }
 
     // MARK: - Header
 
@@ -194,7 +179,7 @@ struct StatsView: View {
                     title: "Not enough data",
                     systemImage: "chart.bar.xaxis",
                     message: "Finish a session to see stats.",
-                    actionTitle: "Start session",
+                    actionTitle: "Go to Today",
                     action: { router.show(.today) }
                 )
                 .frame(minHeight: 320)

@@ -12,6 +12,9 @@ import SwiftData
 /// Profiles: every label/tag picker here offers the session's own profile's items. With 2+ profiles a Profile
 /// picker moves the session (`SessionEditor.moveSession`, asking first when labels or tags would be copied);
 /// a session moved out of the current profile leaves History and the selection clears.
+///
+/// Deleting: History passes `onDelete` so "Delete Session…" here takes the same path as ⌫ in the list (neighbour
+/// selected, row removed, then deleted). Without it (previews) the view clears the selection and deletes itself.
 @MainActor
 struct SessionDetailView: View {
     @Environment(\.theme) private var theme
@@ -21,6 +24,8 @@ struct SessionDetailView: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Bindable private var session: WorkSession
+    /// Called after the user confirmed "Delete Session…" (History's delete path).
+    private let onDelete: ((WorkSession) -> Void)?
 
     @State private var isComposingNote = false
     @State private var isEditingTimes = false
@@ -29,12 +34,13 @@ struct SessionDetailView: View {
     @State private var pendingMove: LiveProfileMove.Request?
     @FocusState private var titleFocused: Bool
 
-    init(session: WorkSession) {
+    init(session: WorkSession, onDelete: ((WorkSession) -> Void)? = nil) {
         self._session = Bindable(wrappedValue: session)
+        self.onDelete = onDelete
     }
 
     var body: some View {
-        if session.isDeleted || session.modelContext == nil {
+        if !ModelLiveness.isLive(session) {
             EmptyStateView(title: "Session deleted",
                            systemImage: "trash",
                            message: "This session no longer exists.")
@@ -223,14 +229,9 @@ struct SessionDetailView: View {
         .fixedSize(horizontal: false, vertical: true)
     }
 
-    @ViewBuilder
     private var durationsText: some View {
-        if session.isActive && !session.isPaused {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                durations(at: context.date)
-            }
-        } else {
-            durations(at: .now)
+        LiveTicker(isTicking: session.isActive && !session.isPaused) { date in
+            durations(at: date)
         }
     }
 
@@ -315,7 +316,7 @@ struct SessionDetailView: View {
 
     // MARK: - Actions
 
-    private var isAlive: Bool { !session.isDeleted && session.modelContext != nil }
+    private var isAlive: Bool { ModelLiveness.isLive(session) }
 
     private var context: ModelContext { session.modelContext ?? environmentContext }
 
@@ -325,10 +326,15 @@ struct SessionDetailView: View {
         scroll(proxy, to: DetailAnchor.notes)
     }
 
+    /// Open panel, then import off the main thread (`AttachmentImporter`); scrolls to Images when something was added.
     private func addImages(_ proxy: ScrollViewProxy) {
         guard isAlive else { return }
-        let added = AttachmentImporter.addFromOpenPanel(to: session, in: context)
-        if !added.isEmpty {
+        let session = self.session
+        let context = self.context
+        let countBefore = session.attachments?.count ?? 0
+        Task { @MainActor in
+            _ = await AttachmentImporter.addFromOpenPanel(to: session, in: context)
+            guard ModelLiveness.isLive(session), (session.attachments?.count ?? 0) > countBefore else { return }
             scroll(proxy, to: DetailAnchor.images)
         }
     }
@@ -362,10 +368,16 @@ struct SessionDetailView: View {
         }
     }
 
-    /// Clears the selection first (History then unmounts this view), and deletes a moment later so no
-    /// view still shows the model when it goes away. The engine refreshes the takeaway on save.
+    /// History's delete path when given (`onDelete`). Otherwise clears the selection first (History then unmounts
+    /// this view), and deletes a moment later so no view still shows the model when it goes away. The engine
+    /// refreshes the takeaway on save.
     private func deleteSession() {
         guard isAlive else { return }
+        if let onDelete {
+            save()
+            onDelete(session)
+            return
+        }
         let context = self.context
         let session = self.session
         let router = self.router
@@ -377,7 +389,7 @@ struct SessionDetailView: View {
         Task { @MainActor in
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(60))
-            guard !session.isDeleted, session.modelContext != nil else { return }
+            guard ModelLiveness.isLive(session) else { return }
             do {
                 try SessionEditor.deleteSession(session, in: context)
             } catch {
@@ -495,7 +507,7 @@ struct DetailTimesEditor: View {
     }
 
     private func save() {
-        guard let context = session.modelContext, !session.isDeleted else {
+        guard ModelLiveness.isLive(session), let context = session.modelContext else {
             onDone()
             return
         }

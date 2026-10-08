@@ -19,7 +19,7 @@ struct HistoryRowView: View {
     }
 
     var body: some View {
-        if session.isDeleted || session.modelContext == nil {
+        if !ModelLiveness.isLive(session) {
             EmptyView()
         } else {
             content
@@ -183,14 +183,9 @@ struct HistoryLiveRow: View {
         .accessibilityHint("Opens Today.")
     }
 
-    @ViewBuilder
     private var timer: some View {
-        if engine.isPaused {
-            TimerText(engine.elapsed(), style: .compact, isPaused: true)
-        } else {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                TimerText(engine.elapsed(at: context.date), style: .compact)
-            }
+        LiveTicker(isTicking: !engine.isPaused) { date in
+            TimerText(engine.elapsed(at: date), style: .compact, isPaused: engine.isPaused)
         }
     }
 }

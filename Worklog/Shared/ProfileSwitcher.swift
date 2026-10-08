@@ -88,6 +88,9 @@ struct ProfileSwitcher: View {
             ProfileCreateSheet()
                 .environment(profiles)
                 .environment(\.theme, theme)
+                // A sheet in the main window: hold the end-of-session review until it closes.
+                .onAppear { router.childSheetDidAppear() }
+                .onDisappear { router.childSheetDidDisappear() }
         }
     }
 

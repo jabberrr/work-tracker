@@ -6,6 +6,17 @@ import UniformTypeIdentifiers
 
 struct ImportedImage: Sendable { let data: Data; let filename: String }
 
+/// A downscaled, encoded image ready to become an `Attachment` (made off the main thread; the model object is
+/// created on the main actor).
+struct PreparedImage: Sendable {
+    let filename: String
+    let data: Data
+    let thumbnailData: Data
+    let uti: String
+    let pixelWidth: Int
+    let pixelHeight: Int
+}
+
 enum AttachmentImportError: LocalizedError {
     case unreadableImage, encodingFailed, fileTooLarge, imageTooLarge
 
@@ -21,9 +32,9 @@ enum AttachmentImportError: LocalizedError {
 
 /// Turns image files / pasteboard / drops into downscaled, compressed `Attachment`s.
 @MainActor enum AttachmentImporter {
-    static let maxPixelDimension: Int = 2048
-    static let thumbnailPixelDimension: Int = 400
-    static let jpegQuality: Double = 0.8
+    nonisolated static let maxPixelDimension: Int = 2048
+    nonisolated static let thumbnailPixelDimension: Int = 400
+    nonisolated static let jpegQuality: Double = 0.8
     /// Files/data larger than this are rejected before decoding.
     nonisolated static let maxSourceBytes: Int = 100 * 1024 * 1024
     /// Images with more pixels than this are rejected before thumbnailing (decompression-bomb guard).
@@ -35,21 +46,37 @@ enum AttachmentImportError: LocalizedError {
     /// CreateThumbnailFromImageAlways). Output: PNG if source has alpha, else JPEG(0.8). Fills pixel size, thumbnail, uti.
     /// Returned Attachment is NOT inserted. Metadata (EXIF/GPS) is not carried over.
     static func makeAttachment(fromImageData data: Data, filename: String) throws -> Attachment {
+        makeAttachment(try prepare(imageData: data, filename: filename))
+    }
+
+    static func makeAttachment(fromFileAt url: URL) throws -> Attachment {
+        makeAttachment(try prepare(fileAt: url))
+    }
+
+    /// The (not inserted) Attachment for an image prepared by `prepare(…)`.
+    static func makeAttachment(_ image: PreparedImage) -> Attachment {
+        Attachment(filename: image.filename, data: image.data, thumbnailData: image.thumbnailData, uti: image.uti,
+                   pixelWidth: image.pixelWidth, pixelHeight: image.pixelHeight)
+    }
+
+    /// Downscale + encode (see `makeAttachment(fromImageData:filename:)`); safe off the main thread.
+    nonisolated static func prepare(imageData data: Data, filename: String) throws -> PreparedImage {
         guard data.count <= maxSourceBytes else { throw AttachmentImportError.fileTooLarge }
         guard let source = CGImageSourceCreateWithData(data as CFData, [kCGImageSourceShouldCache: false] as CFDictionary) else {
             throw AttachmentImportError.unreadableImage
         }
-        return try makeAttachment(from: source, filename: filename)
+        return try prepare(from: source, filename: filename)
     }
 
-    static func makeAttachment(fromFileAt url: URL) throws -> Attachment {
+    /// Same for a file (security-scoped access is started and stopped here); safe off the main thread.
+    nonisolated static func prepare(fileAt url: URL) throws -> PreparedImage {
         let accessing = url.startAccessingSecurityScopedResource()
         defer { if accessing { url.stopAccessingSecurityScopedResource() } }
         guard isWithinSizeLimit(url) else { throw AttachmentImportError.fileTooLarge }
         guard let source = CGImageSourceCreateWithURL(url as CFURL, [kCGImageSourceShouldCache: false] as CFDictionary) else {
             throw AttachmentImportError.unreadableImage
         }
-        return try makeAttachment(from: source, filename: url.lastPathComponent)
+        return try prepare(from: source, filename: url.lastPathComponent)
     }
 
     /// True when the file's size is known and ≤ `maxSourceBytes` (unknown sizes are rejected).
@@ -72,7 +99,7 @@ enum AttachmentImportError: LocalizedError {
         return width > 0 && height > 0 && width.multipliedReportingOverflow(by: height).partialValue <= maxSourcePixels
     }
 
-    private static func makeAttachment(from source: CGImageSource, filename: String) throws -> Attachment {
+    nonisolated private static func prepare(from source: CGImageSource, filename: String) throws -> PreparedImage {
         guard CGImageSourceGetCount(source) > 0 else { throw AttachmentImportError.unreadableImage }
         let properties = CGImageSourceCopyPropertiesAtIndex(source, 0, nil) as? [CFString: Any] ?? [:]
         let sourceWidth = (properties[kCGImagePropertyPixelWidth] as? NSNumber)?.intValue ?? 0
@@ -96,10 +123,8 @@ enum AttachmentImportError: LocalizedError {
         let thumbData = try encode(thumbImage, asPNG: hasAlpha)
 
         let uti = hasAlpha ? UTType.png.identifier : UTType.jpeg.identifier
-        let attachment = Attachment(filename: normalizedFilename(filename, png: hasAlpha), data: fullData,
-                                    thumbnailData: thumbData, uti: uti,
-                                    pixelWidth: image.width, pixelHeight: image.height)
-        return attachment
+        return PreparedImage(filename: normalizedFilename(filename, png: hasAlpha), data: fullData,
+                             thumbnailData: thumbData, uti: uti, pixelWidth: image.width, pixelHeight: image.height)
     }
 
     /// NSOpenPanel (images, multiple selection).
@@ -201,6 +226,8 @@ enum AttachmentImportError: LocalizedError {
         return created
     }
 
+    /// Open panel, then downscale/encode synchronously ON THE MAIN THREAD (the UI waits). Prefer the async overload
+    /// (`await addFromOpenPanel(to:in:)` from a Task), which does that work in the background.
     @discardableResult
     static func addFromOpenPanel(to session: WorkSession, in context: ModelContext) -> [Attachment] {
         var created: [Attachment] = []
@@ -215,6 +242,41 @@ enum AttachmentImportError: LocalizedError {
         }
         finish(session, created: created, context: context)
         return created
+    }
+
+    /// Open panel (modal), then the images are downscaled and encoded off the main thread; the attachments are
+    /// inserted, linked and saved back on the main actor — only if `session` still exists by then (it may have been
+    /// discarded or deleted meanwhile). Failures are skipped and logged. Returns the created attachments.
+    /// (Overloads the synchronous version: called with `await`, from a Task.)
+    @discardableResult
+    static func addFromOpenPanel(to session: WorkSession, in context: ModelContext) async -> [Attachment] {
+        let urls = chooseImageFiles()
+        guard !urls.isEmpty else { return [] }
+        let prepared = await Task.detached(priority: .userInitiated) {
+            AttachmentImporter.prepareFiles(urls)
+        }.value
+        guard !prepared.isEmpty, ModelLiveness.isLive(session) else { return [] }
+        var created: [Attachment] = []
+        for image in prepared {
+            let attachment = makeAttachment(image)
+            insert(attachment, into: session, context: context)
+            created.append(attachment)
+        }
+        finish(session, created: created, context: context)
+        return created
+    }
+
+    /// `prepare(fileAt:)` for each URL, skipping (and logging) failures. Runs off the main thread.
+    nonisolated static func prepareFiles(_ urls: [URL]) -> [PreparedImage] {
+        var prepared: [PreparedImage] = []
+        for url in urls {
+            do {
+                prepared.append(try prepare(fileAt: url))
+            } catch {
+                Log.ui.error("Skipping file \(url.lastPathComponent, privacy: .private): \(error.localizedDescription, privacy: .public)")
+            }
+        }
+        return prepared
     }
 
     /// NSSavePanel; writes `data`.
@@ -256,7 +318,7 @@ enum AttachmentImportError: LocalizedError {
         }
     }
 
-    private static func thumbnail(of source: CGImageSource, maxPixelSize: Int) -> CGImage? {
+    nonisolated private static func thumbnail(of source: CGImageSource, maxPixelSize: Int) -> CGImage? {
         let options: [CFString: Any] = [
             kCGImageSourceCreateThumbnailFromImageAlways: true,
             kCGImageSourceCreateThumbnailWithTransform: true,
@@ -266,14 +328,14 @@ enum AttachmentImportError: LocalizedError {
         return CGImageSourceCreateThumbnailAtIndex(source, 0, options as CFDictionary)
     }
 
-    private static func imageHasAlpha(_ image: CGImage) -> Bool {
+    nonisolated private static func imageHasAlpha(_ image: CGImage) -> Bool {
         switch image.alphaInfo {
         case .none, .noneSkipFirst, .noneSkipLast: false
         default: true
         }
     }
 
-    private static func encode(_ image: CGImage, asPNG: Bool) throws -> Data {
+    nonisolated private static func encode(_ image: CGImage, asPNG: Bool) throws -> Data {
         let output = NSMutableData()
         let type = (asPNG ? UTType.png : UTType.jpeg).identifier as CFString
         guard let destination = CGImageDestinationCreateWithData(output as CFMutableData, type, 1, nil) else {
@@ -285,7 +347,7 @@ enum AttachmentImportError: LocalizedError {
         return output as Data
     }
 
-    private static func normalizedFilename(_ filename: String, png: Bool) -> String {
+    nonisolated private static func normalizedFilename(_ filename: String, png: Bool) -> String {
         let base = (filename as NSString).deletingPathExtension.trimmed
         let stem = base.isEmpty ? "Image" : base
         return "\(stem).\(png ? "png" : "jpg")"

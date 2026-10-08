@@ -79,6 +79,9 @@ final class ProfileStore {
 
     var activeScope: ProfileScope { ProfileScope(profileID: activeProfileID) }
     var hasMultipleProfiles: Bool { profiles.count > 1 }
+    /// More than one profile exists, archived ones included: views then show profile scope (badges, "This profile /
+    /// All profiles" pickers, per-profile usage).
+    var showsProfileScope: Bool { profiles.count + archivedProfiles.count > 1 }
 
     /// settings.quickStartProfileID resolved among `profiles`, else activeProfile.
     var quickStartProfile: WorkProfile? {

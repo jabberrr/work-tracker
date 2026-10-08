@@ -21,7 +21,9 @@ struct RootView: View {
     @State private var dismissedSyncError: String?
     /// True while the end-of-session sheet is on screen (so later navigation to Settings can't hide it).
     @State private var isEndSheetVisible = false
-    /// Briefly holds back the end-of-session sheet while Settings (and any sheet it presented) is closed for it.
+    /// Briefly holds back the end-of-session sheet while Settings (and any sheet it presented) is closed for it, after
+    /// the last child sheet closed, and on "Review…" (`router.reviewRequest`): the nil → session toggle makes SwiftUI
+    /// present it again.
     @State private var holdEndSheet = false
     /// The sidebar's inline profile list (owned here so a click elsewhere in the sidebar can collapse it).
     @State private var isProfileListExpanded = false
@@ -57,12 +59,19 @@ struct RootView: View {
             // Settings pages present their own sheets in this window, which would block the review sheet:
             // leave Settings first and present the review once its sheets are gone.
             guard newValue != nil, router.selection == .settings, !isEndSheetVisible else { return }
-            holdEndSheet = true
             router.selection = .today
-            Task { @MainActor in
-                try? await Task.sleep(for: .milliseconds(400))
-                holdEndSheet = false
-            }
+            holdEndSheetBriefly()
+        }
+        .onChange(of: router.presentedChildSheets) { oldValue, newValue in
+            // The last child sheet (Split, image viewer, New Profile…) closed: present a held-back review once its
+            // dismissal has finished.
+            guard oldValue > 0, newValue == 0, engine.pendingEndSession != nil, !isEndSheetVisible else { return }
+            holdEndSheetBriefly()
+        }
+        .onChange(of: router.reviewRequest) { _, _ in
+            // "Review…": a review SwiftUI didn't present (another sheet was up) needs the item to change again.
+            guard engine.pendingEndSession != nil, !isEndSheetVisible else { return }
+            holdEndSheetBriefly()
         }
         .onChange(of: router.selection) { _, _ in
             collapseProfileList()
@@ -99,13 +108,23 @@ struct RootView: View {
         }
     }
 
-    /// The review sheet's item. Not presented while Settings is on screen (until the sheet is up, see the
-    /// `pendingEndSession` onChange) or while `holdEndSheet` is set.
+    /// The review sheet's item. Not presented (until the sheet is up) while Settings is on screen (see the
+    /// `pendingEndSession` onChange), while another sheet is up in this window (`router.presentedChildSheets`) or
+    /// while `holdEndSheet` is set. Becoming non-nil again presents it.
     private var endSheetSession: WorkSession? {
         guard let session = engine.pendingEndSession else { return nil }
         if isEndSheetVisible { return session }
-        if holdEndSheet || router.selection == .settings { return nil }
+        if holdEndSheet || router.selection == .settings || router.presentedChildSheets > 0 { return nil }
         return session
+    }
+
+    /// Item nil for 400 ms, then back to the session (SwiftUI presents a sheet when its item changes).
+    private func holdEndSheetBriefly() {
+        holdEndSheet = true
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(400))
+            holdEndSheet = false
+        }
     }
 
     // MARK: - Welcome ▸ Settings
@@ -269,14 +288,9 @@ struct RootView: View {
         return sessionProfileID != profiles.activeProfileID
     }
 
-    @ViewBuilder
     private var miniTimer: some View {
-        if engine.isPaused {
-            timerText(engine.elapsed())
-        } else {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                timerText(engine.elapsed(at: context.date))
-            }
+        LiveTicker(isTicking: engine.isRunning) { date in
+            timerText(engine.elapsed(at: date))
         }
     }
 
@@ -391,15 +405,26 @@ struct RootView: View {
         var items: [BannerItem] = []
 
         if case .inMemory(let reason) = persistence.storeMode, reason != "Preview" {
-            items.append(BannerItem(
-                id: "inMemory",
-                message: "Your data couldn\u{2019}t be opened. Changes won\u{2019}t be saved.",
-                systemImage: "exclamationmark.triangle.fill",
-                style: .error,
-                help: reason,
-                actionTitle: "Restore\u{2026}",
-                action: { router.showSettings(tab: "data") }
-            ))
+            if persistence.isStoreFromNewerVersion {
+                // Recover isn't offered for a newer store (it must not be moved aside): update the app instead.
+                items.append(BannerItem(
+                    id: "inMemory",
+                    message: "Your data needs a newer Worklog. Changes won\u{2019}t be saved.",
+                    systemImage: "exclamationmark.triangle.fill",
+                    style: .error,
+                    help: reason
+                ))
+            } else {
+                items.append(BannerItem(
+                    id: "inMemory",
+                    message: "Your data couldn\u{2019}t be opened. Changes won\u{2019}t be saved.",
+                    systemImage: "exclamationmark.triangle.fill",
+                    style: .error,
+                    help: reason,
+                    actionTitle: "Restore\u{2026}",
+                    action: { router.showSettings(tab: "data") }
+                ))
+            }
         }
 
         if let error = sync.lastErrorDescription, error != dismissedSyncError {
@@ -416,13 +441,19 @@ struct RootView: View {
         }
 
         if let notice = persistence.launchNotice {
-            items.append(BannerItem(
+            var item = BannerItem(
                 id: "launchNotice",
                 message: notice,
                 systemImage: "info.circle.fill",
                 style: .info,
                 onDismiss: { persistence.launchNotice = nil }
-            ))
+            )
+            if persistence.launchNoticeOffersRestore {
+                // The notice points at a backup in Settings ▸ Data (data shrank, a restore failed).
+                item.actionTitle = "Restore\u{2026}"
+                item.action = { router.showSettings(tab: "data") }
+            }
+            items.append(item)
         }
 
         if let notice = engine.handoffNotice {
@@ -445,7 +476,8 @@ struct RootView: View {
                 style: .info,
                 help: reason,
                 actionTitle: "Details\u{2026}",
-                action: { router.showSettings(tab: "account") },
+                // An environment mismatch is resolved in Settings ▸ Data ("Move to iCloud …" / "Keep Local Only").
+                action: { router.showSettings(tab: persistence.environmentMismatch != nil ? "data" : "account") },
                 onDismiss: { settings.dismissedLocalOnlyBannerReason = reason }
             ))
         }

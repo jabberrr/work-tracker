@@ -94,19 +94,23 @@ struct WelcomeView: View {
                 ? "iCloud isn’t available, so your data stays on this Mac."
                 : "Your data stays on this Mac until you turn on iCloud sync."
         case .inMemory(let reason):
-            return reason == "Preview"
-                ? "Preview, so nothing is saved."
-                : "Your data couldn’t be opened. Changes won’t be saved."
+            if reason == "Preview" { return "Preview, so nothing is saved." }
+            // A newer Worklog made this data: it is left untouched (no Recover); installing that version opens it.
+            if persistence.isStoreFromNewerVersion {
+                return "Your data was made by a newer version of Worklog. Install it to open your data. Changes here won’t be saved."
+            }
+            return "Your data couldn’t be opened. Changes won’t be saved."
         }
     }
 
     // MARK: Settings
 
     /// Settings is reachable before signing in: RootView shows it full-window (with a Back button) while
-    /// `router.selection == .settings` on the welcome path. "Recover…" appears only when the store failed to open.
+    /// `router.selection == .settings` on the welcome path. "Recover…" appears only when the store failed to open and
+    /// may be moved aside (never for a store a newer Worklog made).
     private var settingsActions: some View {
         HStack(spacing: theme.spacingM) {
-            if persistence.isRecoveryMode {
+            if SettingsRecovery.isNeeded(persistence) {
                 Button("Recover…") { router.showSettings(tab: SettingsTab.data.rawValue) }
                     .buttonStyle(QuietButtonStyle())
             }

@@ -23,7 +23,7 @@ struct EndSessionSheet: View {
     }
 
     var body: some View {
-        if LiveModelGuard.isUsable(session) {
+        if ModelLiveness.isLive(session) {
             EndSessionForm(session: session, onDiscard: discard)
         } else {
             // Deleted elsewhere (e.g. replaced by an import) while the sheet was up.
@@ -61,11 +61,8 @@ private struct EndSessionForm: View {
     @State private var showsSegments = false
     @State private var showsLearnings = false
     @FocusState private var titleFocused: Bool
-    @FocusState private var takeawayFocused: Bool
 
     private static let fieldLabelWidth: CGFloat = 72
-    /// Same guidance as LearningsEditor's takeaway counter.
-    private static let takeawayGuidanceLength = 140
 
     init(session: WorkSession, onDiscard: @escaping () -> Void) {
         self._session = Bindable(wrappedValue: session)
@@ -199,46 +196,22 @@ private struct EndSessionForm: View {
                     .frame(minWidth: 0, maxWidth: 260, alignment: .leading)
             }
             fieldRow("Tags") {
-                TagPicker(selection: sessionTagsBinding, scopeLabel: session.label, profileID: sessionProfile?.uuid)
-            }
-            fieldRow("Takeaway") {
-                takeawayField
-            }
-        }
-    }
-
-    /// The one line shown in the overlay and menu bar during the next session (`overlaySummary`). The same field
-    /// also appears inside the Learnings disclosure (LearningsEditor); both edit the same property.
-    private var takeawayField: some View {
-        let count = session.overlaySummary.trimmed.count
-        let limit = Self.takeawayGuidanceLength
-        return VStack(alignment: .leading, spacing: theme.spacingXS) {
-            TextField("Takeaway", text: $session.overlaySummary,
-                      prompt: Text("One line for next time"))
-                .textFieldStyle(.plain)
-                .font(theme.bodyFont)
-                .focused($takeawayFocused)
-                .insetField(isFocused: takeawayFocused)
-                .accessibilityLabel("Takeaway for next time")
-                .onChange(of: session.overlaySummary) { oldValue, newValue in
-                    guard LiveModelGuard.isUsable(session) else { return }
-                    if oldValue.isBlank && !newValue.isBlank && !session.showInOverlay {
-                        session.showInOverlay = true
+                VStack(alignment: .leading, spacing: theme.spacingXS) {
+                    TagPicker(selection: sessionTagsBinding, scopeLabel: session.label,
+                              profileID: sessionProfile?.uuid)
+                    // Start and split tags live on segments: name them so the empty field doesn't look like a loss.
+                    if let segmentTags = segmentOnlyTagsLine {
+                        Text(segmentTags)
+                            .font(theme.captionFont)
+                            .foregroundStyle(theme.textTertiary)
+                            .lineLimit(2)
+                            .help("Tags on segments. Edit them in History.")
                     }
                 }
-            HStack(spacing: theme.spacingS) {
-                Toggle("Show in overlay & menu bar", isOn: $session.showInOverlay)
-                    .toggleStyle(.checkbox)
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.textSecondary)
-                Spacer(minLength: theme.spacingS)
-                if count > 0 {
-                    Text("\(count)/\(limit)")
-                        .font(theme.captionFont.monospacedDigit())
-                        .foregroundStyle(count > limit ? theme.warning : theme.textTertiary)
-                        .help("Suggested length")
-                        .accessibilityLabel("\(count) of \(limit) suggested characters")
-                }
+            }
+            // The one line shown in the overlay and menu bar during the next session (`overlaySummary`).
+            fieldRow("Takeaway") {
+                TakeawayField(session: session)
             }
         }
     }
@@ -257,25 +230,37 @@ private struct EndSessionForm: View {
 
     /// Labels and tags offered here are the session's own profile's.
     private var sessionProfile: WorkProfile? {
-        LiveModelGuard.isUsable(session) ? ProfileOps.effectiveProfile(of: session) : nil
+        ModelLiveness.isLive(session) ? ProfileOps.effectiveProfile(of: session) : nil
     }
 
     /// Changing the primary label also relabels the segments that followed the old one.
     private var primaryLabelBinding: Binding<WorkLabel?> {
         Binding(
-            get: { LiveModelGuard.isUsable(session) ? session.label : nil },
+            get: { ModelLiveness.isLive(session) ? session.label : nil },
             set: { newValue in
-                guard LiveModelGuard.isUsable(session) else { return }
+                guard ModelLiveness.isLive(session) else { return }
                 SessionEditor.setPrimaryLabel(newValue, for: session, in: modelContext)
             }
         )
     }
 
+    /// "Segments: #bugfix #review": segment tags that aren't also session tags, or nil.
+    private var segmentOnlyTagsLine: String? {
+        guard ModelLiveness.isLive(session) else { return nil }
+        let sessionTagIDs = Set(session.tagList.map(\.uuid))
+        var seen = Set<UUID>()
+        let names = session.sortedSegments
+            .flatMap { ModelLiveness.isLive($0) ? $0.tagList : [] }
+            .filter { ModelLiveness.isLive($0) && !sessionTagIDs.contains($0.uuid) && seen.insert($0.uuid).inserted }
+            .map { "#\($0.name)" }
+        return names.isEmpty ? nil : "Segments: " + names.joined(separator: " ")
+    }
+
     private var sessionTagsBinding: Binding<[WorkTag]> {
         Binding(
-            get: { LiveModelGuard.isUsable(session) ? session.tagList : [] },
+            get: { ModelLiveness.isLive(session) ? session.tagList : [] },
             set: { newValue in
-                guard LiveModelGuard.isUsable(session) else { return }
+                guard ModelLiveness.isLive(session) else { return }
                 session.tagList = newValue
                 session.touch()
             }
@@ -403,7 +388,7 @@ private struct EndSessionForm: View {
     }
 
     private func save() {
-        guard LiveModelGuard.isUsable(session) else {
+        guard ModelLiveness.isLive(session) else {
             engine.completeReview()
             return
         }
@@ -430,7 +415,7 @@ private struct EndSessionSegmentRow: View {
     }
 
     var body: some View {
-        if LiveModelGuard.isUsable(segment) {
+        if ModelLiveness.isLive(segment) {
             HStack(alignment: .firstTextBaseline, spacing: theme.spacingM) {
                 Text(timeRange)
                     .font(theme.captionFont.monospacedDigit())

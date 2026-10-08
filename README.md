@@ -168,8 +168,11 @@ xcodebuild test -project Worklog.xcodeproj -scheme Worklog -destination 'platfor
 ```
 
 The unit tests run in in-memory SwiftData containers. Under XCTest, `AppServices.shared` is in-memory too, so tests never touch your real data. They cover:
-- session math: pauses, midnight crossing, segments
-- the session engine state machine (including the two-Mac handoff and deferred discard)
+- session math: pauses, midnight crossing, segments, and the pause-interval decode cache
+- stats: streaks (including "nothing today yet"), the 60-second active-day minimum, sessions crossing midnight, bucket thresholds, and tag time for segment vs. session tags
+- the rules behind Today, the menu bar and the overlay: today's total, the default label, resolving picked labels/tags, the long-session warning and "Keep going"
+- the session engine state machine (including the two-Mac handoff and deferred discard, start tags on the first segment, and the review surviving a relaunch)
+- creating a tag or label with an archived one's name (it is unarchived instead of duplicated)
 - `SessionEditor` split, merge, delete and move-boundary invariants
 - a JSON export → import round trip, merge never overwriting newer data, CSV quoting and the formula-injection guard
 - duplicate-row tie-breaking and the backup retention policy
@@ -177,10 +180,11 @@ The unit tests run in in-memory SwiftData containers. Under XCTest, `AppServices
 - profiles: the migration of existing data, profile dedupe and repair, `ProfileScope`, scoped tag creation, making labels/tags local (copies for other profiles), moving sessions between profiles, deleting/archiving profiles, the persisted selection, the profile-aware engine (start, default label, today total, per-profile takeaways), scoped search and export format 2 (including importing format-1 files)
 - shortcut defaults, display strings, validation (conflicts, reserved combos, missing ⌘/⌃, ⇧ without a letter), clearing, reset (and the action it clears) and persistence (including de-duplicating stored overrides)
 - data safety: the CloudKit environment guard's decision table, the PreOpen snapshot key and model hash, newer-store detection, the restore marker format and restore mode, session dedupe keeping notes/images/learning points, imported running sessions (ended unless this Mac owned them), Replace keeping the store's own images, merge updating re-seeded defaults and newer profiles, reconcile leaving another Mac's just-started session alone, the engine forgetting a deleted active session, and per-kind backup retention
+- recovery paths on disk, run in a temporary folder: the restore marker, PreOpen snapshot pruning, moving a damaged store aside, and a skipped environment move
 
 ## Architecture
 
-The full contract (names, signatures, ownership) is in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md). Design tokens are in `docs/DESIGN.md`.
+Files, models, services and their rules are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) (§14 covers the release hardening). Design tokens are in `docs/DESIGN.md`.
 
 ```
 Worklog/
@@ -189,12 +193,14 @@ Worklog/
   Models/         SwiftData @Model types: WorkSession, Segment, Note, Attachment, WorkLabel, WorkTag, LearningPoint,
                   WorkProfile
   Persistence/    PersistenceController (CloudKit → local → in-memory fallback), SeedData, PreviewData
-  Services/       SessionEngine (live state machine), SessionEditor (after-the-fact edits), TaxonomyOps,
-                  AuthService + KeychainStore, ExportService + DTOs, BackupService, SearchService,
+  Services/       SessionEngine (live state machine; +Review/+Takeaway/+Ownership/+SystemEvents extensions),
+                  LiveSessionRules (today total, default label, long-session warning), SessionEditor (after-the-fact
+                  edits), TaxonomyOps, SafeSave, SingleInstanceGuard,
+                  AuthService + KeychainStore, ExportService (+Import/+Mapping) + DTOs, BackupService, SearchService,
                   AttachmentImporter, AppSettings, OverlayLayout (overlay elements), ShortcutStore (customizable
                   shortcuts), ProfileStore + ProfileScope (current profile, in-memory scoping), ProfileOps,
                   OverlayPanelController, SyncMonitor (iCloud status)
-  Utilities/      Formatting helpers, Log
+  Utilities/      Formatting helpers, Log, ModelLiveness
   DesignSystem/   Theme, ThemeManager, components (designer-owned)
   Shared/         Data-bound pickers shared by features
   Features/       LiveSession, MenuBar, Overlay, History, SessionDetail, Learning, Stats, Settings

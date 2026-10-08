@@ -160,7 +160,7 @@ struct HistorySection: Identifiable {
     /// Group title of a session for Focus A–Z: the first segment's focus, else the session title,
     /// else nil ("No focus or title", sorted last).
     static func focusTitle(of session: WorkSession) -> String? {
-        if let focus = session.sortedSegments.first(where: { !$0.isDeleted })?.focus, !focus.isBlank {
+        if let focus = session.sortedSegments.first(where: { ModelLiveness.isLive($0) })?.focus, !focus.isBlank {
             return focus.trimmed
         }
         return session.title.isBlank ? nil : session.title.trimmed

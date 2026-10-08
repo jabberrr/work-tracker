@@ -39,7 +39,7 @@ final class AppServices {
     /// Every branch then runs SeedData.ensureProfiles (default profile + repair of unassigned sessions — local-only
     /// stores; with CloudKit `SeedData.isSessionProfileRepairDisplayOnly` makes it display-only; *provisional* when
     /// CloudKit is on and the first import hasn't completed) and deduplicate.
-    /// Then profiles.reload(); router.profiles = profiles; engine.restoreActiveSession(); profiles.startObserving();
+    /// Then profiles.reload(); router.profiles = profiles; router.auth = auth; engine.restoreActiveSession(); profiles.startObserving();
     /// the provisional-profile follow-up (see `resolveProvisionalProfile`); sync.start(); overlay.install(services: self).
     ///
     /// In-memory instances (previews/tests) use a separate UserDefaults suite (emptied at creation) so they never read or change
@@ -90,6 +90,7 @@ final class AppServices {
         SeedData.deduplicate(in: context)
         profiles.reload()
         router.profiles = profiles
+        router.auth = auth
         engine.restoreActiveSession()
         profiles.startObserving()
         if !inMemory {
@@ -142,6 +143,7 @@ final class AppServices {
         Log.backup.warning("Data shrank from \(previous) to \(current) sessions after an iCloud account change")
         persistence.launchNotice = "Your data shrank from \(previous) to \(current) sessions after an iCloud account "
             + "change. A pinned backup from \(backup.date.shortDateTime) is in Settings \u{25B8} Data."
+        persistence.launchNoticeOffersRestore = true
     }
 
     /// With CloudKit the store is only comparable once the first import of this launch finished (max 10 min).
@@ -234,6 +236,7 @@ final class AppServices {
             let failure = "\u{201C}\(url.lastPathComponent)\u{201D} couldn\u{2019}t be restored: \(reason) "
                 + "Restore it from Settings \u{25B8} Data."
             persistence.launchNotice = move.map { "Moved to iCloud \($0.to.rawValue), but " + failure } ?? failure
+            persistence.launchNoticeOffersRestore = true
             return false
         }
     }

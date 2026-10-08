@@ -81,7 +81,7 @@ struct LearningPageIndex {
         var anyTagged = false
         var total = 0
 
-        for point in points where !point.isDeleted {
+        for point in points where ModelLiveness.isLive(point) {
             total += 1
             let tags = point.tagList
             if !tags.isEmpty { anyTagged = true }
@@ -102,7 +102,7 @@ struct LearningPageIndex {
             }
         }
 
-        for session in reflectionSessions where !session.isDeleted {
+        for session in reflectionSessions where ModelLiveness.isLive(session) {
             guard !session.learningText.isBlank, (session.learningPoints ?? []).isEmpty else { continue }
             guard terms.isEmpty || Self.matches(session, terms: terms) else { continue }
             entries.append(LearningPageEntry(id: session.persistentModelID, kind: .reflection(session),

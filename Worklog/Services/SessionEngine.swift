@@ -24,10 +24,15 @@ struct SessionTakeaway: Equatable {
 final class SessionEngine {
     // MARK: State (read-only for views unless noted)
     private(set) var activeSession: WorkSession? = nil {
-        didSet { activeSessionUUID = activeSession.flatMap { ModelLiveness.live($0)?.uuid } }
+        didSet {
+            activeSessionUUID = activeSession.flatMap { ModelLiveness.live($0)?.uuid }
+            pruneLongSessionWarningDismissals()
+        }
     }
     /// Ended session awaiting the end-of-session sheet. RootView presents `EndSessionSheet` while non-nil.
     /// Settable so `.sheet(item:)` bindings work; setting nil by dismissal must go through `completeReview()`.
+    /// Its uuid is persisted ("engine.pendingReviewUUID"), so quitting with the review open re-presents it at the
+    /// next launch (`restoreActiveSession()`).
     var pendingEndSession: WorkSession? = nil {
         didSet { pendingSessionUUID = pendingEndSession?.uuid }
     }
@@ -58,6 +63,20 @@ final class SessionEngine {
     /// Set when reconcile stopped an older session because a newer one was started (typically on another Mac).
     /// RootView shows it as a dismissible info banner; `clearHandoffNotice()` hides it.
     private(set) var handoffNotice: String? = nil
+    /// Sessions whose long-session warning ("Still working?") was dismissed with "Keep going". Only the active
+    /// session's entry is kept (cleared when it ends); persisted in UserDefaults "engine.longWarningDismissed" so the
+    /// choice survives page switches and relaunches. Use `isLongSessionWarningDismissed(for:)`.
+    private(set) var longSessionWarningDismissedUUIDs: Set<UUID> = [] {
+        didSet {
+            guard oldValue != longSessionWarningDismissedUUIDs else { return }
+            if longSessionWarningDismissedUUIDs.isEmpty {
+                defaults.removeObject(forKey: Self.longWarningDismissedKey)
+            } else {
+                defaults.set(longSessionWarningDismissedUUIDs.map(\.uuidString).sorted(),
+                             forKey: Self.longWarningDismissedKey)
+            }
+        }
+    }
 
     /// Stable per-install identifier (UserDefaults "engine.deviceID") stamped on sessions this Mac controls.
     let deviceID: String
@@ -91,32 +110,46 @@ final class SessionEngine {
     }
 
     // MARK: Private
+    // Members without `private` below are internal only so SessionEngine's extensions in other files
+    // (SessionEngine+Review/+Takeaway/+Ownership/+SystemEvents) can use them; views must not.
     private static let autoPauseKey = "engine.autoPauseReason"
     private static let deviceIDKey = "engine.deviceID"
+    /// uuid of the session awaiting review (`pendingEndSession`).
+    private static let pendingReviewKey = "engine.pendingReviewUUID"
+    private static let longWarningDismissedKey = "engine.longWarningDismissed"
     /// The session that was started while a takeaway was showing ("consumer") and that takeaway's session ("source").
-    private static let takeawayConsumerKey = "engine.takeawayConsumerUUID"
-    private static let takeawaySourceKey = "engine.takeawaySourceUUID"
+    static let takeawayConsumerKey = "engine.takeawayConsumerUUID"
+    static let takeawaySourceKey = "engine.takeawaySourceUUID"
 
-    private let context: ModelContext
-    private let settings: AppSettings
+    let context: ModelContext
+    let settings: AppSettings
     /// The current profile (nil in tests that don't use profiles: everything then behaves as before profiles).
     private let profiles: ProfileStore?
-    private var defaults: UserDefaults { settings.defaults }
+    var defaults: UserDefaults { settings.defaults }
     /// Identity of the pending session, captured when it is set, so reconcile never has to touch a model
     /// object that may have been deleted underneath us (import/replace, remote deletion).
-    @ObservationIgnored private var pendingSessionUUID: UUID?
+    @ObservationIgnored private var pendingSessionUUID: UUID? {
+        didSet {
+            guard oldValue != pendingSessionUUID else { return }
+            if let pendingSessionUUID {
+                defaults.set(pendingSessionUUID.uuidString, forKey: Self.pendingReviewKey)
+            } else {
+                defaults.removeObject(forKey: Self.pendingReviewKey)
+            }
+        }
+    }
     /// Identity of the active session (same reason).
     @ObservationIgnored private var activeSessionUUID: UUID?
     @ObservationIgnored private var tickTimer: Timer?
-    @ObservationIgnored private var observerTokens: [NSObjectProtocol] = []
-    @ObservationIgnored private var workspaceObserverTokens: [NSObjectProtocol] = []
-    @ObservationIgnored private var isObservingSystemEvents = false
-    @ObservationIgnored private var remoteChangeTask: Task<Void, Never>?
-    @ObservationIgnored private var didSaveTask: Task<Void, Never>?
+    @ObservationIgnored var observerTokens: [NSObjectProtocol] = []
+    @ObservationIgnored var workspaceObserverTokens: [NSObjectProtocol] = []
+    @ObservationIgnored var isObservingSystemEvents = false
+    @ObservationIgnored var remoteChangeTask: Task<Void, Never>?
+    @ObservationIgnored var didSaveTask: Task<Void, Never>?
     /// Sessions that were discarded but not deleted yet (two-phase discard). Never adopted, never shown as takeaway.
-    @ObservationIgnored private var discardingUUIDs: Set<UUID> = []
+    @ObservationIgnored var discardingUUIDs: Set<UUID> = []
     /// The pending (ended) session discarded from the end sheet; deleted by `finishPendingDiscard()`.
-    @ObservationIgnored private var pendingDiscardUUID: UUID?
+    @ObservationIgnored var pendingDiscardUUID: UUID?
 
     init(context: ModelContext, settings: AppSettings, profiles: ProfileStore? = nil) {
         self.context = context
@@ -135,10 +168,15 @@ final class SessionEngine {
 
     /// Fetch sessions with endedAt == nil; adopt the most recent as active (end any others at the handoff — see
     /// `handoffEnd`); set `handoffNotice` when that happens;
-    /// restore autoPauseReason; refreshTakeaway(); start/stop tick timer. Called once by AppServices.
+    /// restore autoPauseReason, the session awaiting review (re-presented when it still exists and has ended) and the
+    /// long-session warning dismissal; refreshTakeaway(); start/stop tick timer. Called once by AppServices.
     func restoreActiveSession() {
         autoPauseReason = defaults.string(forKey: Self.autoPauseKey).flatMap(AutoPauseReason.init(rawValue:))
+        pendingSessionUUID = defaults.string(forKey: Self.pendingReviewKey).flatMap(UUID.init(uuidString:))
+        longSessionWarningDismissedUUIDs = Set((defaults.stringArray(forKey: Self.longWarningDismissedKey) ?? [])
+            .compactMap(UUID.init(uuidString:)))
         reconcile()
+        pruneLongSessionWarningDismissals()
         observeSettings()
         if let session = activeSession {
             Log.engine.info("Restored active session started \(session.startedAt.ISO8601Format(), privacy: .public)")
@@ -223,59 +261,6 @@ final class SessionEngine {
         }
     }
 
-    /// Installs NSWorkspace willSleep/didWake + NSApplication.didBecomeActive observers (called by AppServices /
-    /// AppDelegate). Also observes `.worklogDataDidImport`, persistent-store remote changes (CloudKit imports) and
-    /// `.worklogSaveFailed` (shown through `lastError`).
-    func startObservingSystemEvents() {
-        guard !isObservingSystemEvents else { return }
-        isObservingSystemEvents = true
-
-        let workspaceCenter = NSWorkspace.shared.notificationCenter
-        workspaceObserverTokens.append(workspaceCenter.addObserver(
-            forName: NSWorkspace.willSleepNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { () -> Void in self?.handleWillSleep() }
-        })
-        workspaceObserverTokens.append(workspaceCenter.addObserver(
-            forName: NSWorkspace.didWakeNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { () -> Void in self?.handleDidWake() }
-        })
-
-        let center = NotificationCenter.default
-        observerTokens.append(center.addObserver(
-            forName: NSApplication.didBecomeActiveNotification, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { () -> Void in self?.handleDidBecomeActive() }
-        })
-        observerTokens.append(center.addObserver(
-            forName: .worklogDataDidImport, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { () -> Void in self?.reconcile() }
-        })
-        observerTokens.append(center.addObserver(
-            forName: .NSPersistentStoreRemoteChange, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { () -> Void in
-                self?.verifyTrackedSessions()
-                self?.scheduleRemoteChangeReconcile()
-            }
-        })
-        observerTokens.append(center.addObserver(
-            forName: .worklogSaveFailed, object: nil, queue: .main
-        ) { [weak self] notification in
-            let text = notification.userInfo?[SafeSave.messageKey] as? String
-            MainActor.assumeIsolated { () -> Void in
-                self?.lastError = text ?? "Couldn\u{2019}t save your change."
-            }
-        })
-        observerTokens.append(center.addObserver(
-            forName: ModelContext.didSave, object: nil, queue: .main
-        ) { [weak self] _ in
-            MainActor.assumeIsolated { () -> Void in self?.scheduleTakeawayRefresh() }
-        })
-    }
-
     /// On quit: if settings.pauseOnQuit && isRunning (and this Mac owns the session) → pause(), autoPauseReason = .quit.
     /// Finishes any pending discard. Always saves.
     func prepareForTermination() {
@@ -313,48 +298,38 @@ final class SessionEngine {
         currentSegment?.activeDuration(at: date) ?? 0
     }
 
-    /// Sum of activeDuration(in: today) over the sessions in `scope` overlapping today (fetch startedAt >= today−2d,
-    /// filter in memory). The active session is included when it is in scope, even if it started earlier.
+    /// Active seconds today of the sessions in `scope` (fetch startedAt >= today−2d), the active session included
+    /// when it is in scope even if it started earlier. One rule with the UI: `LiveDayMath.totalToday`.
     /// `scope` defaults to .allProfiles.
     func totalActiveToday(now: Date = .now, scope: ProfileScope = .allProfiles) -> TimeInterval {
         let today = now.dayInterval
         let cutoff = Calendar.current.date(byAdding: .day, value: -2, to: today.start)
             ?? today.start.addingTimeInterval(-2 * 86_400)
         let descriptor = FetchDescriptor<WorkSession>(predicate: #Predicate<WorkSession> { $0.startedAt >= cutoff })
-        var sessions = (try? context.fetch(descriptor)) ?? []
-        if let active = ModelLiveness.live(activeSession), !sessions.contains(where: { $0 === active }) {
-            sessions.append(active)
-        }
-        return scope.filter(sessions).reduce(0) { $0 + $1.activeDuration(in: today, now: now) }
+        let sessions = (try? context.fetch(descriptor)) ?? []
+        return LiveDayMath.totalToday(sessions, active: ModelLiveness.live(activeSession), now: now, scope: scope)
     }
 
-    /// profile nil → profiles?.activeProfile. Candidates: non-archived labels offered in that profile
-    /// (ProfileScope(profileID:)), by sortIndex. Preference: profile.defaultLabelUUID; when no profile at all, legacy
-    /// settings.defaultLabelID; else first.
+    /// profile nil → profiles?.activeProfile. One rule with the UI: `LiveStartChoice.defaultLabel(in:profile:settings:)`
+    /// over all labels (non-archived labels offered in that profile, by sortIndex; profile.defaultLabelUUID first;
+    /// with no profile at all the legacy settings.defaultLabelID; else the first).
     func defaultLabel(for profile: WorkProfile? = nil) -> WorkLabel? {
         let target = ModelLiveness.live(profile) ?? ModelLiveness.live(profiles?.activeProfile)
-        let scope = ProfileScope(profileID: target?.uuid)
         let descriptor = FetchDescriptor<WorkLabel>(sortBy: [SortDescriptor(\WorkLabel.sortIndex)])
-        let labels = ((try? context.fetch(descriptor)) ?? []).filter { scope.offers($0) && !$0.isArchived }
-        let preferred: UUID?
-        if let target {
-            preferred = target.defaultLabelUUID
-        } else {
-            preferred = settings.defaultLabelID   // legacy: no profile at all
-        }
-        if let id = preferred, let match = labels.first(where: { $0.uuid == id }) {
-            return match
-        }
-        return labels.first
+        let labels = (try? context.fetch(descriptor)) ?? []
+        return LiveStartChoice.defaultLabel(in: labels, profile: target, settings: settings)
     }
 
     // MARK: - Controls
 
     /// If a session is already active, returns it unchanged. Otherwise inserts a WorkSession(startedAt: date) in
     /// the resolved profile (profile nil → profiles?.activeProfile when live & non-archived, else nil), sets
-    /// session.label = label, session.tags = tags, inserts first Segment(sortIndex 0, label, focus, tags: []),
-    /// saves, clears autoPauseReason, starts tick. A label not offered in that profile is replaced by
-    /// defaultLabel(for:); tags not offered there are dropped.
+    /// session.label = label, inserts the first Segment(sortIndex 0, label, focus, tags), saves, clears
+    /// autoPauseReason, starts tick. A label not offered in that profile is replaced by defaultLabel(for:); tags not
+    /// offered there are dropped.
+    /// Start tags go on the FIRST SEGMENT (session.tags stays empty): Today's edit/split forms show and change them,
+    /// and a later segment doesn't inherit them in Stats or filters. (Sessions from older builds may still carry
+    /// session-level tags; they keep counting for every segment.)
     @discardableResult
     func start(label: WorkLabel?, tags: [WorkTag] = [], focus: String = "", at date: Date = .now,
                profile: WorkProfile? = nil) -> WorkSession {
@@ -382,13 +357,13 @@ final class SessionEngine {
         session.ownerDeviceID = deviceID
         session.profile = resolvedProfile
         session.label = resolvedLabel
-        session.tags = resolvedTags
+        session.tags = []
         rememberTakeawaySource(for: session)
 
         let segment = Segment(startedAt: date, endedAt: nil, sortIndex: 0, focus: focus.trimmed)
         context.insert(segment)
         segment.label = resolvedLabel
-        segment.tags = []
+        segment.tags = resolvedTags
         segment.session = session
 
         activeSession = session
@@ -553,51 +528,8 @@ final class SessionEngine {
         return note
     }
 
-    // MARK: - End-of-session review
-
-    /// Save pending session (touch, recomputeStoredDuration), pendingEndSession = nil, refreshTakeaway().
-    /// With `settings.takeawayNextSessionOnly`, the takeaway that was showing when this session started is retired.
-    /// Idempotent: safe to call again from the sheet's dismissal binding.
-    func completeReview() {
-        if let session = pendingEndSession {
-            pendingEndSession = nil
-            if !session.isDeleted {
-                ProfileOps.assignProfileIfUnassigned(session, in: context)
-                session.recomputeStoredDuration()
-                session.touch()
-                consumeTakeawayIfNeeded(reviewed: session)
-            }
-            save()
-        }
-        refreshTakeaway()
-    }
-
-    /// Phase 1 of discarding the pending (ended) session: remembers it and sets pendingEndSession = nil so the
-    /// end sheet closes. Nothing is deleted yet — RootView's sheet `onDismiss` calls `finishPendingDiscard()` once
-    /// the sheet's views are gone (a fallback finishes it after 2 s if no sheet was on screen).
-    func discardPendingSession() {
-        guard let session = pendingEndSession else { return }
-        let uuid = session.uuid
-        if let previous = pendingDiscardUUID, previous != uuid {
-            finishDiscard(uuid: previous)
-        }
-        pendingDiscardUUID = uuid
-        discardingUUIDs.insert(uuid)
-        pendingEndSession = nil
-        refreshTakeaway()
-        Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(2))
-            guard let self, self.pendingDiscardUUID == uuid else { return }
-            self.finishPendingDiscard()
-        }
-    }
-
-    /// Phase 2: deletes the session recorded by `discardPendingSession()`, saves, refreshTakeaway(). No-op otherwise.
-    func finishPendingDiscard() {
-        guard let uuid = pendingDiscardUUID else { return }
-        pendingDiscardUUID = nil
-        finishDiscard(uuid: uuid)
-    }
+    // MARK: - End-of-session review (re-open)
+    // completeReview / discardPendingSession / finishPendingDiscard: SessionEngine+Review.swift.
 
     /// Re-open pending session (only if no active session): endedAt = nil, last segment endedAt = nil,
     /// the gap [old endedAt, now] is appended as a closed PauseInterval; becomes activeSession; pendingEndSession = nil.
@@ -646,26 +578,7 @@ final class SessionEngine {
         if newValue != takeaways { takeaways = newValue }
     }
 
-    /// The latest takeaway of that profile (unassigned sessions count as their effective profile's).
-    func takeaway(for profileID: UUID?) -> SessionTakeaway? {
-        takeaways[profileID]
-    }
-
-    /// "Done" on a takeaway (nil → lastTakeaway): turns off showInOverlay on its session (and on older sessions of
-    /// the same profile that would otherwise resurface in its place), saves, refreshTakeaway(). Other profiles'
-    /// takeaways are untouched.
-    func dismissTakeaway(_ takeaway: SessionTakeaway? = nil) {
-        guard let takeaway = takeaway ?? lastTakeaway else { return }
-        if let source = fetchSession(uuid: takeaway.sessionUUID) {
-            retireTakeaways(through: source)
-            source.touch()
-        }
-        if defaults.string(forKey: Self.takeawaySourceKey) == takeaway.sessionUUID.uuidString {
-            clearTakeawayLink()   // already retired; nothing left for the next review to consume
-        }
-        save()
-        refreshTakeaway()
-    }
+    // takeaway(for:) / dismissTakeaway and the takeaway lifecycle: SessionEngine+Takeaway.swift.
 
     func clearAutoPauseReason() {
         autoPauseReason = nil
@@ -673,6 +586,29 @@ final class SessionEngine {
 
     func clearHandoffNotice() {
         handoffNotice = nil
+    }
+
+    // MARK: - Long-session warning
+
+    /// True when "Keep going" was chosen for `session`'s long-session warning (see
+    /// `longSessionWarningDismissedUUIDs`). False for a deleted session.
+    func isLongSessionWarningDismissed(for session: WorkSession) -> Bool {
+        guard let session = ModelLiveness.live(session) else { return false }
+        return longSessionWarningDismissedUUIDs.contains(session.uuid)
+    }
+
+    /// "Keep going": hides the long-session warning for `session` until it ends. Only for the running session.
+    func dismissLongSessionWarning(for session: WorkSession) {
+        guard let session = ModelLiveness.live(session), session.endedAt == nil,
+              session.uuid == activeSessionUUID else { return }
+        longSessionWarningDismissedUUIDs.insert(session.uuid)
+    }
+
+    /// Keeps only the active session's dismissal (an ended, discarded or replaced session's entry is dropped).
+    private func pruneLongSessionWarningDismissals() {
+        guard !longSessionWarningDismissedUUIDs.isEmpty else { return }
+        let kept = longSessionWarningDismissedUUIDs.filter { $0 == activeSessionUUID }
+        if kept != longSessionWarningDismissedUUIDs { longSessionWarningDismissedUUIDs = kept }
     }
 
     // MARK: - Private
@@ -698,38 +634,17 @@ final class SessionEngine {
         }
     }
 
-    private func fetchSession(uuid: UUID) -> WorkSession? {
+    func fetchSession(uuid: UUID) -> WorkSession? {
         var descriptor = FetchDescriptor<WorkSession>(predicate: #Predicate<WorkSession> { $0.uuid == uuid })
         descriptor.fetchLimit = 1
         return (try? context.fetch(descriptor))?.first(where: { !$0.isDeleted })
     }
 
-    // MARK: Ownership
-
-    /// Sessions with no owner (created before ownership existed, or imported) count as this Mac's.
-    private func isOwnedByThisDevice(_ session: WorkSession?) -> Bool {
-        guard let session else { return false }
-        return session.ownerDeviceID.isEmpty || session.ownerDeviceID == deviceID
-    }
-
-    /// Manual control from this Mac makes it the session's owner.
-    private func stampOwner(_ session: WorkSession) {
-        if session.ownerDeviceID != deviceID { session.ownerDeviceID = deviceID }
-    }
-
-    /// When two Macs each started a session, the older one ends where the newer one began (the handoff), unless
-    /// the older one had been idle for longer than the long-session threshold — then it ends at its last activity.
-    private func handoffEnd(of extra: WorkSession, newest: WorkSession) -> Date {
-        let lastActivity = extra.lastActivityDate
-        let handoff = newest.startedAt
-        guard handoff > lastActivity else { return lastActivity }
-        let threshold = max(settings.longSessionWarningHours, 0) * 3600
-        return handoff.timeIntervalSince(lastActivity) <= threshold ? handoff : lastActivity
-    }
+    // Ownership (isOwnedByThisDevice, stampOwner, handoffEnd): SessionEngine+Ownership.swift.
 
     // MARK: Discard
 
-    private func finishDiscard(uuid: UUID) {
+    func finishDiscard(uuid: UUID) {
         defer { discardingUUIDs.remove(uuid) }
         if pendingDiscardUUID == uuid { pendingDiscardUUID = nil }
         if let session = fetchSession(uuid: uuid) {
@@ -753,108 +668,28 @@ final class SessionEngine {
         }
     }
 
-    // MARK: Takeaway lifecycle
-
-    /// Records which takeaway was on screen when `session` started, so its review can retire it.
-    private func rememberTakeawaySource(for session: WorkSession) {
-        refreshTakeaway()
-        if let source = takeaway(for: ProfileOps.effectiveProfileID(of: session))?.sessionUUID {
-            defaults.set(session.uuid.uuidString, forKey: Self.takeawayConsumerKey)
-            defaults.set(source.uuidString, forKey: Self.takeawaySourceKey)
-        } else {
-            clearTakeawayLink()
-        }
-    }
-
-    /// Next-session-only mode: once the session that followed a takeaway is reviewed, that takeaway is retired.
-    private func consumeTakeawayIfNeeded(reviewed session: WorkSession) {
-        guard defaults.string(forKey: Self.takeawayConsumerKey) == session.uuid.uuidString else { return }
-        let sourceString = defaults.string(forKey: Self.takeawaySourceKey)
-        clearTakeawayLink()
-        guard settings.takeawayNextSessionOnly,
-              let sourceUUID = sourceString.flatMap(UUID.init(uuidString:)),
-              sourceUUID != session.uuid,
-              let source = fetchSession(uuid: sourceUUID) else { return }
-        retireTakeaways(through: source)
-    }
-
-    /// showInOverlay = false on `source` and on every older ended session OF THE SAME PROFILE that still has it on (so
-    /// dismissing or retiring a takeaway never brings back an older one). Filtered by profile in memory.
-    private func retireTakeaways(through source: WorkSession) {
-        if source.showInOverlay { source.showInOverlay = false }
-        let cutoff = source.startedAt
-        let sourceProfileID = ProfileOps.effectiveProfileID(of: source)
-        var descriptor = FetchDescriptor<WorkSession>(
-            predicate: #Predicate<WorkSession> { $0.endedAt != nil && $0.showInOverlay == true && $0.startedAt <= cutoff }
-        )
-        descriptor.fetchLimit = 500
-        let older = (try? context.fetch(descriptor)) ?? []
-        for session in older where !session.isDeleted && session !== pendingEndSession
-            && ProfileOps.effectiveProfileID(of: session) == sourceProfileID {
-            session.showInOverlay = false
-        }
-    }
-
-    private func clearTakeawayLink() {
-        defaults.removeObject(forKey: Self.takeawayConsumerKey)
-        defaults.removeObject(forKey: Self.takeawaySourceKey)
-    }
-
     // MARK: System events
 
-    private func handleWillSleep() {
+    func handleWillSleep() {
         guard settings.pauseOnSleep, isRunning, isOwnedByThisDevice(activeSession) else { return }
         pause(at: .now)
         autoPauseReason = .sleep
         Log.engine.info("Auto-paused for sleep")
     }
 
-    private func handleDidWake() {
+    func handleDidWake() {
         // Never auto-resume; the UI offers Resume via autoPauseReason.
         tick = .now
         updateTickTimer()
     }
 
-    private func handleDidBecomeActive() {
+    func handleDidBecomeActive() {
         SeedData.deduplicate(in: context)
         reconcile()
     }
 
-    /// CloudKit imports arrive in bursts; coalesce them.
-    private func scheduleRemoteChangeReconcile() {
-        remoteChangeTask?.cancel()
-        remoteChangeTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(1500))
-            guard !Task.isCancelled, let self else { return }
-            SeedData.deduplicate(in: self.context)
-            self.reconcile()
-        }
-    }
-
-    /// Any save (History/Detail edits and deletions, imports) may change which takeaway applies; coalesce them.
-    private func scheduleTakeawayRefresh() {
-        didSaveTask?.cancel()
-        didSaveTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .milliseconds(500))
-            guard !Task.isCancelled, let self else { return }
-            self.refreshTakeaway()
-        }
-    }
-
-    /// Re-evaluates the tick timer whenever `settings.menuBarShowsTimer` changes.
-    private func observeSettings() {
-        withObservationTracking {
-            _ = settings.menuBarShowsTimer
-        } onChange: { [weak self] in
-            Task { @MainActor [weak self] in
-                self?.updateTickTimer()
-                self?.observeSettings()
-            }
-        }
-    }
-
     /// The tick only runs while a session is running and the menu bar shows a timer; otherwise it is refreshed once.
-    private func updateTickTimer() {
+    func updateTickTimer() {
         tick = .now
         let shouldRun = isRunning && settings.menuBarShowsTimer
         if shouldRun {

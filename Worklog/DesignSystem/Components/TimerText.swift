@@ -12,6 +12,7 @@ enum TimerTextStyle {
 }
 
 /// Pure display (monospaced digits, formattedClock). Caller wraps in TimelineView.
+/// One line; takes layout priority 1, shrinks to 70 % and then truncates when its cell is too narrow.
 /// Running digits use `theme.timerRunning`; paused digits use `theme.timerPaused`. Pair a paused timer with a visible "Paused" word (color is never the only signal).
 struct TimerText: View {
     @Environment(\.theme) private var theme
@@ -32,7 +33,10 @@ struct TimerText: View {
             .tracking(tracking)
             .foregroundStyle(isPaused ? theme.timerPaused : theme.timerRunning)
             .lineLimit(1)
-            .fixedSize()
+            // No fixedSize: in a cell too narrow for the digits (compact overlay, sidebar) they shrink a little,
+            // then truncate, instead of overflowing. Priority keeps neighbouring text from squeezing them first.
+            .minimumScaleFactor(0.7)
+            .layoutPriority(1)
             .accessibilityLabel("Elapsed time")
             .accessibilityValue(DesignSystemDurationSpeech.spoken(interval) + (isPaused ? ", paused" : ""))
     }

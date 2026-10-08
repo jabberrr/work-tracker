@@ -55,10 +55,12 @@ final class WorkSession {
 }
 
 extension WorkSession {
+    /// Decoded from `pauseIntervalsData` through `PauseIntervalsCache` (keyed by the bytes, so a change made here,
+    /// by an import or by iCloud sync is always picked up).
     var pauseIntervals: [PauseInterval] {
         get {
             guard let data = pauseIntervalsData else { return [] }
-            return (try? JSONDecoder().decode([PauseInterval].self, from: data)) ?? []
+            return PauseIntervalsCache.decode(data)
         }
         set { pauseIntervalsData = newValue.isEmpty ? nil : (try? JSONEncoder().encode(newValue)) }
     }
@@ -128,5 +130,30 @@ extension WorkSession {
         for n in notes ?? [] { d = max(d, n.createdAt) }
         for p in pauseIntervals { d = max(d, p.end ?? p.start) }
         return d
+    }
+}
+
+/// Decoded pause lists keyed by their JSON bytes. `pauseIntervals` is read several times a second while a session
+/// runs (Today, overlay, menu bar, sidebar timers); decoding JSON each time is wasted work. Keyed by content (never by
+/// session), so it can't go stale: new bytes are a new key. NSCache is thread-safe and evicts under memory pressure.
+enum PauseIntervalsCache {
+    private final class Entry {
+        let value: [PauseInterval]
+        init(_ value: [PauseInterval]) { self.value = value }
+    }
+
+    private static let cache: NSCache<NSData, Entry> = {
+        let cache = NSCache<NSData, Entry>()
+        cache.countLimit = 512
+        return cache
+    }()
+
+    /// The decoded intervals ([] when the bytes can't be decoded, as before).
+    static func decode(_ data: Data) -> [PauseInterval] {
+        let key = data as NSData
+        if let hit = cache.object(forKey: key) { return hit.value }
+        let value = (try? JSONDecoder().decode([PauseInterval].self, from: data)) ?? []
+        cache.setObject(Entry(value), forKey: key)
+        return value
     }
 }

@@ -311,6 +311,10 @@ private struct SettingsProfileEditor: View {
         }
         .formStyle(.grouped)
         .onAppear { draftName = profile.name }
+        .onChange(of: profile.name) { _, newName in
+            // A rename synced from another Mac: show it unless the user is typing (their commit wins).
+            if !nameFocused { draftName = newName }
+        }
         .onChange(of: nameFocused) {
             if !nameFocused { commitName() }
         }
@@ -514,7 +518,7 @@ private struct SettingsDeleteProfileSheet: View {
                 errorText = ProfileOpResult.sessionRunning.message
                 return
             }
-            guard backups.backupNow(reason: .manual) != nil else {
+            guard backups.backupNow(reason: .beforeChange) != nil else {
                 errorText = backups.lastError ?? "The safety backup failed."
                 return
             }

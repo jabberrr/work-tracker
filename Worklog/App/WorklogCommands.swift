@@ -21,8 +21,7 @@ struct WorklogCommands: Commands {
             ShortcutCommandButton(title: "Start / Stop Session", action: .startStop, store: services.shortcuts) {
                 let engine = services.engine
                 if engine.isActive {
-                    engine.stop()
-                    services.router.showMainWindow()
+                    services.router.stopSession(engine)
                 } else {
                     // ⇧⌘S always starts in the CURRENT profile (the quick-start profile is for the menu bar/overlay).
                     let profile = services.profiles.activeProfile

@@ -13,9 +13,15 @@ enum AppConstants {
     /// Folder (inside applicationSupportURL) for quarantined/damaged stores, pre-upgrade snapshots and unsaved data.
     static let recoveredFolderName = "Recovered"
 
+    /// Unit tests only: a temporary folder used instead of `URL.applicationSupportDirectory/Worklog`, so the recovery
+    /// paths (store files, Recovered/, pending-restore.json, Backups/) can be tested without touching real data. Always
+    /// nil in the app.
+    static var rootDirectoryOverride: URL? = nil
+
     /// URL.applicationSupportDirectory/Worklog (created if missing). Inside the sandbox container when sandboxed.
     static var applicationSupportURL: URL {
-        let url = URL.applicationSupportDirectory.appending(path: appName, directoryHint: .isDirectory)
+        let url = rootDirectoryOverride
+            ?? URL.applicationSupportDirectory.appending(path: appName, directoryHint: .isDirectory)
         ensureDirectory(url)
         return url
     }

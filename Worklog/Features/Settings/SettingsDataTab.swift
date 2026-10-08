@@ -220,7 +220,7 @@ struct SettingsDataTab: View {
                 Button("Export Segments CSV…") { export(kind: .segmentsCSV) }
                     .buttonStyle(QuietButtonStyle())
             }
-            if profileStore.profiles.count + profileStore.archivedProfiles.count > 1 {
+            if profileStore.showsProfileScope {
                 SettingsFootnote("Includes all profiles.")
             }
             if let url = lastExportURL {

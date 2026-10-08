@@ -43,6 +43,8 @@ struct OverlayDisplayData {
     /// Both nil with only one profile.
     var profileName: String? = nil
     var profileColorHex: String? = nil
+    /// Live only: whole hours of a session past the long-session threshold ("Still working?"), else nil.
+    var longSessionHours: Int? = nil
 
     var isActive: Bool { status != .idle }
     var isPaused: Bool { status == .paused }
@@ -90,6 +92,10 @@ struct OverlayActions {
     var stop: () -> Void = {}
     var start: () -> Void = {}
     var review: () -> Void = {}
+    /// Give the panel's keyboard focus back (Esc / Return in the note field).
+    var releaseKey: () -> Void = {}
+    /// "Keep going" on the long-session line.
+    var keepGoing: () -> Void = {}
 
     static var none: OverlayActions { OverlayActions() }
 }
@@ -162,6 +168,10 @@ struct OverlayContent<ElementChrome: View>: View {
 
             if isLive && data.isActive && data.isOnAnotherMac {
                 LiveOtherMacHint()
+            }
+
+            if isLive && data.isActive, let hours = data.longSessionHours {
+                LiveLongSessionLine(hours: hours, onKeepGoing: actions.keepGoing)
             }
 
             if showsSplitForm(after: rows.header) {
@@ -468,15 +478,17 @@ struct OverlayElementView: View {
         return data.label?.name ?? "No focus"
     }
 
-    /// Large digits when they fit the cell, else the compact style (compact mode: always compact).
-    @ViewBuilder
+    /// Large digits when they fit the cell, else the compact style (compact mode: always compact). In a cell
+    /// narrower than the compact digits, TimerText shrinks them a little, then truncates.
     private var timer: some View {
-        if isCompact {
-            TimerText(data.elapsed, style: .compact, isPaused: data.isPaused)
-        } else {
-            ViewThatFits(in: .horizontal) {
-                TimerText(data.elapsed, style: .large, isPaused: data.isPaused)
+        Group {
+            if isCompact {
                 TimerText(data.elapsed, style: .compact, isPaused: data.isPaused)
+            } else {
+                ViewThatFits(in: .horizontal) {
+                    TimerText(data.elapsed, style: .large, isPaused: data.isPaused)
+                    TimerText(data.elapsed, style: .compact, isPaused: data.isPaused)
+                }
             }
         }
     }
@@ -573,9 +585,10 @@ struct OverlayElementView: View {
     @ViewBuilder
     private var note: some View {
         if isLive, let noteFocus {
-            LiveQuickNoteField(prompt: "Note…", isCompact: isCompact, isFocused: noteFocus)
+            LiveQuickNoteField(prompt: "Note…", isCompact: isCompact, isFocused: noteFocus,
+                               onDone: actions.releaseKey)
         } else if isLive {
-            LiveQuickNoteField(prompt: "Note…", isCompact: isCompact)
+            LiveQuickNoteField(prompt: "Note…", isCompact: isCompact, onDone: actions.releaseKey)
         } else {
             // Static look-alike: the preview never talks to the engine.
             HStack(spacing: theme.spacingXS) {

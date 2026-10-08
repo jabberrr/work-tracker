@@ -39,10 +39,13 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
 /// each section fills the column below it, wrapped in a `SettingsPage`.
 ///
 /// `WindowRouter.showSettings(tab:)` sets `router.settingsTabRequest` to a `SettingsTab.rawValue`; this view selects
-/// that section (on appear and whenever the request changes) and clears the request.
+/// that section (on appear and whenever the request changes) and clears the request. Without a request, a store that
+/// needs attention opens on Data: one that couldn't be opened (Recover…) or one that synced with another iCloud
+/// environment and hasn't been moved or kept local yet (Move to iCloud…).
 @MainActor
 struct SettingsView: View {
     @Environment(PersistenceController.self) private var persistence
+    @Environment(AppSettings.self) private var settings
     @Environment(WindowRouter.self) private var router
     @Environment(\.theme) private var theme
     @AppStorage("settingsWindow.selectedTab") private var selectedTab: SettingsTab = .general
@@ -67,14 +70,19 @@ struct SettingsView: View {
         .onAppear {
             if router.settingsTabRequest != nil {
                 applyTabRequest()
-            } else if SettingsRecovery.isNeeded(persistence) {
-                // The store couldn't be opened: go straight to Data, where "Recover…" lives.
+            } else if SettingsRecovery.isNeeded(persistence) || hasUnresolvedEnvironmentMismatch {
+                // Go straight to Data, where "Recover…" and "Move to iCloud…" live.
                 selectedTab = .data
             }
         }
         .onChange(of: router.settingsTabRequest) {
             applyTabRequest()
         }
+    }
+
+    /// The store synced with another CloudKit environment and the user hasn't chosen "Keep Local Only" yet.
+    private var hasUnresolvedEnvironmentMismatch: Bool {
+        persistence.environmentMismatch != nil && !persistence.isInMemory && settings.iCloudSyncEnabled
     }
 
     @ViewBuilder

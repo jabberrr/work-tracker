@@ -195,14 +195,4 @@ import SwiftData
         }
         return session
     }
-
-    /// First label (by sortIndex) in AppServices.preview's context.
-    static var sampleLabel: WorkLabel {
-        var descriptor = FetchDescriptor<WorkLabel>(sortBy: [SortDescriptor(\WorkLabel.sortIndex)])
-        descriptor.fetchLimit = 1
-        guard let label = try? AppServices.preview.container.mainContext.fetch(descriptor).first else {
-            fatalError("PreviewData: no sample label (populate failed)")
-        }
-        return label
-    }
 }

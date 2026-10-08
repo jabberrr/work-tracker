@@ -5,37 +5,18 @@ import SwiftUI
 
 // Building blocks shared by Feature A's surfaces: the Today page (LiveSessionView), the end-of-session
 // sheet, the menu bar panel and the floating overlay. Every type here carries the `Live…` prefix (§1.3).
-
-// MARK: - Live clock
-
-/// Re-renders `content` once per second while the session runs (TimelineView); renders it once, statically,
-/// while paused or idle. Always compute durations from the date passed in (never accumulate).
-@MainActor
-struct LiveClock<Content: View>: View {
-    private let isTicking: Bool
-    private let content: (Date) -> Content
-
-    init(isTicking: Bool, @ViewBuilder content: @escaping (Date) -> Content) {
-        self.isTicking = isTicking
-        self.content = content
-    }
-
-    var body: some View {
-        if isTicking {
-            TimelineView(.periodic(from: .now, by: 1)) { context in
-                content(context.date)
-            }
-        } else {
-            content(Date())
-        }
-    }
-}
+// Elsewhere: the non-UI rules (`LiveDayMath`, `LiveStartChoice`, `LiveLongSessionRule`, `LiveProfileMove`) in
+// Services/LiveSessionRules.swift, the tick view in LiveTicker.swift, the split/edit form and tag menu in
+// LiveSegmentForm.swift, the takeaway editor in TakeawayField.swift.
 
 // MARK: - Today's sessions (query)
 
 /// Fetches sessions that started since two days before today (enough to catch sessions crossing midnight)
 /// with `@Query`, so no view fetches inside `body`. At midnight (`NSCalendarDayChanged`) the query is rebuilt
 /// for the new day and the content re-renders, so "today" never goes stale while the app stays open.
+/// The content keeps its identity across midnight (no `.id(day)`): a half-typed note or open split form inside it
+/// survives. Callers clip to today themselves (`LiveDayMath`), so a query still on yesterday's cutoff only
+/// fetches a little more.
 @MainActor
 struct LiveTodaySessionsQuery<Content: View>: View {
     private let content: ([WorkSession]) -> Content
@@ -47,7 +28,6 @@ struct LiveTodaySessionsQuery<Content: View>: View {
 
     var body: some View {
         LiveTodaySessionsResults(day: day, content: content)
-            .id(day)
             .onReceive(LiveDayChange.publisher) { _ in
                 day = Date().startOfDay
             }
@@ -73,7 +53,7 @@ private struct LiveTodaySessionsResults<Content: View>: View {
 
     var body: some View {
         // Drop objects deleted in this run loop turn (discard) before any child reads them.
-        content(sessions.filter { LiveModelGuard.isUsable($0) })
+        content(ModelLiveness.live(sessions))
     }
 }
 
@@ -83,160 +63,6 @@ enum LiveDayChange {
         NotificationCenter.default.publisher(for: .NSCalendarDayChanged)
             .receive(on: DispatchQueue.main)
             .eraseToAnyPublisher()
-    }
-}
-
-/// Today-total math on already-fetched sessions (midnight-safe: clips every session to today's interval),
-/// limited to one profile's sessions (`ProfileScope.allProfiles` counts every session).
-@MainActor
-enum LiveDayMath {
-    /// Active seconds today across the in-scope `sessions` (+ `active` if it is in scope and the query missed it,
-    /// e.g. started > 2 days ago).
-    static func totalToday(_ sessions: [WorkSession], active: WorkSession?, now: Date,
-                           scope: ProfileScope) -> TimeInterval {
-        let today = now.dayInterval
-        var all = scope.filter(sessions.filter { LiveModelGuard.isUsable($0) })
-        if let active, LiveModelGuard.isUsable(active), scope.contains(active),
-           !all.contains(where: { $0 === active }) {
-            all.append(active)
-        }
-        return all.reduce(0) { $0 + $1.activeDuration(in: today, now: now) }
-    }
-
-    /// Ended in-scope sessions that overlap today, newest first.
-    static func endedToday(_ sessions: [WorkSession], now: Date, scope: ProfileScope) -> [WorkSession] {
-        let today = now.dayInterval
-        return scope.filter(sessions.filter { LiveModelGuard.isUsable($0) })
-            .filter { session in
-                guard let end = session.endedAt else { return false }
-                return end > today.start && session.startedAt < today.end
-            }
-            .sorted { $0.startedAt > $1.startedAt }
-    }
-
-    static func goalSeconds(_ settings: AppSettings) -> TimeInterval {
-        max(0, settings.dailyGoalHours) * 3600
-    }
-}
-
-/// A model object deleted in this context (discard) must never be read again: SwiftData traps on a
-/// destroyed backing store. Views holding a session/segment check this first.
-@MainActor
-enum LiveModelGuard {
-    static func isUsable(_ model: some PersistentModel) -> Bool {
-        !model.isDeleted && model.modelContext != nil
-    }
-}
-
-/// Start/split choices are held in `@State` across Settings edits: a label or tag picked earlier may have been
-/// deleted, merged or archived since, or belong to another profile after a profile switch. Resolve them right
-/// before handing them to the engine.
-@MainActor
-enum LiveStartChoice {
-    /// The picked label if it can still be used; a picked-but-gone label falls back to the default label.
-    /// `nil` (the user chose "None") stays `nil`. Same as `label(_:engine:profile:)` with no profile.
-    static func label(_ picked: WorkLabel?, engine: SessionEngine) -> WorkLabel? {
-        label(picked, engine: engine, profile: nil)
-    }
-
-    /// The picked label if it is still usable and offered in `profile` (nil = the engine's current profile, any
-    /// label is accepted here and the engine checks it); otherwise `engine.defaultLabel(for: profile)`.
-    /// `nil` (the user chose "None") stays `nil`.
-    static func label(_ picked: WorkLabel?, engine: SessionEngine, profile: WorkProfile?) -> WorkLabel? {
-        guard let picked else { return nil }
-        let liveProfile = ModelLiveness.live(profile)
-        if isUsable(picked, in: liveProfile?.uuid) { return picked }
-        return engine.defaultLabel(for: liveProfile)
-    }
-
-    /// Like `label(_:engine:)`, but a gone label becomes `nil` (the engine then keeps the current label).
-    static func splitLabel(_ picked: WorkLabel?) -> WorkLabel? {
-        guard let picked, isUsable(picked) else { return nil }
-        return picked
-    }
-
-    static func tags(_ picked: [WorkTag]) -> [WorkTag] {
-        picked.filter { LiveModelGuard.isUsable($0) && !$0.isArchived }
-    }
-
-    /// Usable tags that `profileID` offers (nil = all profiles).
-    static func tags(_ picked: [WorkTag], in profileID: UUID?) -> [WorkTag] {
-        let scope = ProfileScope(profileID: profileID)
-        return tags(picked).filter { scope.offers($0) }
-    }
-
-    static func isUsable(_ label: WorkLabel) -> Bool {
-        LiveModelGuard.isUsable(label) && !label.isArchived
-    }
-
-    /// Usable and offered in `profileID` (global or local to it; nil = all profiles).
-    static func isUsable(_ label: WorkLabel, in profileID: UUID?) -> Bool {
-        isUsable(label) && ProfileScope(profileID: profileID).offers(label)
-    }
-
-    /// Same rule as `SessionEngine.defaultLabel(for:)`, computed from `@Query` results (no fetch in `body`):
-    /// non-archived labels offered in `profile`, by sort order; `profile.defaultLabelUUID` first; with no profile
-    /// at all, the legacy `settings.defaultLabelID`; else the first one.
-    static func defaultLabel(in labels: [WorkLabel], profile: WorkProfile?, settings: AppSettings) -> WorkLabel? {
-        let liveProfile = ModelLiveness.live(profile)
-        let candidates = labels
-            .filter { isUsable($0, in: liveProfile?.uuid) }
-            .sorted { $0.sortIndex < $1.sortIndex }
-        let preferred: UUID?
-        if let liveProfile {
-            preferred = liveProfile.defaultLabelUUID
-        } else {
-            preferred = settings.defaultLabelID
-        }
-        if let id = preferred, let match = candidates.first(where: { $0.uuid == id }) {
-            return match
-        }
-        return candidates.first
-    }
-}
-
-// MARK: - Moving a session to another profile
-
-/// Moving a session (running or ended) to another profile, shared by Today's profile menu and Session detail's
-/// Profile picker. A move that would copy labels or tags into the target asks first ("Move to Personal?").
-@MainActor
-enum LiveProfileMove {
-    /// A pending confirmation. Holds the target's uuid and name, never the model (it may go away meanwhile).
-    struct Request: Identifiable, Equatable {
-        let id: UUID
-        let name: String
-
-        var title: String { "Move to \(name)?" }
-        var message: String { "Labels and tags not in \(name) are copied." }
-    }
-
-    enum Outcome: Equatable {
-        /// Moved (nothing had to be copied).
-        case moved
-        /// Nothing to do: already in that profile, or the session/profile is gone.
-        case unchanged
-        /// Labels or tags would be copied: confirm, then call `perform(_:moving:profiles:in:)`.
-        case needsConfirmation(Request)
-    }
-
-    static func begin(moving session: WorkSession, to target: WorkProfile, in context: ModelContext) -> Outcome {
-        guard LiveModelGuard.isUsable(session), LiveModelGuard.isUsable(target) else { return .unchanged }
-        guard ProfileOps.effectiveProfileID(of: session) != target.uuid else { return .unchanged }
-        if SessionEditor.taxonomyCopiedByMove(of: session, to: target).isEmpty {
-            SessionEditor.moveSession(session, to: target, in: session.modelContext ?? context)
-            return .moved
-        }
-        return .needsConfirmation(Request(id: target.uuid, name: target.displayName))
-    }
-
-    /// The confirmed move. Returns false when the session or the target profile no longer exists.
-    @discardableResult
-    static func perform(_ request: Request, moving session: WorkSession, profiles: ProfileStore,
-                        in context: ModelContext) -> Bool {
-        guard LiveModelGuard.isUsable(session),
-              let target = ModelLiveness.live(profiles.profile(withID: request.id)) else { return false }
-        SessionEditor.moveSession(session, to: target, in: session.modelContext ?? context)
-        return true
     }
 }
 
@@ -269,251 +95,13 @@ struct LiveEnvironmentBridge: ViewModifier {
     }
 }
 
-// MARK: - Segment form (split / edit current segment)
-
-enum LiveSegmentFormMode {
-    /// Close the current segment and open a new one (engine.split).
-    case split
-    /// Change the current segment in place (engine.updateCurrentSegment).
-    case edit
-}
-
-enum LiveSegmentFormStyle {
-    /// Main window popover: full TagPicker (its own popover).
-    case popover
-    /// Menu bar panel / overlay: tags via a native menu (no nested popover, which would steal key status and
-    /// close the menu bar window, or activate the app from the non-activating overlay).
-    case inline
-    /// Like `.inline`, narrower spacing for the compact overlay.
-    case inlineCompact
-}
-
-/// Focus + label + tags for a new segment (split) or for the current segment (edit).
-@MainActor
-struct LiveSegmentForm: View {
-    @Environment(SessionEngine.self) private var engine
-    @Environment(\.theme) private var theme
-
-    private let mode: LiveSegmentFormMode
-    private let style: LiveSegmentFormStyle
-    private let onFinish: () -> Void
-
-    @State private var focus = ""
-    @State private var label: WorkLabel?
-    @State private var tags: [WorkTag] = []
-    @State private var didLoad = false
-    @FocusState private var focusFieldFocused: Bool
-
-    init(mode: LiveSegmentFormMode, style: LiveSegmentFormStyle, onFinish: @escaping () -> Void) {
-        self.mode = mode
-        self.style = style
-        self.onFinish = onFinish
-    }
-
-    private var isInline: Bool { style != .popover }
-    /// Labels and tags offered here are the running session's profile's (not the selected profile's).
-    private var profileID: UUID? { engine.activeSessionProfileID }
-    private var spacing: CGFloat { style == .inlineCompact ? theme.spacingS : theme.spacingM }
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: spacing) {
-            Text(mode == .split ? "Split segment" : "This segment")
-                .font(theme.headlineFont)
-                .foregroundStyle(theme.textPrimary)
-                .accessibilityAddTraits(.isHeader)
-
-            TextField(mode == .split ? "New focus" : "Focus", text: $focus, prompt: Text(focusPrompt))
-                .textFieldStyle(.plain)
-                .focused($focusFieldFocused)
-                .insetField(isFocused: focusFieldFocused)
-                .onSubmit(commit)
-                .accessibilityLabel(mode == .split ? "New focus" : "Focus")
-
-            if isInline {
-                LabelPicker(selection: $label, includeNone: false, title: "Label", profileID: profileID)
-                    .labelsHidden()
-                    .controlSize(.small)
-                LiveTagMenu(selection: $tags, scopeLabel: label, profileID: profileID)
-            } else {
-                LabelPicker(selection: $label, includeNone: false, title: "Label", profileID: profileID)
-                    .fixedSize()
-                HStack(alignment: .firstTextBaseline, spacing: theme.spacingS) {
-                    Text("Tags")
-                        .font(theme.calloutFont)
-                        .foregroundStyle(theme.textSecondary)
-                    TagPicker(selection: $tags, scopeLabel: label, profileID: profileID)
-                }
-            }
-
-            HStack(spacing: theme.spacingS) {
-                Spacer(minLength: 0)
-                Button("Cancel", action: onFinish)
-                    .buttonStyle(QuietButtonStyle())
-                    .keyboardShortcut(.cancelAction)
-                Button(action: commit) {
-                    if mode == .split {
-                        Label("Split", systemImage: "scissors")
-                    } else {
-                        Text("Save")
-                    }
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .help(mode == .split ? "Split segment" : "Save")
-            }
-            .controlSize(isInline ? .small : .regular)
-        }
-        .onAppear(perform: load)
-    }
-
-    private var focusPrompt: String {
-        mode == .split ? "What are you switching to?" : "What are you focusing on?"
-    }
-
-    private func load() {
-        guard !didLoad else { return }
-        didLoad = true
-        let current = engine.currentSegment
-        switch mode {
-        case .split:
-            focus = ""
-            label = engine.currentLabel
-            tags = current?.tagList ?? []
-        case .edit:
-            focus = current?.focus ?? ""
-            label = current?.effectiveLabel ?? engine.currentLabel
-            tags = current?.tagList ?? []
-        }
-        // Give the hosting window a moment to become key before focusing the field.
-        Task { @MainActor in
-            await Task.yield()
-            focusFieldFocused = true
-        }
-    }
-
-    private func commit() {
-        guard engine.isActive else {
-            onFinish()
-            return
-        }
-        // Label/tags may have been deleted or archived in Settings while the form was open.
-        let safeLabel = LiveStartChoice.splitLabel(label)
-        let safeTags = LiveStartChoice.tags(tags)
-        switch mode {
-        case .split:
-            engine.split(label: safeLabel, tags: safeTags, focus: focus)
-        case .edit:
-            engine.updateCurrentSegment(label: safeLabel ?? LiveStartChoice.splitLabel(engine.currentLabel),
-                                        tags: safeTags, focus: focus)
-        }
-        onFinish()
-    }
-}
-
-// MARK: - Tag menu (native, for panels)
-
-/// Native pull-down menu of tags with checkmarks: label-scoped tags first, then global tags, then other labels'
-/// tags in a submenu. Only tags offered in `profileID` are listed (plus any selected tag that isn't, so it can be
-/// removed). Native menus never take key status, so this is safe inside the menu bar window/overlay.
-@MainActor
-struct LiveTagMenu: View {
-    @Environment(\.theme) private var theme
-    @Query(sort: \WorkTag.name) private var allTags: [WorkTag]
-    @Binding private var selection: [WorkTag]
-    private let scopeLabel: WorkLabel?
-    private let profileID: UUID?
-
-    init(selection: Binding<[WorkTag]>, scopeLabel: WorkLabel?, profileID: UUID?) {
-        self._selection = selection
-        self.scopeLabel = scopeLabel
-        self.profileID = profileID
-    }
-
-    var body: some View {
-        // Never read a tag or label deleted/merged in Settings while this menu is on screen.
-        let profileScope = ProfileScope(profileID: profileID)
-        let selectedIDs = Set(liveSelection.map(\.persistentModelID))
-        let active = ModelLiveness.live(allTags).filter { tag in
-            (!tag.isArchived && profileScope.offers(tag)) || selectedIDs.contains(tag.persistentModelID)
-        }
-        let scope = ModelLiveness.live(scopeLabel)
-        let scopeID = scope?.persistentModelID
-        let scoped = active.filter { ModelLiveness.live($0.label)?.persistentModelID == scopeID && scopeID != nil }
-        let global = active.filter { ModelLiveness.live($0.label) == nil }
-        let others = active.filter { tag in
-            guard let parent = ModelLiveness.live(tag.label) else { return false }
-            return parent.persistentModelID != scopeID
-        }
-
-        Menu {
-            if !scoped.isEmpty {
-                Section(scope?.name ?? "Label") {
-                    ForEach(scoped) { tag in toggle(for: tag) }
-                }
-            }
-            if !global.isEmpty {
-                Section("Global") {
-                    ForEach(global) { tag in toggle(for: tag) }
-                }
-            }
-            if !others.isEmpty {
-                Menu("Other labels") {
-                    ForEach(others) { tag in toggle(for: tag) }
-                }
-            }
-            if active.isEmpty {
-                Text("No tags yet")
-            }
-            if !liveSelection.isEmpty {
-                Divider()
-                Button("Clear tags") { selection = [] }
-            }
-        } label: {
-            Label(summary, systemImage: "number")
-                .lineLimit(1)
-        }
-        .menuStyle(.button)
-        .buttonStyle(.borderless)
-        .menuIndicator(.visible)
-        .fixedSize(horizontal: false, vertical: true)
-        .foregroundStyle(theme.textSecondary)
-        .accessibilityLabel("Tags")
-        .accessibilityValue(liveSelection.isEmpty ? "None" : summary)
-        .help("Tags")
-    }
-
-    /// Never read a tag deleted or merged in Settings while this menu was on screen.
-    private var liveSelection: [WorkTag] {
-        selection.filter { LiveModelGuard.isUsable($0) }
-    }
-
-    private var summary: String {
-        let live = liveSelection
-        return live.isEmpty ? "Add tags" : live.map(\.name).joined(separator: ", ")
-    }
-
-    private func toggle(for tag: WorkTag) -> some View {
-        let tagID = tag.persistentModelID
-        return Toggle(ScopedItemTitle.title(for: tag, in: ProfileScope(profileID: profileID)), isOn: Binding(
-            get: { liveSelection.contains(where: { $0.persistentModelID == tagID }) },
-            set: { isOn in
-                var next = liveSelection
-                if isOn {
-                    if !next.contains(where: { $0.persistentModelID == tagID }) {
-                        next.append(tag)
-                    }
-                } else {
-                    next.removeAll { $0.persistentModelID == tagID }
-                }
-                selection = next
-            }
-        ))
-    }
-}
-
 // MARK: - Quick note field
 
 /// Single-line note composer: Return adds a timestamped note to the running session (engine.addNote),
 /// clears the field and keeps focus. Shows a short confirmation line.
+///
+/// `onDone` (the floating overlay): Esc, and Return after adding a note (or on an empty field), end editing and
+/// call it, so the host can hand keyboard focus back (the overlay gives up key status).
 @MainActor
 struct LiveQuickNoteField: View {
     @Environment(SessionEngine.self) private var engine
@@ -522,22 +110,26 @@ struct LiveQuickNoteField: View {
     private let prompt: String
     private let isCompact: Bool
     private var externalFocus: FocusState<Bool>.Binding?
+    private let onDone: (() -> Void)?
 
     @State private var text = ""
     @State private var confirmation: String?
     @State private var confirmationToken = 0
     @FocusState private var internalFocus: Bool
 
-    init(prompt: String = "Quick note…", isCompact: Bool = false) {
+    init(prompt: String = "Quick note…", isCompact: Bool = false, onDone: (() -> Void)? = nil) {
         self.prompt = prompt
         self.isCompact = isCompact
         self.externalFocus = nil
+        self.onDone = onDone
     }
 
-    init(prompt: String, isCompact: Bool = false, isFocused: FocusState<Bool>.Binding) {
+    init(prompt: String, isCompact: Bool = false, isFocused: FocusState<Bool>.Binding,
+         onDone: (() -> Void)? = nil) {
         self.prompt = prompt
         self.isCompact = isCompact
         self.externalFocus = isFocused
+        self.onDone = onDone
     }
 
     private var focusBinding: FocusState<Bool>.Binding { externalFocus ?? $internalFocus }
@@ -550,7 +142,7 @@ struct LiveQuickNoteField: View {
                     .font(isCompact ? theme.calloutFont : theme.bodyFont)
                     .focused(focusBinding)
                     .onSubmit(submit)
-                    .onExitCommand { focusBinding.wrappedValue = false }
+                    .onExitCommand(perform: finishEditing)
                     .accessibilityLabel("Note")
                     .accessibilityHint("Return adds a timestamped note.")
                 Image(systemName: "return")
@@ -571,9 +163,16 @@ struct LiveQuickNoteField: View {
     }
 
     private func submit() {
-        guard let note = engine.addNote(text) else { return }
+        guard let note = engine.addNote(text) else {
+            if onDone != nil && text.isBlank { finishEditing() }
+            return
+        }
         text = ""
-        focusBinding.wrappedValue = true
+        if onDone != nil {
+            finishEditing()
+        } else {
+            focusBinding.wrappedValue = true
+        }
         confirmation = "Note added at \(note.createdAt.shortTime)"
         confirmationToken += 1
         let token = confirmationToken
@@ -581,6 +180,11 @@ struct LiveQuickNoteField: View {
             try? await Task.sleep(for: .milliseconds(2500))
             if confirmationToken == token { confirmation = nil }
         }
+    }
+
+    private func finishEditing() {
+        focusBinding.wrappedValue = false
+        onDone?()
     }
 }
 
@@ -679,7 +283,7 @@ struct LiveTakeawayView: View {
         let uuid = takeaway.sessionUUID
         var descriptor = FetchDescriptor<WorkSession>(predicate: #Predicate<WorkSession> { $0.uuid == uuid })
         descriptor.fetchLimit = 1
-        guard let session = try? modelContext.fetch(descriptor).first, LiveModelGuard.isUsable(session) else {
+        guard let session = try? modelContext.fetch(descriptor).first, ModelLiveness.isLive(session) else {
             return
         }
         router.showSession(session)
@@ -701,6 +305,44 @@ struct LiveOtherMacHint: View {
             .foregroundStyle(theme.textTertiary)
             .lineLimit(1)
             .help("Running on another Mac")
+    }
+}
+
+// MARK: - Long-session line
+
+/// Overlay and menu bar version of Today's "Still working?" banner: one subtle line and "Keep going"
+/// (`engine.dismissLongSessionWarning(for:)`, per session). Stopping stays with the regular Stop button.
+@MainActor
+struct LiveLongSessionLine: View {
+    @Environment(\.theme) private var theme
+    private let hours: Int
+    private let onKeepGoing: () -> Void
+
+    init(hours: Int, onKeepGoing: @escaping () -> Void) {
+        self.hours = hours
+        self.onKeepGoing = onKeepGoing
+    }
+
+    var body: some View {
+        HStack(alignment: .firstTextBaseline, spacing: theme.spacingXS) {
+            Image(systemName: "exclamationmark.triangle")
+                .foregroundStyle(theme.warning)
+                .accessibilityHidden(true)
+            Text("Running \(hours)h. Still working?")
+                .foregroundStyle(theme.textSecondary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+                .help("Running for \(hours) \(hours == 1 ? "hour" : "hours"). Still working?")
+            Spacer(minLength: theme.spacingXS)
+            Button("Keep going", action: onKeepGoing)
+                .buttonStyle(.borderless)
+                .foregroundStyle(theme.accent)
+                .fixedSize()
+                .help("Keep going")
+        }
+        .font(theme.captionFont)
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Running for \(hours) \(hours == 1 ? "hour" : "hours"). Still working?")
     }
 }
 
@@ -742,6 +384,45 @@ private struct LiveHoverRowBody: View {
             .opacity(isEnabled ? 1 : 0.45)
             .onHover { isHovering = isEnabled && $0 }
             .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isHovering)
+    }
+}
+
+// MARK: - Child sheet tracking
+
+extension View {
+    /// For a confirmation dialog on the Today page (a sheet on macOS): counts it in
+    /// `router.childSheetDidAppear/Disappear` while it is up, so RootView holds the review sheet back until it
+    /// closes (or this view goes away, e.g. the session was stopped from the menu bar). Never use it inside the
+    /// review sheet itself.
+    func liveChildSheet(isPresented: Bool) -> some View {
+        modifier(LiveChildSheetCounter(isPresented: isPresented))
+    }
+}
+
+private struct LiveChildSheetCounter: ViewModifier {
+    @Environment(WindowRouter.self) private var router
+    private let isPresented: Bool
+    /// This view's share of `router.presentedChildSheets` (0 or 1), so appear/disappear always balance.
+    @State private var isCounted = false
+
+    init(isPresented: Bool) {
+        self.isPresented = isPresented
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: isPresented, initial: true) { _, presented in update(presented) }
+            .onDisappear { update(false) }
+    }
+
+    private func update(_ presented: Bool) {
+        if presented && !isCounted {
+            isCounted = true
+            router.childSheetDidAppear()
+        } else if !presented && isCounted {
+            isCounted = false
+            router.childSheetDidDisappear()
+        }
     }
 }
 

@@ -31,12 +31,6 @@ extension TimeInterval {
         if minutes == 0 { return "\(hours)h" }
         return String(format: "%dh %02dm", hours, minutes)
     }
-
-    /// "1.5h" (one decimal).
-    var formattedHoursDecimal: String {
-        let hours = (isFinite && self > 0) ? self / 3600 : 0
-        return String(format: "%.1fh", hours)
-    }
 }
 
 // MARK: - Date
@@ -52,8 +46,6 @@ extension Date {
 
     /// [startOfDay, startOfNextDay)
     var dayInterval: DateInterval { DateInterval(safeStart: startOfDay, end: startOfNextDay) }
-
-    var isToday: Bool { Calendar.current.isDateInToday(self) }
 
     func isSameDay(as other: Date) -> Bool { Calendar.current.isDate(self, inSameDayAs: other) }
 
@@ -74,13 +66,6 @@ extension Date {
 
     /// e.g. "Oct 7, 2026 at 9:41 AM".
     var shortDateTime: String { formatted(date: .abbreviated, time: .shortened) }
-
-    /// Start of the week containing this date (Monday- or Sunday-first), at midnight.
-    func startOfWeek(mondayFirst: Bool) -> Date {
-        var calendar = Calendar.current
-        calendar.firstWeekday = mondayFirst ? 2 : 1
-        return calendar.dateInterval(of: .weekOfYear, for: self)?.start ?? startOfDay
-    }
 }
 
 // MARK: - DateInterval

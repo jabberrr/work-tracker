@@ -65,7 +65,7 @@ struct LearningView: View {
     private var currentFilter: LearningPageFilter { selection ?? .all }
 
     private func tag(for id: UUID) -> WorkTag? {
-        allTags.first { $0.uuid == id && !$0.isDeleted }
+        allTags.first { ModelLiveness.isLive($0) && $0.uuid == id }
     }
 
     // MARK: - Left column

@@ -455,7 +455,6 @@ final class SessionMathTests: XCTestCase {
         XCTAssertEqual(TimeInterval(12 * 60).formattedShort, "12m")
         XCTAssertEqual(TimeInterval(3900).formattedShort, "1h 05m")
         XCTAssertEqual(TimeInterval(7200).formattedShort, "2h")
-        XCTAssertEqual(TimeInterval(5400).formattedHoursDecimal, "1.5h")
         XCTAssertEqual("  hi \n".trimmed, "hi")
         XCTAssertTrue(" \n ".isBlank)
         XCTAssertNil("   ".nilIfBlank)
@@ -465,8 +464,6 @@ final class SessionMathTests: XCTestCase {
         XCTAssertEqual(DateInterval(safeStart: a, end: b).duration, 0, "never traps on end < start")
 
         let wednesday = TestSupport.date(2026, 6, 10, 15)     // Wednesday
-        XCTAssertEqual(Calendar.current.component(.weekday, from: wednesday.startOfWeek(mondayFirst: true)), 2)
-        XCTAssertEqual(Calendar.current.component(.weekday, from: wednesday.startOfWeek(mondayFirst: false)), 1)
         XCTAssertEqual(wednesday.startOfNextDay, TestSupport.date(2026, 6, 11, 0))
     }
 }

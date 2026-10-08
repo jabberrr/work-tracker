@@ -27,7 +27,7 @@ struct SettingsTagsPane: View {
     /// read those.
     private var allLiveTags: [WorkTag] { ModelLiveness.live(tags) }
     /// Scope marks appear once there is more than one profile (archived ones count).
-    private var showsScope: Bool { profileStore.profiles.count + profileStore.archivedProfiles.count > 1 }
+    private var showsScope: Bool { profileStore.showsProfileScope }
     /// Tags the current profile offers (global + its own).
     private var liveTags: [WorkTag] {
         let scope = profileStore.activeScope
@@ -191,7 +191,7 @@ private struct SettingsTagEditor: View {
 
     private var currentProfile: WorkProfile? { ModelLiveness.live(profileStore.activeProfile) }
     /// "Available in" appears once there is more than one profile (archived ones count).
-    private var showsScope: Bool { profileStore.profiles.count + profileStore.archivedProfiles.count > 1 }
+    private var showsScope: Bool { profileStore.showsProfileScope }
     /// Archive, merge and delete of a global tag affect every profile; say so once profiles are shown.
     private var changesAllProfiles: Bool { showsScope && tag.isAvailableEverywhere }
 
@@ -228,7 +228,7 @@ private struct SettingsTagEditor: View {
     }
 
     var body: some View {
-        if tag.isDeleted || tag.modelContext == nil {
+        if !ModelLiveness.isLive(tag) {
             Color.clear
         } else {
             form
@@ -311,6 +311,10 @@ private struct SettingsTagEditor: View {
         }
         .formStyle(.grouped)
         .onAppear { draftName = tag.name }
+        .onChange(of: tag.name) { _, newName in
+            // A rename synced from another Mac: show it unless the user is typing (their commit wins).
+            if !nameFocused { draftName = newName }
+        }
         .onChange(of: nameFocused) {
             if !nameFocused { commitName() }
         }
@@ -318,7 +322,7 @@ private struct SettingsTagEditor: View {
         .onDisappear {
             commitName()
             // Flush a color change still waiting in the debounce below.
-            if !tag.isDeleted, tag.modelContext != nil, context.hasChanges { save() }
+            if ModelLiveness.isLive(tag), context.hasChanges { save() }
         }
         .task(id: tag.colorHex) {
             // The color wheel reports every drag tick: save once the color settles.
@@ -404,7 +408,7 @@ private struct SettingsTagEditor: View {
     }
 
     private func commitName() {
-        guard !tag.isDeleted, tag.modelContext != nil else { return }
+        guard ModelLiveness.isLive(tag) else { return }
         let trimmed = draftName.trimmed
         guard !trimmed.isEmpty else {
             draftName = tag.name

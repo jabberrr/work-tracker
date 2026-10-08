@@ -6,10 +6,14 @@ import SwiftData
 /// boundary handle between rows.
 /// Every structural edit goes through `SessionEditor` (split, merge, delete, move boundary);
 /// label/tags/focus edits write to the segment directly, then touch and save.
+/// The row's editor popover and the boundary handle live in DetailSegmentEditor.swift, the Split sheet in
+/// DetailSplitSheet.swift. The Split sheet counts as a child sheet of the main window
+/// (`WindowRouter.childSheetDidAppear`), so a review sheet waits for it to close.
 @MainActor
 struct DetailSegmentsSection: View {
     @Environment(\.theme) private var theme
     @Environment(\.modelContext) private var environmentContext
+    @Environment(WindowRouter.self) private var router: WindowRouter?
     private let session: WorkSession
 
     @State private var splitRequest: DetailSplitRequest?
@@ -22,7 +26,7 @@ struct DetailSegmentsSection: View {
     }
 
     var body: some View {
-        let segments = session.sortedSegments.filter { !$0.isDeleted }
+        let segments = ModelLiveness.live(session.sortedSegments)
         VStack(alignment: .leading, spacing: theme.spacingS) {
             SectionHeader("Segments", systemImage: "rectangle.split.3x1") {
                 Text("\(segments.count)")
@@ -78,6 +82,8 @@ struct DetailSegmentsSection: View {
                 .environment(\.theme, theme)
                 .environment(\.modelContext, context)
                 .tint(theme.accent)
+                .onAppear { router?.childSheetDidAppear() }
+                .onDisappear { router?.childSheetDidDisappear() }
         }
         .confirmationDialog("Delete this segment?",
                             isPresented: Binding(get: { deleteCandidate != nil },
@@ -134,7 +140,7 @@ struct DetailSegmentsSection: View {
     }
 
     private func merge(_ segment: Segment) {
-        guard !segment.isDeleted else { return }
+        guard ModelLiveness.isLive(segment) else { return }
         do {
             try SessionEditor.mergeWithNext(segment, in: context)
         } catch {
@@ -144,19 +150,13 @@ struct DetailSegmentsSection: View {
 
     private func delete(_ segment: Segment) {
         deleteCandidate = nil
-        guard !segment.isDeleted else { return }
+        guard ModelLiveness.isLive(segment) else { return }
         do {
             try SessionEditor.deleteSegment(segment, in: context)
         } catch {
             errorMessage = error.localizedDescription
         }
     }
-}
-
-/// Identifies a pending split sheet.
-struct DetailSplitRequest: Identifiable {
-    let id = UUID()
-    let segmentID: UUID
 }
 
 // MARK: - Segment row
@@ -191,7 +191,7 @@ private struct DetailSegmentRow: View {
     }
 
     var body: some View {
-        if segment.isDeleted || segment.modelContext == nil {
+        if !ModelLiveness.isLive(segment) {
             EmptyView()
         } else {
             row
@@ -287,422 +287,5 @@ private struct DetailSegmentRow: View {
         Divider()
         Button("Delete Segment…", role: .destructive, action: onDelete)
             .disabled(isOnly)
-    }
-}
-
-// MARK: - Segment editor (popover)
-
-/// Label, tags and focus of one segment ("None" label = use the session's label).
-@MainActor
-private struct DetailSegmentEditor: View {
-    @Environment(\.theme) private var theme
-    @Bindable private var segment: Segment
-    private let onDone: () -> Void
-    @FocusState private var focusFieldFocused: Bool
-
-    init(segment: Segment, onDone: @escaping () -> Void) {
-        self._segment = Bindable(wrappedValue: segment)
-        self.onDone = onDone
-    }
-
-    var body: some View {
-        if segment.isDeleted || segment.modelContext == nil {
-            EmptyView()
-        } else {
-            editor
-        }
-    }
-
-    /// Labels and tags offered here are the session's profile's.
-    private var profileID: UUID? {
-        ModelLiveness.live(segment.session).flatMap { ProfileOps.effectiveProfileID(of: $0) }
-    }
-
-    private var editor: some View {
-        VStack(alignment: .leading, spacing: theme.spacingM) {
-            Text("Edit segment")
-                .font(theme.headlineFont)
-                .foregroundStyle(theme.textPrimary)
-
-            VStack(alignment: .leading, spacing: theme.spacingXS) {
-                Text("Focus")
-                    .font(theme.calloutFont)
-                    .foregroundStyle(theme.textSecondary)
-                TextField("What was this part about?", text: $segment.focus)
-                    .textFieldStyle(.plain)
-                    .focused($focusFieldFocused)
-                    .onSubmit(finish)
-                    .insetField(isFocused: focusFieldFocused)
-            }
-
-            VStack(alignment: .leading, spacing: theme.spacingXS) {
-                LabelPicker(selection: $segment.label, includeNone: true, title: "Label", profileID: profileID)
-                Text("None uses the session’s label.")
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.textTertiary)
-            }
-
-            VStack(alignment: .leading, spacing: theme.spacingXS) {
-                Text("Tags")
-                    .font(theme.calloutFont)
-                    .foregroundStyle(theme.textSecondary)
-                TagPicker(selection: $segment.tagList, scopeLabel: segment.effectiveLabel, profileID: profileID)
-            }
-
-            HStack {
-                Spacer()
-                Button("Done", action: finish)
-                    .buttonStyle(PrimaryButtonStyle())
-                    .keyboardShortcut(.defaultAction)
-            }
-        }
-        .padding(theme.spacingL)
-        .frame(width: 320)
-        .onChange(of: segment.focus) { _, _ in touch() }
-        .onChange(of: segment.label) { _, _ in touch() }
-        .onChange(of: segment.tagList) { _, _ in touch() }
-        .onDisappear { save() }
-    }
-
-    private func touch() {
-        guard !segment.isDeleted, let session = ModelLiveness.live(segment.session) else { return }
-        if let context = segment.modelContext {
-            ProfileOps.assignProfileIfUnassigned(session, in: context)
-        }
-        session.touch()
-    }
-
-    private func save() {
-        guard !segment.isDeleted, let context = segment.modelContext else { return }
-        do {
-            try context.save()
-        } catch {
-            Log.persistence.error("Segment edit save failed: \(error.localizedDescription, privacy: .public)")
-        }
-    }
-
-    private func finish() {
-        save()
-        onDone()
-    }
-}
-
-// MARK: - Boundary handle
-
-/// "⇆ 10:15" between two rows → popover to move the boundary (SessionEditor.moveBoundary).
-@MainActor
-private struct DetailBoundaryHandle: View {
-    @Environment(\.theme) private var theme
-    private let session: WorkSession
-    private let segment: Segment
-    private let next: Segment
-    @Binding private var isPresented: Bool
-
-    init(session: WorkSession, segment: Segment, next: Segment, isPresented: Binding<Bool>) {
-        self.session = session
-        self.segment = segment
-        self.next = next
-        self._isPresented = isPresented
-    }
-
-    var body: some View {
-        let time = (segment.endedAt ?? next.startedAt).shortTime
-        HStack(spacing: theme.spacingS) {
-            Button {
-                isPresented = true
-            } label: {
-                Label(time, systemImage: "arrow.left.and.right")
-                    .font(theme.captionFont.monospacedDigit())
-            }
-            .buttonStyle(QuietButtonStyle())
-            .controlSize(.small)
-            .help("Move boundary")
-            .accessibilityLabel("Move boundary at \(time)")
-            .popover(isPresented: $isPresented, arrowEdge: .trailing) {
-                DetailBoundaryEditor(session: session, segment: segment, next: next) { isPresented = false }
-                    .environment(\.theme, theme)
-                    .tint(theme.accent)
-            }
-            Rectangle()
-                .fill(theme.separator)
-                .frame(height: 1)
-                .frame(maxWidth: .infinity)
-                .accessibilityHidden(true)
-        }
-        .padding(.leading, theme.spacingL)
-        .padding(.vertical, 2)
-    }
-}
-
-@MainActor
-private struct DetailBoundaryEditor: View {
-    @Environment(\.theme) private var theme
-    private let session: WorkSession
-    private let segment: Segment
-    private let next: Segment
-    private let onDone: () -> Void
-
-    @State private var date: Date
-    @State private var error: String?
-
-    init(session: WorkSession, segment: Segment, next: Segment, onDone: @escaping () -> Void) {
-        self.session = session
-        self.segment = segment
-        self.next = next
-        self.onDone = onDone
-        self._date = State(initialValue: segment.endedAt ?? next.startedAt)
-    }
-
-    private var lowerBound: Date { segment.startedAt.addingTimeInterval(SessionEditor.minimumSegmentLength) }
-    private var upperBound: Date {
-        (next.endedAt ?? session.endedAt ?? .now).addingTimeInterval(-SessionEditor.minimumSegmentLength)
-    }
-
-    var body: some View {
-        let lower = lowerBound
-        let upper = upperBound
-        let valid = lower < upper
-        let components: DatePickerComponents = lower.isSameDay(as: upper) ? [.hourAndMinute] : [.date, .hourAndMinute]
-
-        VStack(alignment: .leading, spacing: theme.spacingM) {
-            Text("Move boundary")
-                .font(theme.headlineFont)
-                .foregroundStyle(theme.textPrimary)
-            Text("“\(segment.displayFocus)” ends and “\(next.displayFocus)” starts at:")
-                .font(theme.calloutFont)
-                .foregroundStyle(theme.textSecondary)
-                .fixedSize(horizontal: false, vertical: true)
-
-            if valid {
-                DatePicker("Boundary", selection: $date, in: lower...upper, displayedComponents: components)
-                    .datePickerStyle(.stepperField)
-                    .labelsHidden()
-                Text("Between \(lower.shortTime) and \(upper.shortTime).")
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.textTertiary)
-            } else {
-                Text("These segments are too short to adjust.")
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.textTertiary)
-            }
-
-            if let error {
-                Text(error)
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel", action: onDone)
-                    .buttonStyle(QuietButtonStyle())
-                    .keyboardShortcut(.cancelAction)
-                Button("Save", action: save)
-                    .buttonStyle(PrimaryButtonStyle())
-                    .keyboardShortcut(.defaultAction)
-                    .disabled(!valid)
-            }
-        }
-        .padding(theme.spacingL)
-        .frame(width: 300)
-        .onChange(of: date) { _, _ in error = nil }
-    }
-
-    private func save() {
-        guard !segment.isDeleted, !next.isDeleted, let context = segment.modelContext else {
-            onDone()
-            return
-        }
-        do {
-            try SessionEditor.moveBoundary(after: segment, to: date, in: context)
-            onDone()
-        } catch {
-            self.error = error.localizedDescription
-        }
-    }
-}
-
-// MARK: - Split sheet
-
-/// Split a segment at a chosen time (DatePicker clamped inside the segment, ≥ minimumSegmentLength from
-/// each end). The new segment gets the chosen label (None = keep the original's), tags and focus.
-@MainActor
-private struct DetailSplitSheet: View {
-    @Environment(\.theme) private var theme
-    @Environment(\.dismiss) private var dismiss
-    private let session: WorkSession
-
-    @State private var segmentID: UUID
-    @State private var date: Date
-    @State private var label: WorkLabel?
-    @State private var tags: [WorkTag]
-    @State private var focus: String = ""
-    @State private var error: String?
-    @FocusState private var focusFieldFocused: Bool
-
-    init(session: WorkSession, initialSegmentID: UUID) {
-        self.session = session
-        let segments = session.sortedSegments
-        let segment = segments.first { $0.uuid == initialSegmentID } ?? segments.first
-        self._segmentID = State(initialValue: segment?.uuid ?? initialSegmentID)
-        self._date = State(initialValue: Self.midpoint(of: segment, in: session))
-        self._label = State(initialValue: segment?.label)
-        self._tags = State(initialValue: segment?.tagList ?? [])
-    }
-
-    static func end(of segment: Segment, in session: WorkSession) -> Date {
-        segment.endedAt ?? session.endedAt ?? .now
-    }
-
-    static func midpoint(of segment: Segment?, in session: WorkSession) -> Date {
-        guard let segment else { return session.startedAt }
-        let segmentEnd = Self.end(of: segment, in: session)
-        return segment.startedAt.addingTimeInterval(max(0, segmentEnd.timeIntervalSince(segment.startedAt)) / 2)
-    }
-
-    /// Allowed split times, or nil when the segment is too short.
-    static func splitRange(of segment: Segment, in session: WorkSession) -> ClosedRange<Date>? {
-        let lower = segment.startedAt.addingTimeInterval(SessionEditor.minimumSegmentLength)
-        let upper = Self.end(of: segment, in: session).addingTimeInterval(-SessionEditor.minimumSegmentLength)
-        return lower < upper ? lower...upper : nil
-    }
-
-    var body: some View {
-        let segments = session.sortedSegments.filter { !$0.isDeleted }
-        let selected = segments.first { $0.uuid == segmentID }
-        let range = selected.flatMap { Self.splitRange(of: $0, in: session) }
-
-        VStack(alignment: .leading, spacing: theme.spacingL) {
-            VStack(alignment: .leading, spacing: theme.spacingXS) {
-                Text("Split segment")
-                    .font(theme.titleFont)
-                    .foregroundStyle(theme.textPrimary)
-                Text("The part after this time becomes a new segment.")
-                    .font(theme.calloutFont)
-                    .foregroundStyle(theme.textSecondary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: theme.spacingM, verticalSpacing: theme.spacingM) {
-                if segments.count > 1 {
-                    GridRow {
-                        fieldLabel("Segment")
-                        Picker("Segment", selection: $segmentID) {
-                            ForEach(segments, id: \.uuid) { segment in
-                                Text("\(segment.displayFocus) · \(segment.startedAt.shortTime)–\(Self.end(of: segment, in: session).shortTime)")
-                                    .tag(segment.uuid)
-                            }
-                        }
-                        .labelsHidden()
-                        .fixedSize()
-                    }
-                }
-                GridRow {
-                    fieldLabel("Split at")
-                    if let range {
-                        DatePicker("Split at", selection: $date, in: range,
-                                   displayedComponents: range.lowerBound.isSameDay(as: range.upperBound)
-                                       ? [.hourAndMinute] : [.date, .hourAndMinute])
-                            .datePickerStyle(.stepperField)
-                            .labelsHidden()
-                    } else {
-                        Text("This segment is too short to split.")
-                            .font(theme.calloutFont)
-                            .foregroundStyle(theme.textTertiary)
-                    }
-                }
-                GridRow {
-                    fieldLabel("New focus")
-                    TextField(selected?.focus.nilIfBlank ?? "What did you switch to?", text: $focus)
-                        .textFieldStyle(.plain)
-                        .focused($focusFieldFocused)
-                        .insetField(isFocused: focusFieldFocused)
-                }
-                GridRow {
-                    fieldLabel("Label")
-                    LabelPicker(selection: $label, includeNone: true, title: "Label", profileID: profileID)
-                        .labelsHidden()
-                        .fixedSize()
-                }
-                GridRow {
-                    fieldLabel("Tags")
-                    TagPicker(selection: $tags, scopeLabel: label ?? session.label, profileID: profileID)
-                }
-            }
-
-            if let selected, range != nil {
-                Text(previewText(for: selected))
-                    .font(theme.captionFont.monospacedDigit())
-                    .foregroundStyle(theme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            if let error {
-                Text(error)
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.danger)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
-
-            HStack {
-                Spacer()
-                Button("Cancel") { dismiss() }
-                    .buttonStyle(QuietButtonStyle())
-                    .keyboardShortcut(.cancelAction)
-                Button {
-                    split(selected)
-                } label: {
-                    Label("Split", systemImage: "scissors")
-                }
-                .buttonStyle(PrimaryButtonStyle())
-                .keyboardShortcut(.defaultAction)
-                .disabled(range == nil)
-            }
-        }
-        .padding(theme.spacingXL)
-        .frame(minWidth: 460, alignment: .leading)
-        .onChange(of: segmentID) { _, newValue in
-            let segment = session.sortedSegments.first { $0.uuid == newValue }
-            date = Self.midpoint(of: segment, in: session)
-            label = segment?.label
-            tags = segment?.tagList ?? []
-            error = nil
-        }
-        .onChange(of: date) { _, _ in error = nil }
-    }
-
-    /// Labels and tags offered here are the session's profile's.
-    private var profileID: UUID? {
-        session.isDeleted || session.modelContext == nil ? nil : ProfileOps.effectiveProfileID(of: session)
-    }
-
-    /// "Before: 9:02 AM–9:40 AM (38m) · After: 9:40 AM–10:15 AM (35m)"
-    private func previewText(for segment: Segment) -> String {
-        let start = segment.startedAt
-        let segmentEnd = Self.end(of: segment, in: session)
-        let before = "\(start.shortTime)–\(date.shortTime) (\(date.timeIntervalSince(start).formattedShort))"
-        let after = "\(date.shortTime)–\(segmentEnd.shortTime) (\(segmentEnd.timeIntervalSince(date).formattedShort))"
-        return "Before: \(before) · After: \(after)"
-    }
-
-    private func fieldLabel(_ text: String) -> some View {
-        Text(text)
-            .font(theme.calloutFont)
-            .foregroundStyle(theme.textSecondary)
-            .gridColumnAlignment(.trailing)
-    }
-
-    private func split(_ segment: Segment?) {
-        guard let segment, !segment.isDeleted, let context = session.modelContext else {
-            dismiss()
-            return
-        }
-        do {
-            try SessionEditor.split(segment, at: date, label: label, tags: tags, focus: focus, in: context)
-            dismiss()
-        } catch {
-            self.error = error.localizedDescription
-        }
     }
 }

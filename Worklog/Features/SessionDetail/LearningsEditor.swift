@@ -14,9 +14,8 @@ enum LearningsEditorStyle {
 
 /// The "what I learned" editor for one session:
 /// - free-text `learningText` ("What I learned"),
-/// - `overlaySummary` ("Takeaway for next time", 140-character guidance counter; typing a non-blank
-///   summary turns `showInOverlay` on),
-/// - the `showInOverlay` toggle,
+/// - `overlaySummary` + the `showInOverlay` toggle ("Takeaway for next time": the shared `TakeawayField`, which also
+///   turns the toggle on for a first takeaway unless the user set it),
 /// - discrete `LearningPoint`s (add, edit, delete, reorder by drag or context menu, tags, mastery 1–5).
 ///
 /// Edits write straight to the model, touch the session and save on submit / disappear; point creation,
@@ -38,14 +37,13 @@ struct LearningsEditor: View {
     @State private var showsAllPoints = false
     @FocusState private var focusedField: LearningsField?
 
-    /// - Parameter showsTakeaway: pass `false` when the host already edits `overlaySummary` itself (the end-of-session sheet).
+    /// - Parameter showsTakeaway: pass `false` when the host already edits `overlaySummary` itself (the end-of-session
+    ///   sheet); this editor then leaves the takeaway and its toggle entirely to the host.
     init(session: WorkSession, style: LearningsEditorStyle = .full, showsTakeaway: Bool = true) {
         self._session = Bindable(wrappedValue: session)
         self.style = style
         self.showsTakeaway = showsTakeaway
     }
-
-    static let summaryGuidanceLength = 140
 
     var body: some View {
         if isAlive {
@@ -69,20 +67,18 @@ struct LearningsEditor: View {
         .onChange(of: session.learningText) { _, _ in
             markEdited()
         }
-        .onChange(of: session.overlaySummary) { oldValue, newValue in
-            guard isAlive else { return }
-            if oldValue.isBlank && !newValue.isBlank && !session.showInOverlay {
-                session.showInOverlay = true
-            }
-            markEdited()
+        // Takeaway edits are this editor's only when it shows the field (`TakeawayField` commits through `persist`).
+        .onChange(of: session.overlaySummary) { _, _ in
+            if showsTakeaway { markEdited() }
         }
         .onChange(of: session.showInOverlay) { _, _ in
+            guard showsTakeaway else { return }
             markEdited()
             persist()
         }
         .onChange(of: focusedField) { oldValue, _ in
             // Leaving a text field commits it.
-            if oldValue == .learning || oldValue == .summary { persist() }
+            if oldValue == .learning { persist() }
         }
         .onDisappear { persist() }
     }
@@ -133,43 +129,9 @@ struct LearningsEditor: View {
     // MARK: Takeaway
 
     private var takeawayEditor: some View {
-        let count = session.overlaySummary.trimmed.count
-        let over = count > Self.summaryGuidanceLength
-        return VStack(alignment: .leading, spacing: theme.spacingXS) {
-            HStack(alignment: .firstTextBaseline) {
-                fieldTitle("Takeaway for next time")
-                Spacer(minLength: theme.spacingS)
-                Text("\(count)/\(Self.summaryGuidanceLength)")
-                    .font(theme.captionFont.monospacedDigit())
-                    .foregroundStyle(over ? theme.warning : theme.textTertiary)
-                    .help("Suggested length")
-                    .accessibilityLabel("\(count) of \(Self.summaryGuidanceLength) suggested characters")
-            }
-            TextField("One line for next time", text: $session.overlaySummary)
-                .textFieldStyle(.plain)
-                .font(theme.bodyFont)
-                .foregroundStyle(theme.textPrimary)
-                .focused($focusedField, equals: .summary)
-                .onSubmit { persist() }
-                .insetField(isFocused: focusedField == .summary)
-                .accessibilityLabel("Takeaway for next time")
-
-            Toggle("Show in overlay & menu bar", isOn: $session.showInOverlay)
-                .toggleStyle(.checkbox)
-                .font(theme.calloutFont)
-                .foregroundStyle(theme.textPrimary)
-
-            if session.showInOverlay && session.takeawayText == nil {
-                Text("Add a takeaway or learning to show.")
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.textTertiary)
-                    .fixedSize(horizontal: false, vertical: true)
-            } else if over {
-                Text("Long takeaways are cut off in the overlay.")
-                    .font(theme.captionFont)
-                    .foregroundStyle(theme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
-            }
+        VStack(alignment: .leading, spacing: theme.spacingXS) {
+            fieldTitle("Takeaway for next time")
+            TakeawayField(session: session, onCommit: { persist() })
         }
     }
 
@@ -269,12 +231,12 @@ struct LearningsEditor: View {
 
     // MARK: - Model
 
-    private var isAlive: Bool { !session.isDeleted && session.modelContext != nil }
+    private var isAlive: Bool { ModelLiveness.isLive(session) }
 
     private var context: ModelContext { session.modelContext ?? environmentContext }
 
     private var livePoints: [LearningPoint] {
-        session.sortedLearningPoints.filter { !$0.isDeleted }
+        ModelLiveness.live(session.sortedLearningPoints)
     }
 
     /// A user edit: an unassigned session is written into its effective profile first.
@@ -305,7 +267,7 @@ struct LearningsEditor: View {
 
     /// Return in a point's field: a point emptied by the user is removed, otherwise saved.
     private func commit(_ point: LearningPoint) {
-        guard isAlive, !point.isDeleted else { return }
+        guard isAlive, ModelLiveness.isLive(point) else { return }
         if point.text.isBlank {
             delete(point)
             focusedField = .newPoint
@@ -315,13 +277,13 @@ struct LearningsEditor: View {
     }
 
     private func delete(_ point: LearningPoint) {
-        guard isAlive, !point.isDeleted else { return }
+        guard isAlive, ModelLiveness.isLive(point) else { return }
         if focusedField == .point(point.uuid) { focusedField = nil }
         SessionEditor.deleteLearningPoint(point, in: context)
     }
 
     private func move(_ point: LearningPoint, by offset: Int) {
-        guard isAlive, !point.isDeleted else { return }
+        guard isAlive, ModelLiveness.isLive(point) else { return }
         var points = livePoints
         guard let from = points.firstIndex(where: { $0.uuid == point.uuid }) else { return }
         let to = from + offset
@@ -332,7 +294,7 @@ struct LearningsEditor: View {
 
     /// Drop `draggedID` onto `target`: the dragged point takes the target's position.
     private func move(_ draggedID: UUID, onto target: LearningPoint) {
-        guard isAlive, !target.isDeleted else { return }
+        guard isAlive, ModelLiveness.isLive(target) else { return }
         var points = livePoints
         guard let from = points.firstIndex(where: { $0.uuid == draggedID }),
               let to = points.firstIndex(where: { $0.uuid == target.uuid }),
@@ -346,7 +308,7 @@ struct LearningsEditor: View {
 // MARK: - Focus
 
 private enum LearningsField: Hashable {
-    case learning, summary, newPoint
+    case learning, newPoint
     case point(UUID)
 }
 
@@ -403,7 +365,7 @@ private struct LearningsPointRow: View {
     }
 
     var body: some View {
-        if point.isDeleted || point.modelContext == nil {
+        if !ModelLiveness.isLive(point) {
             EmptyView()
         } else {
             row

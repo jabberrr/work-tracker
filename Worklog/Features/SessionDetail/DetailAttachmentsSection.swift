@@ -7,10 +7,13 @@ import UniformTypeIdentifiers
 /// add via open panel / paste (⌘V while the section is focused, or the paste button) / drag & drop,
 /// a Quick Look–style viewer (full image), save to disk and delete. Import goes through `AttachmentImporter`
 /// (downscaled, compressed, inserted, linked, saved); delete through `SessionEditor.deleteAttachment`.
+/// The viewer sheet counts as a child sheet of the main window (`WindowRouter.childSheetDidAppear`), so a review
+/// sheet waits for it to close.
 @MainActor
 struct DetailAttachmentsSection: View {
     @Environment(\.theme) private var theme
     @Environment(\.modelContext) private var environmentContext
+    @Environment(WindowRouter.self) private var router: WindowRouter?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     private let session: WorkSession
 
@@ -26,7 +29,7 @@ struct DetailAttachmentsSection: View {
     }
 
     var body: some View {
-        let attachments = session.sortedAttachments.filter { !$0.isDeleted }
+        let attachments = ModelLiveness.live(session.sortedAttachments)
         VStack(alignment: .leading, spacing: theme.spacingS) {
             SectionHeader("Images", systemImage: "photo") {
                 HStack(spacing: theme.spacingS) {
@@ -74,6 +77,8 @@ struct DetailAttachmentsSection: View {
                               })
                 .environment(\.theme, theme)
                 .tint(theme.accent)
+                .onAppear { router?.childSheetDidAppear() }
+                .onDisappear { router?.childSheetDidDisappear() }
         }
         .confirmationDialog("Delete this image?",
                             isPresented: Binding(get: { deleteCandidate != nil },
@@ -111,7 +116,8 @@ struct DetailAttachmentsSection: View {
                         DetailAttachmentCell(
                             attachment: attachment,
                             onOpen: { viewerSelection = DetailImageSelection(attachmentID: attachment.uuid) },
-                            onDelete: { deleteCandidate = attachment }
+                            onDelete: { deleteCandidate = attachment },
+                            onSaveUnavailable: { importMessage = "This image isn’t on this Mac yet." }
                         )
                     }
                 }
@@ -153,12 +159,17 @@ struct DetailAttachmentsSection: View {
 
     private var context: ModelContext { session.modelContext ?? environmentContext }
 
-    private var isAlive: Bool { !session.isDeleted && session.modelContext != nil }
+    private var isAlive: Bool { ModelLiveness.isLive(session) }
 
+    /// Open panel, then import off the main thread (`AttachmentImporter`).
     private func chooseImages() {
         guard isAlive else { return }
         importMessage = nil
-        AttachmentImporter.addFromOpenPanel(to: session, in: context)
+        let session = self.session
+        let context = self.context
+        Task { @MainActor in
+            _ = await AttachmentImporter.addFromOpenPanel(to: session, in: context)
+        }
     }
 
     private func pasteImages() {
@@ -200,7 +211,7 @@ struct DetailAttachmentsSection: View {
 
     private func delete(_ attachment: Attachment) {
         deleteCandidate = nil
-        guard !attachment.isDeleted else { return }
+        guard ModelLiveness.isLive(attachment) else { return }
         SessionEditor.deleteAttachment(attachment, in: context)
     }
 }
@@ -219,19 +230,23 @@ private struct DetailAttachmentCell: View {
     @Bindable private var attachment: Attachment
     private let onOpen: () -> Void
     private let onDelete: () -> Void
+    /// "Save to Disk…" on an image whose full data hasn't arrived from iCloud yet.
+    private let onSaveUnavailable: () -> Void
 
     @State private var thumbnail: NSImage?
     @State private var isHovering = false
     @FocusState private var captionFocused: Bool
 
-    init(attachment: Attachment, onOpen: @escaping () -> Void, onDelete: @escaping () -> Void) {
+    init(attachment: Attachment, onOpen: @escaping () -> Void, onDelete: @escaping () -> Void,
+         onSaveUnavailable: @escaping () -> Void) {
         self._attachment = Bindable(wrappedValue: attachment)
         self.onOpen = onOpen
         self.onDelete = onDelete
+        self.onSaveUnavailable = onSaveUnavailable
     }
 
     var body: some View {
-        if attachment.isDeleted || attachment.modelContext == nil {
+        if !ModelLiveness.isLive(attachment) {
             EmptyView()
         } else {
             cell
@@ -281,17 +296,19 @@ private struct DetailAttachmentCell: View {
         }
         .contextMenu {
             Button("View", action: onOpen)
-            Button("Save to Disk…") { AttachmentImporter.saveToDisk(attachment) }
+            Button("Save to Disk…", action: saveToDisk)
             Divider()
             Button("Delete Image…", role: .destructive, action: onDelete)
         }
-        .accessibilityAction(named: "Save to disk") { AttachmentImporter.saveToDisk(attachment) }
+        .accessibilityAction(named: "Save to disk") { saveToDisk() }
         .accessibilityAction(named: "Delete") { onDelete() }
-        .task(id: attachment.uuid) {
+        // Reloads when the thumbnail arrives or changes (e.g. synced from iCloud after the cell appeared).
+        .task(id: attachment.thumbnailData?.count ?? -1) {
+            guard ModelLiveness.isLive(attachment) else { return }
             thumbnail = attachment.thumbnailImage
         }
         .onChange(of: attachment.caption) { _, _ in
-            guard !attachment.isDeleted, let session = ModelLiveness.live(attachment.session) else { return }
+            guard ModelLiveness.isLive(attachment), let session = ModelLiveness.live(attachment.session) else { return }
             if let context = attachment.modelContext {
                 ProfileOps.assignProfileIfUnassigned(session, in: context)
             }
@@ -302,8 +319,19 @@ private struct DetailAttachmentCell: View {
         }
     }
 
+    /// The full image is read only here (not to enable the menu item: that would load every image's data); when
+    /// it hasn't synced yet the section says so instead of doing nothing.
+    private func saveToDisk() {
+        guard ModelLiveness.isLive(attachment) else { return }
+        if attachment.data == nil {
+            onSaveUnavailable()
+        } else {
+            AttachmentImporter.saveToDisk(attachment)
+        }
+    }
+
     private func commitCaption() {
-        guard !attachment.isDeleted, let context = attachment.modelContext else { return }
+        guard ModelLiveness.isLive(attachment), let context = attachment.modelContext else { return }
         do {
             try context.save()
         } catch {
@@ -334,7 +362,7 @@ private struct DetailImageViewer: View {
         self._currentID = State(initialValue: initialID)
     }
 
-    private var live: [Attachment] { attachments.filter { !$0.isDeleted } }
+    private var live: [Attachment] { ModelLiveness.live(attachments) }
 
     var body: some View {
         let items = live
@@ -438,7 +466,7 @@ private struct DetailImageViewer: View {
     /// Shows the next image (or the previous one at the end) first, then deletes; closes when none is left.
     private func confirmDelete(_ attachment: Attachment) {
         deleteCandidate = nil
-        guard !attachment.isDeleted else { return }
+        guard ModelLiveness.isLive(attachment) else { return }
         let items = live
         let remaining = items.filter { $0.uuid != attachment.uuid }
         if let index = items.firstIndex(where: { $0.uuid == attachment.uuid }), !remaining.isEmpty {
@@ -469,7 +497,7 @@ private struct DetailImageViewer: View {
     @MainActor
     private func loadImage(for attachment: Attachment?) async {
         image = nil
-        guard let attachment, !attachment.isDeleted else {
+        guard let attachment, ModelLiveness.isLive(attachment) else {
             isLoading = false
             return
         }

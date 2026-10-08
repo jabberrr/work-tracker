@@ -20,7 +20,7 @@ struct DetailNotesSection: View {
     }
 
     var body: some View {
-        let notes = session.sortedNotes.filter { !$0.isDeleted }
+        let notes = ModelLiveness.live(session.sortedNotes)
         VStack(alignment: .leading, spacing: theme.spacingS) {
             SectionHeader("Notes", systemImage: "note.text") {
                 HStack(spacing: theme.spacingS) {
@@ -139,21 +139,21 @@ struct DetailNotesSection: View {
 
     private func add(_ text: String, at date: Date) {
         let trimmed = text.trimmed
-        guard !trimmed.isEmpty, !session.isDeleted else { return }
+        guard !trimmed.isEmpty, ModelLiveness.isLive(session) else { return }
         SessionEditor.addNote(trimmed, at: date, to: session, in: context)
         isComposing = false
     }
 
     private func update(_ note: Note, text: String, date: Date?) {
         let trimmed = text.trimmed
-        guard !trimmed.isEmpty, !note.isDeleted else { return }
+        guard !trimmed.isEmpty, ModelLiveness.isLive(note) else { return }
         SessionEditor.updateNote(note, text: trimmed, date: date, in: context)
         editingNoteID = nil
     }
 
     private func delete(_ note: Note) {
         deleteCandidate = nil
-        guard !note.isDeleted else { return }
+        guard ModelLiveness.isLive(note) else { return }
         if editingNoteID == note.uuid { editingNoteID = nil }
         SessionEditor.deleteNote(note, in: context)
     }

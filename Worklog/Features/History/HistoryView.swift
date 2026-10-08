@@ -54,7 +54,7 @@ struct HistoryView: View {
                 EmptyStateView(title: "No sessions yet",
                                systemImage: "clock",
                                message: "Finished sessions appear here.",
-                               actionTitle: "Start session") {
+                               actionTitle: "Go to Today") {
                     router.show(.today)
                 }
             } else {
@@ -90,6 +90,10 @@ struct HistoryView: View {
         .onChange(of: profiles.activeProfileID) { _, _ in
             dropFiltersOutsideScope()
             recompute()
+        }
+        // `router.showSession` (Today, menu bar, Learning): clear filters and search so the session is listed.
+        .onChange(of: router.historyFilterResetRequest) { _, _ in
+            clearFilters()
         }
         .confirmationDialog("Delete this session?",
                             isPresented: Binding(get: { pendingDelete != nil },
@@ -322,7 +326,7 @@ struct HistoryView: View {
     @ViewBuilder
     private var detailColumn: some View {
         if let id = router.selectedSessionID, let session = sessionForID(id) {
-            SessionDetailView(session: session)
+            SessionDetailView(session: session, onDelete: { delete($0) })
                 .id(id)
         } else if let id = router.selectedSessionID, let active = engine.activeSession,
                   active.persistentModelID == id, isLiveInScope {
@@ -367,7 +371,7 @@ struct HistoryView: View {
     /// Ended sessions of the current profile only (detail, delete).
     private func sessionForID(_ id: PersistentIdentifier) -> WorkSession? {
         let scope = profiles.activeScope
-        return sessions.first { $0.persistentModelID == id && !$0.isDeleted && scope.contains($0) }
+        return sessions.first { $0.persistentModelID == id && ModelLiveness.isLive($0) && scope.contains($0) }
     }
 
     /// After a profile switch, a label/tag chip the new profile doesn't offer would filter everything out.
@@ -404,7 +408,7 @@ struct HistoryView: View {
     private func recompute() {
         let scope = profiles.activeScope
         clearSelectionOutsideScope(scope)
-        var list = sessions.filter { !$0.isDeleted }
+        var list = ModelLiveness.live(sessions)
         if let labelID = labelFilter {
             list = list.filter { session in
                 session.label?.persistentModelID == labelID
@@ -424,9 +428,11 @@ struct HistoryView: View {
         sections = HistoryGrouping.sections(for: list, sort: sort)
     }
 
+    /// The one delete path (list ⌫, context menu, the detail's "Delete Session…"): select a neighbour, drop the row,
+    /// then delete a moment later.
     private func delete(_ session: WorkSession) {
         pendingDelete = nil
-        guard !session.isDeleted, let context = session.modelContext else { return }
+        guard ModelLiveness.isLive(session), let context = session.modelContext else { return }
         let id = session.persistentModelID
 
         // Move the selection to a neighbour first so no view keeps showing the deleted model.
@@ -455,7 +461,7 @@ struct HistoryView: View {
         Task { @MainActor in
             await Task.yield()
             try? await Task.sleep(for: .milliseconds(60))
-            guard !session.isDeleted, session.modelContext != nil else { return }
+            guard ModelLiveness.isLive(session) else { return }
             do {
                 try SessionEditor.deleteSession(session, in: context)
             } catch {

@@ -9,7 +9,8 @@ import SwiftUI
 ///
 /// Focus: the panel is borderless + `.nonactivatingPanel`, `canBecomeKey == true` and
 /// `becomesKeyOnlyIfNeeded == true`, so clicking a text field makes it key (typing works) without
-/// activating Worklog; buttons work without taking key status.
+/// activating Worklog; buttons work without taking key status. Esc / Return in the note field and closing the
+/// split form give key status back (`OverlayKeyFocus.release()`).
 ///
 /// Profiles: like the menu bar, everything follows the *panel profile*: the running session's profile while
 /// active, else the quick start profile. Start, the takeaway and today's total use it; the header names it when
@@ -30,8 +31,9 @@ struct OverlayView: View {
     init() {}
 
     var body: some View {
+        // The query keeps its content's identity at midnight, so a half-typed note or open split form survives.
         LiveTodaySessionsQuery { sessions in
-            OverlayTicker(isTicking: engine.isRunning) { date in
+            LiveTicker(isTicking: engine.isRunning) { date in
                 OverlayContent(
                     grid: settings.overlayGrid,
                     data: liveData(sessions: sessions, at: date),
@@ -54,7 +56,7 @@ struct OverlayView: View {
     private func liveData(sessions: [WorkSession], at date: Date) -> OverlayDisplayData {
         let quickStart = profiles.quickStartProfile
         let startLabel = LiveStartChoice.defaultLabel(in: labels, profile: quickStart, settings: settings)
-        guard let session = engine.activeSession, LiveModelGuard.isUsable(session) else {
+        guard let session = engine.activeSession, ModelLiveness.isLive(session) else {
             let scope = ProfileScope(profileID: profiles.quickStartProfileID)
             let profile = OverlayDisplayData.profileFields(quickStart, showsProfile: profiles.hasMultipleProfiles)
             return OverlayDisplayData(
@@ -82,7 +84,8 @@ struct OverlayView: View {
             hasPendingReview: engine.pendingEndSession != nil,
             isOnAnotherMac: engine.isActiveSessionOnAnotherMac,
             profileName: profile.name,
-            profileColorHex: profile.colorHex
+            profileColorHex: profile.colorHex,
+            longSessionHours: LiveLongSessionRule.warningHours(engine: engine, settings: settings, now: date)
         )
     }
 
@@ -93,10 +96,12 @@ struct OverlayView: View {
             hide: { overlay.hide() },
             togglePause: { engine.togglePause() },
             toggleSplit: { toggleSplit() },
-            endSplit: { isSplitting = false },
+            endSplit: { endSplit() },
             stop: { stop() },
             start: { start() },
-            review: { router.showMainWindow() }
+            review: { router.requestReview() },
+            releaseKey: { OverlayKeyFocus.release() },
+            keepGoing: { keepGoing() }
         )
     }
 
@@ -111,36 +116,62 @@ struct OverlayView: View {
         if isSplitting {
             // Make the (non-activating) panel key so the split form's focus field takes typing right away.
             // This does not activate Worklog.
-            NSApp.windows.first(where: { $0 is OverlayPanel })?.makeKey()
+            OverlayKeyFocus.panel?.makeKey()
+        } else {
+            OverlayKeyFocus.release()
         }
     }
 
+    /// Split committed or cancelled: close the form and hand the keyboard back.
+    private func endSplit() {
+        isSplitting = false
+        OverlayKeyFocus.release()
+    }
+
+    /// The single stop path (brings the main window forward when a review is pending).
     private func stop() {
         isSplitting = false
-        _ = engine.stop()
-        // The review sheet lives in the main window.
-        if engine.pendingEndSession != nil {
-            router.showMainWindow()
-        }
+        OverlayKeyFocus.release()
+        router.stopSession(engine)
+    }
+
+    private func keepGoing() {
+        guard let session = ModelLiveness.live(engine.activeSession) else { return }
+        engine.dismissLongSessionWarning(for: session)
     }
 }
 
-/// Re-renders once per second while `isTicking`, and keeps the same view identity when ticking starts or stops
-/// (a branch between a TimelineView and plain content would reset the note field and split form on pause).
-/// While paused or idle it passes the current date on each re-render.
+/// Keyboard focus of the floating overlay panel. Clicking its note field (or opening Split) makes the
+/// non-activating panel key, so typing goes there without activating Worklog. Once the user is done (Esc, Return,
+/// a split committed or cancelled) the panel must give the keyboard back, or keystrokes meant for the frontmost
+/// app land in the overlay (and beep).
 @MainActor
-private struct OverlayTicker<Content: View>: View {
-    private let isTicking: Bool
-    private let content: (Date) -> Content
-
-    init(isTicking: Bool, @ViewBuilder content: @escaping (Date) -> Content) {
-        self.isTicking = isTicking
-        self.content = content
+enum OverlayKeyFocus {
+    static var panel: OverlayPanel? {
+        NSApp.windows.lazy.compactMap { $0 as? OverlayPanel }.first
     }
 
-    var body: some View {
-        TimelineView(.animation(minimumInterval: 1, paused: !isTicking)) { context in
-            content(isTicking ? context.date : Date())
+    /// Ends editing in the panel and gives up key status: to Worklog's main window when Worklog is the active app,
+    /// else back to the frontmost app. Runs on the next main-actor turn (callers are inside a key event).
+    static func release() {
+        Task { @MainActor in
+            guard let panel = Self.panel, panel.isKeyWindow else { return }
+            panel.makeFirstResponder(nil)
+            if NSApp.isActive,
+               let window = NSApp.windows.first(where: { $0 !== panel && !($0 is NSPanel) && $0.isVisible
+                                                         && $0.canBecomeKey }) {
+                window.makeKey()
+                return
+            }
+            panel.resignKey()
+            guard !NSApp.isActive, panel.isVisible else { return }
+            // Another app is frontmost: the window server keeps routing keys to this panel until it leaves the
+            // window list, so take it out and straight back in (no animation; it never becomes key on its own).
+            let animation = panel.animationBehavior
+            panel.animationBehavior = .none
+            panel.orderOut(nil)
+            panel.orderFrontRegardless()
+            panel.animationBehavior = animation
         }
     }
 }
