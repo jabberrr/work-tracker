@@ -10,6 +10,9 @@
 >
 > **Round 3 (Profiles)** is specified in §16: the sidebar profile switcher, `ProfileBadge`, the profile pickers
 > and the `profileID:` scoping of every label/tag picker. Where §16 and an earlier section disagree, §16 wins.
+>
+> **Round 4** (§17): the profile switcher expands an inline list instead of a popover (§16.4), the edit badges
+> are smaller and top-trailing (§8.1), and the overlay layout is a 6-column grid (§10.6).
 
 Code lives in `Worklog/DesignSystem/**` and `Worklog/Shared/**`. Read the theme with
 `@Environment(\.theme) private var theme`. **Never hard-code a color, font, radius or spacing.** The only
@@ -225,8 +228,11 @@ never a single size by hand.
   motion besides `LiveDot`: ±1.2° rotation, 0.28 s period, a per-item phase (`seed`), only while editing.
   It is driven by `TimelineView(.animation(paused:))`, never by a `repeatForever` animation (those leak into
   unrelated transitions). Under Reduce Motion there is no rotation: a 1 pt dashed accent outline (`radiusS`)
-  marks the editable items instead. Removing/reordering items animates 150 ms ease-out (`nil` under
-  Reduce Motion).
+  marks the editable items instead. Adding, removing, dropping and resizing grid elements animates 150 ms
+  ease-out (`nil` under Reduce Motion); the drag ghost and the floating copy are never animated.
+- **Sidebar profile list** (`ProfileSwitcher`): expands and collapses 180 ms ease-out (the list slides up from
+  behind the row and fades; it only fades out), and the chevron rotates 180° with it. No animation under
+  Reduce Motion.
 - Not allowed: counting/rolling digits on the timer, bouncing, springy scale, confetti, parallax.
 - **Reduce Motion:** read `@Environment(\.accessibilityReduceMotion)`; pass `nil` animation when true.
   Design-system components already do.
@@ -290,8 +296,10 @@ need no Reduce Transparency handling (no materials). Signatures are final (ARCHI
 | `ValuePicker` | `ValuePicker(_:selection:options:suffix:title:)` (`Option: Hashable`) | "Week starts on **Monday ⌄**": the bold accent value + a small chevron is a plain button that opens a popover list (checkmark on the selected option; click, Return or Space picks and closes; ↑/↓ move; Esc closes). First-text-baseline aligned with the prefix, same font. For short option lists inside sentences; lists over 12 options scroll in the popover (highlight kept visible). |
 | `ShortcutRecorder` | `ShortcutRecorder(shortcut: StoredShortcut?, accessibilityName: String, onRecord: (StoredShortcut) -> Void, onClear: () -> Void)` | Key-cap field; see §11.1. It never validates: pass the result to `ShortcutStore.set(_:for:)` and show its message under the row. |
 | `ResetToDefaultButton` | `ResetToDefaultButton(isDefault: Bool, accessibilityLabel: String, action: () -> Void)` | `arrow.counterclockwise` in `IconButtonStyle(size: 22)`, disabled at the default, help "Reset". |
-| `RemoveBadgeButton` | `RemoveBadgeButton(accessibilityLabel: String, action: () -> Void)` | Edit-mode (−): 18 pt `danger` circle, white `minus` (9 pt bold), 1.5 pt `elevatedSurface` ring, 24 pt hit area, help "Remove". Place at the item's top-leading corner, offset (−6, −6). |
-| `AddBadgeButton` | `AddBadgeButton(accessibilityLabel: String, action: () -> Void)` | Edit-mode (+): 28 pt accent circle, `onAccent` `plus` (12 pt bold), help "Add" (dropped while disabled so the caller's reason shows, e.g. "All elements shown"). |
+| `RemoveBadgeButton` | `RemoveBadgeButton(accessibilityLabel: String, action: () -> Void)`; statics `diameter` 14, `hitSize` 22, `cornerOffset` (8, −8) | Edit-mode (−): 14 pt `danger` circle, white `minus` (7 pt bold), 1.5 pt `elevatedSurface` ring (17 pt), 22 × 22 pt hit area, 20 pt accent focus ring, help "Remove". Don't place it by hand: use `editRemoveBadge`. |
+| `View.editRemoveBadge(_:accessibilityLabel:action:)` | `func editRemoveBadge(_ isShown: Bool, accessibilityLabel: String, action: @escaping () -> Void) -> some View` | The (−) badge on the item's **top-trailing** corner: `overlay(alignment: .topTrailing)` + `cornerOffset`, so the badge centre sits 3 pt inside the corner and the circle overhangs 4 pt. Apply it after `.wiggle` so the badge doesn't rotate. |
+| `EditResizeHandle` | `EditResizeHandle()`; statics `hitSize` 20 × 24, `edgeOffset` 8 | Edit-mode resize handle on the item's trailing edge (`overlay(alignment: .trailing)` + `.offset(x: edgeOffset)`: capsule centre 2 pt inside the edge). 4 × 14 pt accent capsule, 1.5 pt `elevatedSurface` ring, hover 0.88, `NSCursor.resizeLeftRight` while hovered (push/pop balanced), help "Resize", hidden from VoiceOver (the item's "Wider"/"Narrower" actions replace it). Visual only: the feature attaches the drag gesture. |
+| `AddBadgeButton` | `AddBadgeButton(accessibilityLabel: String, action: () -> Void)` | Edit-mode (+): 24 pt accent circle, `onAccent` `plus` (11 pt bold), 28 pt hit area, help "Add" (dropped while disabled so the caller's reason shows, e.g. "All elements shown"). Standalone, under the preview. |
 | `View.wiggle(_:seed:)` | `func wiggle(_ isActive: Bool, seed: Int = 0) -> some View` | Edit-mode wiggle (§7). The view keeps its identity when edit mode toggles. |
 
 ## 9. Shared data-bound controls (`Worklog/Shared`)
@@ -532,57 +540,105 @@ Built to be finished in about ten seconds: the essentials up front, everything e
   │ “ Batch review comments…         │
   ╰──────────────────────────────────╯
 ```
-**Layout model.** The overlay shows an ordered list of elements, `AppSettings.overlayLayout: [OverlayElement]`
-(persisted as raw values under `settings.overlayLayout`; the old `overlayShow…` toggles were migrated once).
-Elements: Label, Timer, Segment focus, Controls, Split, Today’s total, Quick note, Takeaway. Default (fresh
-install and "Reset Layout"): Label, Timer, Segment focus, Controls, Split, Quick note, Takeaway. An empty layout
-is allowed: only the header shows.
+**Layout model (round 4: a grid).** The overlay is a **6-column grid** of elements,
+`AppSettings.overlayGrid: OverlayGridLayout` (ARCHITECTURE §13). Each element has one cell: a row, a starting
+column and a **span** of 1–6 columns; elements are always one row high. Elements: Label, Timer, Segment focus,
+Controls, Split, Today’s total, Quick note, Takeaway.
+- **Columns** span the content width (276 pt regular, 204 compact) with a `spacingXS` (4 pt) gutter, so spans
+  1 / 2 / 3 / 6 are 42.7 / 89.3 / 136 / 276 pt (compact 30.7 / 65.3 / 100 / 204). Free columns stay empty space.
+- **Rows** are as tall as their tallest element; row spacing as before (`spacingS`, compact `spacingXS + 2`).
+  **Row 0 is the header row** (the model's index; VoiceOver and copy count it as row 1), inline between the dot and the profile tag / close button (with its own 6
+  narrower columns). It may be empty; then the status word shows there. Empty body rows never persist.
+- **Spans:** default / minimum per element — Label 4 / 2, Timer 6 / 3, Segment focus 6 / 3, Controls 2 / 2,
+  Split 1 / 1, Today’s total 2 / 2, Quick note 6 / 3, Takeaway 6 / 3. Every minimum fits at compact width.
+- **Default** (fresh install and "Reset Layout"): Label in the header row (columns 1–4); Timer; Segment focus; Controls +
+  Split side by side; Quick note; Takeaway (each full-width on its own row). Upgraded layouts keep their
+  elements and reading order (inline runs share a row, Today’s total trailing). An empty grid is allowed: only
+  the header shows.
+- **Compact** uses the same placements on the narrower grid, with the elements in their compact styles.
+```
+  Regular, default grid                     Split removed, Today's total added with (+)
+  ╭──────────────────────────────────╮      ╭──────────────────────────────────╮
+  │ ● [◉ Deep work      ]          ✕ │      │ ● [◉ Deep work      ]          ✕ │  ← row 0 = header row
+  │ [1:12:40                       ] │      │ [1:12:40                       ] │
+  │ [Refactor parser · seg 24:10   ] │      │ [Refactor parser · seg 24:10   ] │
+  │ [⏸ ■][✂]                         │      │ [⏸ ■]             [Today 2h 15m] │  ← free columns stay space
+  │ [ Note…                        ] │      │ [ Note…                        ] │
+  │ [“ Batch review comments…      ] │      │ [“ Batch review comments…      ] │
+  ╰──────────────────────────────────╯      ╰──────────────────────────────────╯
+```
 
 **Rendering** (one renderer, `OverlayContent`, for the live overlay, the preview and the editor):
 - Background: `themedPanelBackground(cornerRadius: theme.radiusL)`; padding `spacingM` (compact `spacingS`).
 - **Header chrome** (always there, not an element, can't be removed): `LiveDot` (idle: `timer` glyph), then the
-  leading run of inline elements if the layout starts with one, otherwise a status word ("Running" / "Paused" /
-  "Not tracking"); close `xmark` top-trailing, `IconButtonStyle(size: 18)`, help "Hide overlay".
-- **Inline elements** (Label, Controls, Split, Today’s total; Timer when compact) — consecutive ones share a
-  wrapping row (`FlowLayout`); Today’s total is trailing when it ends a row. **Full-width elements:** Timer
-  (`TimerText(.large)`), Segment focus ("focus · seg 24:10"), Quick note (`insetField`), Takeaway.
+  header row's elements, or a status word ("Running" / "Paused" / "Not tracking") when none of them is visible;
+  close `xmark` top-trailing, `IconButtonStyle(size: 18)`, help "Hide overlay".
+- **In a cell:** "fill" elements (Timer, Segment focus, Quick note, Takeaway, idle Controls) take the cell width;
+  "hug" elements (Label, active Controls, Split, Today’s total) align **trailing** when they end at the last column and
+  don't start at the first, otherwise leading. Elements truncate instead of overflowing (Today’s total drops to
+  "2h 15m", the timer to its compact style); cells are never clipped, so badges and focus rings show.
+- Rows with nothing visible collapse (live and preview).
 - Controls: pause/resume + stop, `IconButtonStyle(size: 26)` (22 compact), help "Pause"/"Resume", "Stop".
   Split: `scissors`, help "Split segment".
-- Idle: Takeaway (with Done ✓), Today’s total and Controls (as "Review…" when a review is pending, plus
-  `[ ▶ Start · Deep work ]`, help "Start session") render in layout order; the rest is hidden.
+- **Idle:** the header shows "Not tracking"; the header row's idle-visible elements become the first body row.
+  Visible: Takeaway (with Done ✓), Today’s total and Controls (as "Review…" when a review is pending, plus
+  `[ ▶ Start · Deep work ]`, help "Start session"), in grid order; Controls widen over the free columns of their
+  row. The rest is hidden.
 - "Running on another Mac" is chrome under the header, live only.
-- Whole panel is draggable (window background); don't put drag-sensitive gestures on it.
+- Whole panel is draggable (window background); the live overlay has no gestures on elements.
 
 #### 10.6.1 Layout editor (Settings ▸ Overlay ▸ Layout, F2: `OverlayLayoutEditor`)
 
 Direct manipulation, in the spirit of iPhone Control Center: what you see is the overlay, at real size.
 ```
-  ┌ Layout ───────────────────────────────────────────────────────────────┐
-  │ [ Running | Idle ]                                           ( Edit ) │  ← header row
-  │ ┌ stage: insetSurface, radiusM, padding spacingXL, min height 200 ──┐ │
-  │ │            ╭────────────────────────────╮                          │ │
-  │ │            │ ● ⊖◉ Deep work           ✕ │   ← live preview, current │ │
-  │ │            │ ⊖1:12:40                   │     theme, compact and    │ │
-  │ │            │ ⊖Refactor parser · seg …   │     opacity settings      │ │
-  │ │            ╰────────────────────────────╯                          │ │
-  │ │                         (+)                ← AddBadgeButton        │ │
-  │ └────────────────────────────────────────────────────────────────────┘ │
-  └───────────────────────────────────────────────────────────────────────┘
+  ┌ Layout ────────────────────────────────────────────────────────────┐
+  │ [ Running | Idle ]                    ( Reset Layout )  [ Done ]   │  ← header row (editing)
+  │ ┌ stage: insetSurface, radiusM, padding spacingXL, min height 200 ┐ │
+  │ │   (the preview at real size: the overlay grid, mid-drag)        │ │
+  │ │        (+)                              ← AddBadgeButton        │ │
+  │ └─────────────────────────────────────────────────────────────────┘ │
+  │ Drag to move; drag the right edge to resize.                       │  ← SettingsFootnote
+  └────────────────────────────────────────────────────────────────────┘
+
+  Mid-drag: Controls dragged onto the Timer's row, columns 1–2
+  ╭─────────────────────────────────────╮
+  │ ● [◉ Deep work         ]⊖         ✕ │   ⊖  (−) badge, top-trailing
+  │ ┌╌╌╌╌╌╌╌┐▒▒▒ 1:12:40 ▒▒▒▒▒▒▒▒▒▒▒▒▒▒┃ │   ┃  resize handle, trailing edge
+  │ └╌╌╌╌╌╌╌┘                           │   ┌╌┐ snap ghost (dashed accent, fill 0.08)
+  │ [Refactor parser · seg 24:10     ]⊖┃│   ▒  dimmed 0.5: the Timer will move to a new row below
+  │ ⋯⋯⋯⋯⋯⋯⋯⋯[✂]⊖┃                       │   ⋯  the dragged Controls, left in place at 0.35
+  │ [ Note…        ╭──────────╮      ]⊖┃│   ╭─╮ floating copy (0.9, 1 pt accent border, unrotated)
+  │                │  ⏸  ■    │         │
+  ╰────────────────╰──────────╯─────────╯
 ```
 - **At rest:** a non-interactive preview (`allowsHitTesting(false)`, nothing touches the engine) with a
   segmented "Running / Idle" preview switch (small) and an "Edit" button (`QuietButtonStyle`).
-- **Edit** → the preview always shows the running sample with every layout element; the header row shows
-  "Reset Layout" (Quiet, disabled at the default) and "Done" (`PrimaryButtonStyle`) instead.
-  - Each element **wiggles** (`.wiggle(true, seed: index)`; dashed outline under Reduce Motion) and gets a
-    **(−)** `RemoveBadgeButton` at its top-leading corner (offset −6, −6; a11y "Remove *Element*").
-  - **Drag to reorder**, live: neighbours make room as you drag (150 ms ease-out, none under Reduce Motion);
-    the drag preview is not rotated. The header chrome doesn't wiggle and can't be removed or moved.
+- **Edit** → the preview always shows the running sample with every grid element; the header row shows
+  "Reset Layout" (Quiet, disabled at the default) and "Done" (`PrimaryButtonStyle`) instead. The footnote
+  "Drag to move; drag the right edge to resize." sits under the stage.
+  - Each element **wiggles** (`.wiggle(true, seed: index)`; dashed outline under Reduce Motion), then gets the
+    **(−)** badge on its top-trailing corner (`editRemoveBadge`, a11y "Remove *Element*") and the
+    `EditResizeHandle` on its trailing edge. The header chrome doesn't wiggle and can't be removed or moved.
+  - **Drag to move** (anywhere on the element, 2 pt minimum distance so clicks and right-clicks still work):
+    the element stays in place at 0.35 opacity; a **floating copy** (0.9 opacity, 1 pt accent border, `radiusS`,
+    unrotated, no shadow) follows the pointer; a **snap ghost** (dashed 1 pt accent `radiusS` stroke, accent fill
+    0.08) shows the target cell — the column under the copy's leading edge, the row under its vertical centre.
+    Elements that would be pushed down dim to 0.5. While dragging, an empty drop row appears under the last row.
+  - **Drop:** the element snaps into the cell (150 ms ease-out, none under Reduce Motion). Elements it overlaps
+    move together into a new row directly below, keeping their columns; a row left empty disappears. Releasing
+    more than 40 pt outside the panel cancels and snaps back.
+  - **Resize:** drag the trailing handle; the span changes in column steps, clamped to the element's minimum
+    and to its right-hand neighbour (resizing never pushes). Height can't be resized.
   - **(+)** `AddBadgeButton` (a11y "Add element") under the preview opens a popover listing the hidden
-    elements (icon + title); clicking one appends it; the popover closes when none are left. With everything
-    shown the button is disabled with help "All elements shown".
-  - Keyboard / VoiceOver: each element has a context menu and accessibility actions "Move Up", "Move Down",
-    "Remove".
-- Every change writes `settings.overlayLayout` immediately; the real overlay updates live. "Done" only leaves
+    elements (icon + title); clicking one puts it in the first free body cell (Today’s total prefers the
+    trailing end); the popover closes when none are left. With everything shown the button is disabled with
+    help "All elements shown".
+  - **Keyboard / VoiceOver:** each element is focusable while editing (accent focus ring, `radiusS`, 2 pt).
+    ←/→/↑/↓ move, ⇧← narrower, ⇧→ wider, Delete/⌫ removes. The context menu and accessibility actions offer
+    "Move Left", "Move Right", "Move Up", "Move Down", "Wider", "Narrower", "Remove" (actions: only the ones that
+    apply; menu: inapplicable ones disabled). VoiceOver reads the title and the cell as the value, 1-based with the header
+    row as row 1: "Row 1, columns 1–4" (or "Row 3, column 3" for one column).
+- Every change writes `settings.overlayGrid` immediately; the real overlay updates live. "Done" only leaves
   edit mode (there is nothing to save or cancel).
 
 ### 10.7 History (F1: `HistoryView`)
@@ -866,8 +922,9 @@ Full-window `themedBackground()`, content vertically centered, no illustration, 
 - **Tooltips:** the action's name (§12.0); also on truncated titles (full text), timestamps ("Edited Oct 7,
   10:42") and chart segments.
 - **Drag & drop:** image drop zones highlight with an accent dashed border (`StrokeStyle(dash: [5, 4])`)
-  and `accent.opacity(0.06)` fill while targeted. Reordering (overlay layout editor) is live: items move
-  while you drag, with an unrotated drag preview.
+  and `accent.opacity(0.06)` fill while targeted. The overlay layout editor snaps instead (§10.6.1): an
+  unrotated floating copy follows the pointer, a dashed snap ghost shows the target cell, and the grid changes
+  only on drop.
 
 ### 11.1 Shortcuts
 
@@ -1021,8 +1078,9 @@ Confirmation dialogs (title = the consequence, ≤ 8 words; message optional, �
   LiveDot → "Running"/"Paused". LabelBadge → "Label: Deep work". TagChip → "Tag: coding" (+ "Remove tag
   coding" button). SectionHeader has the header trait. FilterChip / PillTabBar buttons carry `.isSelected`.
   Value rows (`ValueStepper`/`ValueSlider`) are one adjustable element ("Keep the latest backups", value "10
-  backups"). Edit-mode badges are labelled with the element ("Remove Timer", "Add element") and every
-  drag-reorder has "Move Up"/"Move Down" actions. Charts: add `.accessibilityLabel` per mark
+  backups"). Edit-mode badges are labelled with the element ("Remove Timer", "Add element"), every
+  drag-reorder has "Move Up"/"Move Down" actions, and overlay grid elements add "Move Left"/"Move Right",
+  "Wider"/"Narrower" (the resize handle itself is hidden). Charts: add `.accessibilityLabel` per mark
   ("Monday, Deep work, 2 hours") and a summary label on the chart.
 - **Text size:** Settings ▸ Appearance ▸ Text size scales every theme font (0.92–1.25). Layouts must not
   clip at Extra Large: use `fixedSize(horizontal: false, vertical: true)` for wrapping text, avoid fixed
@@ -1104,7 +1162,7 @@ visual and interaction spec. The UI stays quiet with one profile: badges only ap
 |---|---|---|
 | `ProfileBadge` | `ProfileBadge(profile: WorkProfile?, size: BadgeSize = .small)`, `ProfileBadge(name:colorHex:symbolName:size:)` | Symbol (profile color) + name, one line, tail truncation. `.small`: `captionFont`, `textSecondary`, 10 pt symbol. `.regular`: `calloutFont`, `textPrimary`, 12 pt. `.large`: `headlineFont`, `textPrimary`, 14 pt. The value init is for snapshots that must not hold a model (overlay data, popovers). a11y: label "Profile", value = name. |
 | `ProfileSymbolTile` (extra) | `ProfileSymbolTile(colorHex:symbolName:side: = 18)`, `ProfileSymbolTile(profile:side:)` | The tile of §16.1. Decorative (hidden from VoiceOver); pair it with the name. |
-| `ProfileSwitcher` | `ProfileSwitcher()` | Sidebar row, see §16.4. Reads `ProfileStore`, `WindowRouter` and the theme from the environment. |
+| `ProfileSwitcher` | `ProfileSwitcher(isExpanded: Binding<Bool>, maxMenuHeight: CGFloat)`, `ProfileSwitcher()` (own state, limit 280), `static func menuHeightLimit(sidebarHeight:) -> CGFloat` | Sidebar row with an inline profile list, see §16.4. `RootView` owns `isExpanded` (so clicks elsewhere in the sidebar collapse it) and passes `menuHeightLimit(sidebarHeight:)` = `min(360, max(120, sidebarHeight × 0.5))`. Reads `ProfileStore`, `WindowRouter` and the theme from the environment. |
 | `ProfileCreateSheet` | `ProfileCreateSheet(selectsNewProfile: Bool = true)` | "New profile" sheet, see §16.4. Reads `ProfileStore`. Settings ▸ Profiles passes `selectsNewProfile: false`. |
 | `ProfilePicker` | `ProfilePicker(selection: Binding<UUID?>, title: String = "Profile")` | Native `.menu` `Picker` over the non-archived profiles (+ an archived current selection as "Name (archived)"), tagged by UUID, symbols in color (`LabelMenuIcon`). An unresolved selection shows "No profile"; nil is never written. Session detail's profile row (the caller confirms and moves in the binding's setter). Reads `ProfileStore`. |
 | `ProfileValuePicker` | `ProfileValuePicker(_ prefix: String, selection: Binding<UUID?>, nilTitle: String)` | Value sentence ("Quick start in **Current profile ⌄**"): options nil (= `nilTitle`) + the non-archived profiles. A selection that no longer resolves reads as `nilTitle` and nil is written back (only once profiles are loaded). Reads `ProfileStore`. |
@@ -1143,34 +1201,48 @@ Rules (all pickers):
 ### 16.4 Screens
 
 **Sidebar switcher** (`ProfileSwitcher`, placed by `RootView` between the mini status row and the footer;
-padding h `spacingS`, v `spacingXS`):
+padding h `spacingS`, v `spacingXS`). Round 4: the popover is gone; the row **expands an inline list** directly
+above itself, inside the same bottom inset.
 ```
-│ ● 1:12:40  ◉ Deep work │   ← mini status row (only while a session runs; a ProfileBadge dot
-│────────────────────────│      before the label when the session's profile isn't current)
-│ ▣ Work               ⇕ │   ← ProfileSwitcher: tile · name (calloutFont medium) · chevron.up.chevron.down
-│────────────────────────│
-│ ◯ Guest             ⚙  │   ← footer (account + Settings gear)
+│ ● 1:12:40  ◉ Deep work  │  ← mini status row (only while a session runs; moves up while the list is open)
+│─────────────────────────│
+│ ╭─────────────────────╮ │  ← inline list: fill textPrimary.opacity(0.04), radiusM, 1 pt separator stroke,
+│ │ ✓ ▣ Work            │ │    padding spacingXS; no shadow, no elevatedSurface
+│ │   ▣ Personal        │ │  ← non-archived profiles; checkmark = current (scroll over the height limit)
+│ │ ─────────────────── │ │
+│ │   ＋ New Profile…    │ │  → ProfileCreateSheet, right away (sheet from the switcher)
+│ │   ⚙ Manage Profiles… │ │  → Settings ▸ Profiles
+│ ╰─────────────────────╯ │  ← gap spacingXS
+│ ▣ Work              ⌃   │  ← ProfileSwitcher: tile · name (calloutFont medium) · chevron.up (⌄ while open)
+│─────────────────────────│
+│ ◯ Guest              ⚙  │  ← footer (account + Settings gear); never moves
 ```
-- The row is a full-width plain button: 6 × 5 pt padding, `radiusS` fill `textPrimary.opacity(0.06)` on hover
-  and while open, 0.10 pressed, accent focus ring. Name `textPrimary`, one line; chevron `textTertiary`, 9 pt.
-- Help "Switch profile"; VoiceOver: "Profile", value = name.
-- A click opens a **drop-up popover** (`arrowEdge: .top`, so it always opens above the footer), as wide as the
-  row and at least 220 pt, `elevatedSurface`:
-```
-        ┌──────────────────────────┐
-        │ ✓ ▣ Work                 │   ← non-archived profiles; checkmark = current
-        │   ▣ Personal             │
-        │ ──────────────────────── │
-        │   ＋ New Profile…         │   → ProfileCreateSheet (sheet from the switcher)
-        │   ⚙ Manage Profiles…     │   → Settings ▸ Profiles
-        └──────────────────────────┘
-                   ▼
-        │ ▣ Work               ⇕ │
-```
-- Rows behave like `ValuePicker`'s list: hover or ↑/↓ highlights (`textPrimary.opacity(0.07)`), click, Return or
-  Space picks and closes, Esc closes. Over 10 profiles, the profile rows scroll and the two actions stay visible.
-- Picking a profile calls `profiles.select(id:)`; every page re-scopes in place. A running session keeps running
-  in its own profile.
+- **Row:** a full-width plain button: 6 × 5 pt padding, `radiusS` fill `textPrimary.opacity(0.06)` on hover and
+  while expanded, 0.10 pressed, accent focus ring. Name `textPrimary`, one line; `chevron.up` 9 pt semibold
+  `textTertiary`, rotated 180° while expanded. Help "Switch profile". VoiceOver: label "Profile", value = name,
+  hint "Shows the profile list." / "Hides the profile list.".
+- **Expanding** grows the sidebar's bottom inset upward: the sidebar list gets shorter and the mini status row
+  moves up; the footer stays put. 180 ms ease-out: the list slides up from behind the row and fades in, and only
+  fades out (it is clipped, so it never draws over the row). No animation under Reduce Motion.
+- **List rows** (unchanged from the popover): checkmark slot, `ProfileSymbolTile`, name in `bodyFont` (one line,
+  tail truncation), each row 18 pt × `textScale` + 2 × 4 pt. Hover or ↑/↓ highlights
+  (`textPrimary.opacity(0.07)`), pressed accent 0.18. The highlight starts on the current profile.
+- **Collapses on:** picking a profile (`profiles.select(id:)`), Esc, clicking the row again, a click anywhere else
+  in the sidebar list (that click only collapses, like a macOS menu), the mini status row, the account button or
+  the gear (each collapses first), any sidebar selection change, and leaving Welcome. Clicks in the detail pane
+  don't collapse it: it is inline, not modal.
+- **"New Profile…"** collapses and presents the sheet immediately. **"Manage Profiles…"** collapses and opens
+  Settings ▸ Profiles.
+- **Keyboard:** expanding moves focus into the list (no focus ring; the highlight shows the position). ↑/↓ move,
+  Return or Space picks, Esc collapses and returns focus to the row (with Full Keyboard Access).
+- **VoiceOver:** the list is a container labelled "Profiles"; VoiceOver focus lands on the current profile's row,
+  which carries `.isSelected`. The escape gesture collapses.
+- **Height limit:** `maxMenuHeight` from `ProfileSwitcher.menuHeightLimit(sidebarHeight:)`
+  (`min(360, max(120, sidebarHeight × 0.5))`, measured, never derived from data). The actions block (two rows,
+  divider, padding) always shows; the profile rows that fit above it show in a plain stack, and only when there
+  are more do they scroll (highlight kept visible). A short list is never padded out. At the 600 pt minimum
+  window height the footer stays on screen and the window minimum doesn't grow.
+- Picking a profile re-scopes every page in place. A running session keeps running in its own profile.
 
 **New profile sheet** (`ProfileCreateSheet`, width 420, padding `spacingXL`):
 ```
@@ -1255,7 +1327,7 @@ elsewhere.
 | Where | String |
 |---|---|
 | Switcher help / a11y | "Switch profile" / label "Profile", value = name |
-| Switcher popover | "New Profile…" · "Manage Profiles…" |
+| Switcher list | "New Profile…" · "Manage Profiles…" · container "Profiles" · row hints "Shows the profile list." / "Hides the profile list." |
 | Create sheet | "New profile" · prompt "Name" · "Color" · "Symbol" · "Cancel" · "Create" |
 | Badge, no profile | "No profile" |
 | Picker option suffixes | "Name (archived)" · "Name (Personal)" |
@@ -1281,3 +1353,40 @@ elsewhere.
 - Do resolve held profiles with `ModelLiveness.live(_:)` before reading them; pass UUIDs and value snapshots
   into popovers and menus, never models.
 - Don't filter `@Query` by profile with `#Predicate`; filter in memory with `ProfileScope` (ARCHITECTURE §12).
+
+---
+
+## 17. Round 4: inline profile list, smaller edit badges, overlay grid
+
+Summary (details in the sections named; where they and an earlier rule disagree, these win):
+- **Sidebar profile list** (§16.4): the switcher row expands an inline list above itself (no popover), inside the
+  sidebar's bottom inset; the footer never moves. 180 ms, none under Reduce Motion. The list's height is capped
+  by `ProfileSwitcher.menuHeightLimit(sidebarHeight:)`; only profile rows scroll, the actions always show.
+  "New Profile…" opens the sheet right away.
+- **Edit badges** (§8.1): (−) is 14 pt with a 22 pt hit area on the **top-trailing** corner, placed only via
+  `editRemoveBadge(_:accessibilityLabel:action:)`; the new `EditResizeHandle` (4 × 14 capsule, 20 × 24 hit
+  area) sits on the trailing edge; (+) is 24 pt.
+- **Overlay grid** (§10.6, §10.6.1): 6 columns, rows of intrinsic height, row 0 = the header row. Elements are
+  placed freely and snap to cells; dropping on occupied columns pushes those elements into a new row below;
+  widths resize in column steps (never pushing). Compact uses the same placements.
+
+### 17.1 Do / Don't
+
+- Do apply `.wiggle` first, then `editRemoveBadge`, then the resize handle overlay, then the gesture, so the
+  chrome doesn't rotate and stays above the hit layer.
+- Do draw the drag's floating copy and ghost in an overlay on the whole grid; don't offset the original element.
+- Don't put gestures, `GeometryReader`s or preferences on the live overlay; editing only.
+- Don't clip grid cells (badges overhang them by 4 pt); let elements truncate instead (no `fixedSize()`).
+- Don't give the profile list a fixed height from data, a shadow or `elevatedSurface`; it is part of the sidebar.
+
+### 17.2 Copy (exact strings)
+
+| Where | String |
+|---|---|
+| Grid element actions (context menu and VoiceOver) | "Move Left" · "Move Right" · "Move Up" · "Move Down" · "Wider" · "Narrower" · "Remove" |
+| Remove badge | help "Remove" · a11y "Remove *Element*" |
+| Resize handle | help "Resize" |
+| Element value (VoiceOver) | "Row N, columns A–B" · "Row N, column A" (1-based; the header row is row 1) |
+| Editor footnote | "Drag to move; drag the right edge to resize." |
+| (+) disabled | help "All elements shown" |
+| Switcher list | "Profiles" (container) · "New Profile…" · "Manage Profiles…" · hints "Shows the profile list." / "Hides the profile list." |
