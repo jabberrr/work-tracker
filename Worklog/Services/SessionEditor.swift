@@ -336,6 +336,9 @@ enum SessionEditError: LocalizedError {
             point.sortIndex = index
         }
         if let session = points.first?.session {
+            if let context = points.first?.modelContext {
+                ProfileOps.assignProfileIfUnassigned(session, in: context)
+            }
             session.touch()
         }
         if let context = points.first?.modelContext {

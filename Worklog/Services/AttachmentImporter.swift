@@ -247,6 +247,7 @@ enum AttachmentImportError: LocalizedError {
 
     private static func finish(_ session: WorkSession, created: [Attachment], context: ModelContext) {
         guard !created.isEmpty else { return }
+        ProfileOps.assignProfileIfUnassigned(session, in: context)
         session.touch()
         do {
             try context.save()

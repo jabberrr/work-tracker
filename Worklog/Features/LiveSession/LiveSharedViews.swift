@@ -221,7 +221,7 @@ enum LiveProfileMove {
 
     static func begin(moving session: WorkSession, to target: WorkProfile, in context: ModelContext) -> Outcome {
         guard LiveModelGuard.isUsable(session), LiveModelGuard.isUsable(target) else { return .unchanged }
-        guard ModelLiveness.live(session.profile)?.uuid != target.uuid else { return .unchanged }
+        guard ProfileOps.effectiveProfileID(of: session) != target.uuid else { return .unchanged }
         if SessionEditor.taxonomyCopiedByMove(of: session, to: target).isEmpty {
             SessionEditor.moveSession(session, to: target, in: session.modelContext ?? context)
             return .moved

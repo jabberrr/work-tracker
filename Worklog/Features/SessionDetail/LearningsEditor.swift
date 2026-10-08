@@ -221,7 +221,7 @@ struct LearningsEditor: View {
                 LearningsPointRow(
                     point: point,
                     scopeLabel: session.label,
-                    profileID: ModelLiveness.live(session.profile)?.uuid,
+                    profileID: ProfileOps.effectiveProfileID(of: session),
                     showsDetails: showsDetails,
                     canMoveUp: index > 0,
                     canMoveDown: index < points.count - 1,
@@ -277,8 +277,10 @@ struct LearningsEditor: View {
         session.sortedLearningPoints.filter { !$0.isDeleted }
     }
 
+    /// A user edit: an unassigned session is written into its effective profile first.
     private func markEdited() {
         guard isAlive else { return }
+        ProfileOps.assignProfileIfUnassigned(session, in: context)
         session.touch()
     }
 

@@ -781,7 +781,7 @@ private struct LiveSessionProfileMenu: View {
     }
 
     var body: some View {
-        let sessionProfile = LiveModelGuard.isUsable(session) ? ModelLiveness.live(session.profile) : nil
+        let sessionProfile = LiveModelGuard.isUsable(session) ? ProfileOps.effectiveProfile(of: session) : nil
         let canSwitch = sessionProfile.map { !$0.isArchived && $0.uuid != profiles.activeProfileID } ?? false
         let targets = ModelLiveness.live(profiles.profiles).filter { $0.uuid != sessionProfile?.uuid }
 

@@ -291,8 +291,11 @@ private struct DetailAttachmentCell: View {
             thumbnail = attachment.thumbnailImage
         }
         .onChange(of: attachment.caption) { _, _ in
-            guard !attachment.isDeleted else { return }
-            attachment.session?.touch()
+            guard !attachment.isDeleted, let session = ModelLiveness.live(attachment.session) else { return }
+            if let context = attachment.modelContext {
+                ProfileOps.assignProfileIfUnassigned(session, in: context)
+            }
+            session.touch()
         }
         .onChange(of: captionFocused) { _, focused in
             if !focused { commitCaption() }

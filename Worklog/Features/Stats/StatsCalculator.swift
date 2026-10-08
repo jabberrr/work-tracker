@@ -214,7 +214,7 @@ struct StatsSnapshot: Sendable {
                 activeDuration: session.activeDuration(at: now),
                 segments: segments,
                 allTagIDs: allTagIDs,
-                profileID: registerProfile(session.profile)
+                profileID: registerProfile(ProfileOps.effectiveProfile(of: session))
             ))
         }
         return StatsSnapshot(takenAt: now, sessions: result, labels: labels, tags: tags, profiles: profiles)

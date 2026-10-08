@@ -315,7 +315,7 @@ private struct DetailSegmentEditor: View {
 
     /// Labels and tags offered here are the session's profile's.
     private var profileID: UUID? {
-        ModelLiveness.live(ModelLiveness.live(segment.session)?.profile)?.uuid
+        ModelLiveness.live(segment.session).flatMap { ProfileOps.effectiveProfileID(of: $0) }
     }
 
     private var editor: some View {
@@ -365,8 +365,11 @@ private struct DetailSegmentEditor: View {
     }
 
     private func touch() {
-        guard !segment.isDeleted else { return }
-        segment.session?.touch()
+        guard !segment.isDeleted, let session = ModelLiveness.live(segment.session) else { return }
+        if let context = segment.modelContext {
+            ProfileOps.assignProfileIfUnassigned(session, in: context)
+        }
+        session.touch()
     }
 
     private func save() {
@@ -671,7 +674,7 @@ private struct DetailSplitSheet: View {
 
     /// Labels and tags offered here are the session's profile's.
     private var profileID: UUID? {
-        session.isDeleted || session.modelContext == nil ? nil : ModelLiveness.live(session.profile)?.uuid
+        session.isDeleted || session.modelContext == nil ? nil : ProfileOps.effectiveProfileID(of: session)
     }
 
     /// "Before: 9:02 AM–9:40 AM (38m) · After: 9:40 AM–10:15 AM (35m)"

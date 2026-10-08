@@ -257,7 +257,7 @@ private struct EndSessionForm: View {
 
     /// Labels and tags offered here are the session's own profile's.
     private var sessionProfile: WorkProfile? {
-        LiveModelGuard.isUsable(session) ? ModelLiveness.live(session.profile) : nil
+        LiveModelGuard.isUsable(session) ? ProfileOps.effectiveProfile(of: session) : nil
     }
 
     /// Changing the primary label also relabels the segments that followed the old one.

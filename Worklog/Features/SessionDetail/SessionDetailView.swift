@@ -272,9 +272,9 @@ struct SessionDetailView: View {
         )
     }
 
-    /// The session's own profile (labels and tags offered here); nil while unassigned (all are offered).
+    /// The session's effective profile (labels and tags offered here; an unassigned session shows in its home profile).
     private var sessionProfileID: UUID? {
-        isAlive ? ModelLiveness.live(session.profile)?.uuid : nil
+        isAlive ? ProfileOps.effectiveProfileID(of: session) : nil
     }
 
     /// Picking another profile moves the session there (after a confirmation when labels or tags are copied).
@@ -346,8 +346,10 @@ struct SessionDetailView: View {
         }
     }
 
+    /// A user edit: an unassigned session is written into its effective profile first.
     private func markEdited() {
         guard isAlive else { return }
+        ProfileOps.assignProfileIfUnassigned(session, in: context)
         session.touch()
     }
 
