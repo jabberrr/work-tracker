@@ -3,8 +3,12 @@ import SwiftUI
 import SwiftData
 import Combine
 
-/// History: a searchable, sortable, filterable list of ended sessions (left) and the selected session's
-/// `SessionDetailView` (right), side by side in a plain `HStack`.
+/// History: a searchable, sortable, filterable list of the current profile's ended sessions (left) and the selected
+/// session's `SessionDetailView` (right), side by side in a plain `HStack`.
+///
+/// Profiles: `@Query` stays unfiltered by profile; `recompute()` scopes with `profiles.activeScope` (in memory) and
+/// runs again when the selected profile changes. Label/tag chips list only what the profile offers, the live row
+/// shows only when the running session is in this profile, and a selection outside the profile is cleared.
 ///
 /// Layout: the list column has an explicit width (`history.listWidth`, 280…460, default 340) that only
 /// changes by dragging the divider, and the detail fills the remaining space with `minWidth: 0` and
@@ -21,6 +25,7 @@ struct HistoryView: View {
     @Environment(WindowRouter.self) private var router
     @Environment(SessionEngine.self) private var engine
     @Environment(ShortcutStore.self) private var shortcuts
+    @Environment(ProfileStore.self) private var profiles
 
     @Query(filter: #Predicate<WorkSession> { $0.endedAt != nil },
            sort: \WorkSession.startedAt, order: .reverse)
@@ -45,7 +50,7 @@ struct HistoryView: View {
 
     var body: some View {
         Group {
-            if sessions.isEmpty && !engine.isActive {
+            if !hasScopedSessions && !isLiveInScope {
                 EmptyStateView(title: "No sessions yet",
                                systemImage: "clock",
                                message: "Finished sessions appear here.",
@@ -82,6 +87,10 @@ struct HistoryView: View {
         .onChange(of: sort) { _, _ in recompute() }
         .onChange(of: labelFilter) { _, _ in recompute() }
         .onChange(of: tagFilter) { _, _ in recompute() }
+        .onChange(of: profiles.activeProfileID) { _, _ in
+            dropFiltersOutsideScope()
+            recompute()
+        }
         .confirmationDialog("Delete this session?",
                             isPresented: Binding(get: { pendingDelete != nil },
                                                  set: { if !$0 { pendingDelete = nil } }),
@@ -150,9 +159,9 @@ struct HistoryView: View {
                 .frame(height: 1)
                 .accessibilityHidden(true)
 
-            if resultCount == 0 && hasFilters && !sessions.isEmpty {
+            if resultCount == 0 && hasFilters && hasScopedSessions {
                 VStack(spacing: 0) {
-                    if engine.isActive {
+                    if isLiveInScope {
                         HistoryLiveRow { router.selection = .today }
                             .padding(.horizontal, theme.spacingL)
                             .padding(.top, theme.spacingS)
@@ -185,10 +194,10 @@ struct HistoryView: View {
     private var sessionListContent: some View {
         List(selection: Binding(get: { router.selectedSessionID },
                                 set: { router.selectedSessionID = $0 })) {
-            if engine.isActive {
+            if isLiveInScope {
                 HistoryLiveRow { router.selection = .today }
             }
-            if sessions.isEmpty {
+            if !hasScopedSessions {
                 Text("Finished sessions appear here.")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textTertiary)
@@ -254,7 +263,10 @@ struct HistoryView: View {
     }
 
     private var filterMenu: some View {
-        let activeTags = ModelLiveness.live(tags).filter { !$0.isArchived || $0.persistentModelID == tagFilter }
+        let scope = profiles.activeScope
+        let activeTags = ModelLiveness.live(tags).filter { tag in
+            (!tag.isArchived && scope.offers(tag)) || tag.persistentModelID == tagFilter
+        }
         return Menu {
             Picker("Filter by tag", selection: $tagFilter) {
                 Text("Any tag").tag(PersistentIdentifier?.none)
@@ -280,7 +292,10 @@ struct HistoryView: View {
     }
 
     private var labelChips: some View {
-        let visibleLabels = ModelLiveness.live(labels).filter { !$0.isArchived || $0.persistentModelID == labelFilter }
+        let scope = profiles.activeScope
+        let visibleLabels = ModelLiveness.live(labels).filter { label in
+            (!label.isArchived && scope.offers(label)) || label.persistentModelID == labelFilter
+        }
         // Wraps onto more lines rather than scrolling sideways, so every label stays reachable with a mouse.
         return FlowLayout(spacing: 6, lineSpacing: 6) {
             FilterChip("All", colorHex: nil, isSelected: labelFilter == nil) {
@@ -310,7 +325,7 @@ struct HistoryView: View {
             SessionDetailView(session: session)
                 .id(id)
         } else if let id = router.selectedSessionID, let active = engine.activeSession,
-                  active.persistentModelID == id {
+                  active.persistentModelID == id, isLiveInScope {
             EmptyStateView(title: "Session in progress",
                            systemImage: "timer",
                            actionTitle: "Go to Today") {
@@ -337,8 +352,47 @@ struct HistoryView: View {
         !appliedQuery.isBlank || labelFilter != nil || tagFilter != nil
     }
 
+    /// The current profile has at least one ended session (stops at the first match).
+    private var hasScopedSessions: Bool {
+        let scope = profiles.activeScope
+        return sessions.contains { scope.contains($0) }
+    }
+
+    /// A session is running and belongs to the current profile.
+    private var isLiveInScope: Bool {
+        guard engine.isActive, let active = engine.activeSession, ModelLiveness.isLive(active) else { return false }
+        return profiles.activeScope.contains(active)
+    }
+
+    /// Ended sessions of the current profile only (detail, delete).
     private func sessionForID(_ id: PersistentIdentifier) -> WorkSession? {
-        sessions.first { $0.persistentModelID == id && !$0.isDeleted }
+        let scope = profiles.activeScope
+        return sessions.first { $0.persistentModelID == id && !$0.isDeleted && scope.contains($0) }
+    }
+
+    /// After a profile switch, a label/tag chip the new profile doesn't offer would filter everything out.
+    private func dropFiltersOutsideScope() {
+        let scope = profiles.activeScope
+        if let id = labelFilter,
+           !ModelLiveness.live(labels).contains(where: { $0.persistentModelID == id && scope.offers($0) }) {
+            labelFilter = nil
+        }
+        if let id = tagFilter,
+           !ModelLiveness.live(tags).contains(where: { $0.persistentModelID == id && scope.offers($0) }) {
+            tagFilter = nil
+        }
+    }
+
+    /// The selection must stay inside the current profile (a profile switch, a session moved to another profile).
+    private func clearSelectionOutsideScope(_ scope: ProfileScope) {
+        guard let id = router.selectedSessionID else { return }
+        if let active = engine.activeSession, ModelLiveness.isLive(active), active.persistentModelID == id {
+            if !scope.contains(active) { router.selectedSessionID = nil }
+            return
+        }
+        if let session = sessions.first(where: { $0.persistentModelID == id }), !scope.contains(session) {
+            router.selectedSessionID = nil
+        }
     }
 
     private func clearFilters() {
@@ -348,6 +402,8 @@ struct HistoryView: View {
     }
 
     private func recompute() {
+        let scope = profiles.activeScope
+        clearSelectionOutsideScope(scope)
         var list = sessions.filter { !$0.isDeleted }
         if let labelID = labelFilter {
             list = list.filter { session in
@@ -363,7 +419,7 @@ struct HistoryView: View {
                     }
             }
         }
-        list = SearchService.filter(list, query: appliedQuery)
+        list = SearchService.filter(list, query: appliedQuery, scope: scope)
         resultCount = list.count
         sections = HistoryGrouping.sections(for: list, sort: sort)
     }

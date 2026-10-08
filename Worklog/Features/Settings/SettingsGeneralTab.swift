@@ -1,31 +1,17 @@
 import SwiftData
 import SwiftUI
 
-/// General: session defaults, takeaway lifetime, automatic pausing, the "still working?" warning, daily goal,
-/// week start, the menu bar item and the Dock icon.
+/// General: session review and discard, takeaway lifetime, automatic pausing, the "still working?" warning, daily goal,
+/// week start, the menu bar item and the Dock icon. The default label lives per profile (Settings ▸ Profiles).
 @MainActor
 struct SettingsGeneralTab: View {
     @Environment(AppSettings.self) private var settings
-    @Query(sort: \WorkLabel.sortIndex) private var labels: [WorkLabel]
-
-    /// Maps `settings.defaultLabelID` ⇄ the label object for `LabelValuePicker`.
-    private var defaultLabel: Binding<WorkLabel?> {
-        Binding(
-            get: {
-                guard let id = settings.defaultLabelID else { return nil }
-                return labels.first { $0.uuid == id }
-            },
-            set: { settings.defaultLabelID = $0?.uuid }
-        )
-    }
 
     var body: some View {
         @Bindable var settings = settings
 
         Form {
             Section("New sessions") {
-                LabelValuePicker("Default label", selection: defaultLabel)
-                SettingsFootnote("“None” uses your first label.")
                 Toggle("Review when a session ends", isOn: $settings.showEndSessionSheet)
                 Toggle("Ask before discarding", isOn: $settings.confirmBeforeDiscard)
             }

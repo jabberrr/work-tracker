@@ -1,10 +1,12 @@
 import SwiftData
 import SwiftUI
 
-/// Tags: filterable list (active / archived) + editor (name, color, parent label, archive, merge, delete).
+/// Tags: filterable list (active / archived) + editor (name, availability, color, parent label, archive, merge,
+/// delete). Lists the tags the current profile offers (global + its own); new tags are local to it.
 @MainActor
 struct SettingsTagsPane: View {
     @Environment(\.modelContext) private var context
+    @Environment(ProfileStore.self) private var profileStore
     @Environment(\.theme) private var theme
     @Query(sort: \WorkTag.name) private var tags: [WorkTag]
     @State private var selectedID: PersistentIdentifier?
@@ -21,8 +23,16 @@ struct SettingsTagsPane: View {
         }
     }
 
-    /// The query can briefly include tags deleted or merged a moment ago; never read those.
-    private var liveTags: [WorkTag] { ModelLiveness.live(tags) }
+    /// Every live tag (all profiles). The query can briefly include tags deleted or merged a moment ago; never
+    /// read those.
+    private var allLiveTags: [WorkTag] { ModelLiveness.live(tags) }
+    /// Scope marks appear once there is more than one profile (archived ones count).
+    private var showsScope: Bool { profileStore.profiles.count + profileStore.archivedProfiles.count > 1 }
+    /// Tags the current profile offers (global + its own).
+    private var liveTags: [WorkTag] {
+        let scope = profileStore.activeScope
+        return allLiveTags.filter { scope.offers($0) }
+    }
 
     private var selectedTag: WorkTag? {
         guard let selectedID else { return nil }
@@ -36,7 +46,7 @@ struct SettingsTagsPane: View {
             Divider()
             Group {
                 if let tag = selectedTag {
-                    SettingsTagEditor(tag: tag, allTags: liveTags,
+                    SettingsTagEditor(tag: tag, allTags: allLiveTags, offeredTags: liveTags,
                                       onDeleted: { selectedID = nil },
                                       onMerged: { target in selectedID = target.persistentModelID })
                         .id(tag.persistentModelID)
@@ -48,6 +58,10 @@ struct SettingsTagsPane: View {
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .onChange(of: profileStore.activeProfileID) {
+            selectedID = nil
+            filterText = ""
         }
     }
 
@@ -112,6 +126,9 @@ struct SettingsTagsPane: View {
                 }
             }
             Spacer(minLength: theme.spacingXS)
+            if showsScope && tag.isAvailableEverywhere {
+                SettingsGlobalMark()
+            }
             Text("\(tag.usageCount)")
                 .font(theme.captionFont)
                 .monospacedDigit()
@@ -119,14 +136,17 @@ struct SettingsTagsPane: View {
                 .help("Times used")
         }
         .accessibilityElement(children: .combine)
-        .accessibilityValue("\(tag.usageCount) uses\(tag.isArchived ? ", archived" : "")")
+        .accessibilityValue("\(tag.usageCount) uses\(tag.isArchived ? ", archived" : "")"
+                            + (showsScope && tag.isAvailableEverywhere ? ", all profiles" : ""))
     }
 
     private func addTag() {
         let name = newTagName.trimmed
         guard !name.isEmpty else { return }
-        // Returns the existing active tag when the name is taken (no duplicates).
-        let tag = TaxonomyOps.createTag(name: name, in: context)
+        // Returns the existing active tag offered here when the name is taken (no duplicates); else a new tag
+        // local to the current profile.
+        let tag = TaxonomyOps.createTag(name: name, profile: ModelLiveness.live(profileStore.activeProfile),
+                                        in: context)
         newTagName = ""
         filterText = ""
         selectedID = tag.persistentModelID
@@ -138,9 +158,13 @@ struct SettingsTagsPane: View {
 @MainActor
 private struct SettingsTagEditor: View {
     @Environment(\.modelContext) private var context
+    @Environment(ProfileStore.self) private var profileStore
     @Environment(\.theme) private var theme
     @Bindable var tag: WorkTag
+    /// Every live tag (all profiles); merge targets are narrowed by `TaxonomyOps.mergeTargets`.
     let allTags: [WorkTag]
+    /// Tags the current profile offers (duplicate-name check).
+    let offeredTags: [WorkTag]
     let onDeleted: () -> Void
     let onMerged: (WorkTag) -> Void
 
@@ -149,11 +173,24 @@ private struct SettingsTagEditor: View {
     @FocusState private var nameFocused: Bool
     @State private var mergeTarget: WorkTag?
     @State private var confirmsDelete = false
+    /// Set while "Make “x” Work only?" is asked (other profiles use the tag).
+    @State private var pendingLocalProfileID: UUID?
 
+    /// Merge targets that keep every session's tags offered in its profile, by name.
     private var otherTags: [WorkTag] {
-        allTags
-            .filter { $0.persistentModelID != tag.persistentModelID && !$0.isDeleted }
+        TaxonomyOps.mergeTargets(for: tag, among: ModelLiveness.live(allTags))
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
+    }
+
+    private var currentProfile: WorkProfile? { ModelLiveness.live(profileStore.activeProfile) }
+    /// "Available in" appears once there is more than one profile (archived ones count).
+    private var showsScope: Bool { profileStore.profiles.count + profileStore.archivedProfiles.count > 1 }
+
+    private var scopeSelection: Binding<SettingsTaxonomyScope> {
+        Binding(
+            get: { tag.isAvailableEverywhere ? .allProfiles : .thisProfile },
+            set: { requestScope($0) }
+        )
     }
 
     var body: some View {
@@ -177,15 +214,20 @@ private struct SettingsTagEditor: View {
                             .foregroundStyle(theme.warning)
                             .fixedSize(horizontal: false, vertical: true)
                         Spacer()
-                        Button("Merge Into It…") { mergeTarget = duplicate }
-                            .buttonStyle(QuietButtonStyle())
-                            .controlSize(.small)
+                        if otherTags.contains(where: { $0.persistentModelID == duplicate.persistentModelID }) {
+                            Button("Merge Into It…") { mergeTarget = duplicate }
+                                .buttonStyle(QuietButtonStyle())
+                                .controlSize(.small)
+                        }
                     }
                 }
                 LabeledContent("Preview") {
                     TagChip(tag: tag)
                 }
-                LabelValuePicker("Parent label", selection: $tag.label)
+                if showsScope, let profile = currentProfile {
+                    SettingsScopePicker(selection: scopeSelection, profileName: profile.displayName)
+                }
+                LabelValuePicker("Parent label", selection: $tag.label, profileID: profileStore.activeProfileID)
                 SettingsFootnote("Offered first when that label is picked.")
             }
 
@@ -266,6 +308,39 @@ private struct SettingsTagEditor: View {
         } message: {
             Text("Sessions are kept, but this can’t be undone.")
         }
+        .confirmationDialog(
+            "Make “\(tag.name)” \(profileStore.profile(withID: pendingLocalProfileID)?.displayName ?? "this profile") only?",
+            isPresented: Binding(get: { pendingLocalProfileID != nil }, set: { if !$0 { pendingLocalProfileID = nil } }),
+            titleVisibility: .visible
+        ) {
+            Button("Make Local") {
+                let profile = profileStore.profile(withID: pendingLocalProfileID)
+                pendingLocalProfileID = nil
+                guard let profile, ModelLiveness.isLive(tag) else { return }
+                TaxonomyOps.setScope(of: tag, to: profile, in: context)
+            }
+            Button("Cancel", role: .cancel) { pendingLocalProfileID = nil }
+        } message: {
+            Text("Other profiles keep their own copy.")
+        }
+    }
+
+    /// All profiles: always fine. This profile only: asks first when other profiles use the tag (each gets its
+    /// own copy).
+    private func requestScope(_ scope: SettingsTaxonomyScope) {
+        guard ModelLiveness.isLive(tag) else { return }
+        switch scope {
+        case .allProfiles:
+            guard !tag.isAvailableEverywhere else { return }
+            TaxonomyOps.setScope(of: tag, to: nil, in: context)
+        case .thisProfile:
+            guard tag.isAvailableEverywhere, let profile = currentProfile else { return }
+            if case .copiesForOtherProfiles = TaxonomyOps.scopeChangeImpact(of: tag, to: profile) {
+                pendingLocalProfileID = profile.uuid
+            } else {
+                TaxonomyOps.setScope(of: tag, to: profile, in: context)
+            }
+        }
     }
 
     private var counts: (sessions: Int, segments: Int, points: Int) {
@@ -288,8 +363,9 @@ private struct SettingsTagEditor: View {
             return
         }
         guard trimmed != tag.name else { return }
-        if let existing = otherTags.first(where: {
-            $0.name.trimmed.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
+        if let existing = offeredTags.first(where: {
+            $0.persistentModelID != tag.persistentModelID && ModelLiveness.isLive($0)
+                && $0.name.trimmed.compare(trimmed, options: [.caseInsensitive, .diacriticInsensitive]) == .orderedSame
         }) {
             duplicate = existing
             return

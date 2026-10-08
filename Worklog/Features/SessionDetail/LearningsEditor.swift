@@ -221,6 +221,7 @@ struct LearningsEditor: View {
                 LearningsPointRow(
                     point: point,
                     scopeLabel: session.label,
+                    profileID: ModelLiveness.live(session.profile)?.uuid,
                     showsDetails: showsDetails,
                     canMoveUp: index > 0,
                     canMoveDown: index < points.count - 1,
@@ -366,6 +367,8 @@ private struct LearningsPointRow: View {
     @Environment(\.theme) private var theme
     @Bindable private var point: LearningPoint
     private let scopeLabel: WorkLabel?
+    /// The session's profile: point tags offered here are its tags (global + local).
+    private let profileID: UUID?
     private let showsDetails: Bool
     private let canMoveUp: Bool
     private let canMoveDown: Bool
@@ -378,12 +381,14 @@ private struct LearningsPointRow: View {
 
     @State private var isDropTarget = false
 
-    init(point: LearningPoint, scopeLabel: WorkLabel?, showsDetails: Bool, canMoveUp: Bool, canMoveDown: Bool,
+    init(point: LearningPoint, scopeLabel: WorkLabel?, profileID: UUID?, showsDetails: Bool,
+         canMoveUp: Bool, canMoveDown: Bool,
          focusedField: FocusState<LearningsField?>.Binding,
          onEdited: @escaping () -> Void, onCommit: @escaping () -> Void, onMove: @escaping (Int) -> Void,
          onDropPoint: @escaping (UUID) -> Void, onDelete: @escaping () -> Void) {
         self._point = Bindable(wrappedValue: point)
         self.scopeLabel = scopeLabel
+        self.profileID = profileID
         self.showsDetails = showsDetails
         self.canMoveUp = canMoveUp
         self.canMoveDown = canMoveDown
@@ -433,7 +438,7 @@ private struct LearningsPointRow: View {
 
                 if showsDetails {
                     HStack(alignment: .center, spacing: theme.spacingM) {
-                        TagPicker(selection: $point.tagList, scopeLabel: scopeLabel)
+                        TagPicker(selection: $point.tagList, scopeLabel: scopeLabel, profileID: profileID)
                             .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                         LearningsMasteryControl(rating: $point.mastery)
                     }

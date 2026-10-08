@@ -20,7 +20,7 @@ enum ShortcutGroup: String, CaseIterable, Identifiable {
 /// Every app-defined shortcut. Titles are also the Settings row titles.
 enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     case startStop, pauseResume, addNote, splitSegment, discardSession, toggleOverlay   // .session (menu "Session")
-    case showToday, showHistory, showLearning, showStats                              // .navigation (View menu)
+    case showToday, showHistory, showLearning, showStats, nextProfile                 // .navigation (View menu)
     case findInHistory, saveReview                                                    // .editing (in-view)
 
     var id: String { rawValue }
@@ -37,6 +37,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .showHistory: "Show History"
         case .showLearning: "Show Learning"
         case .showStats: "Show Stats"
+        case .nextProfile: "Switch to Next Profile"
         case .findInHistory: "Find in History"
         case .saveReview: "Save Session Review"
         }
@@ -45,12 +46,12 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
     var group: ShortcutGroup {
         switch self {
         case .startStop, .pauseResume, .addNote, .splitSegment, .discardSession, .toggleOverlay: .session
-        case .showToday, .showHistory, .showLearning, .showStats: .navigation
+        case .showToday, .showHistory, .showLearning, .showStats, .nextProfile: .navigation
         case .findInHistory, .saveReview: .editing
         }
     }
 
-    /// ⇧⌘S, ⇧⌘P, ⇧⌘N, ⇧⌘D, nil, ⇧⌘O, ⌘1, ⌘2, ⌘3, ⌘4, ⌘F, ⌘↩
+    /// ⇧⌘S, ⇧⌘P, ⇧⌘N, ⇧⌘D, nil, ⇧⌘O, ⌘1, ⌘2, ⌘3, ⌘4, nil (next profile), ⌘F, ⌘↩
     var defaultShortcut: StoredShortcut? {
         switch self {
         case .startStop: StoredShortcut(key: "s", modifiers: [.command, .shift])
@@ -63,6 +64,7 @@ enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
         case .showHistory: StoredShortcut(key: "2", modifiers: .command)
         case .showLearning: StoredShortcut(key: "3", modifiers: .command)
         case .showStats: StoredShortcut(key: "4", modifiers: .command)
+        case .nextProfile: nil
         case .findInHistory: StoredShortcut(key: "f", modifiers: .command)
         case .saveReview: StoredShortcut(key: "return", modifiers: .command)
         }

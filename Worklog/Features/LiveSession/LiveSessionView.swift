@@ -43,10 +43,12 @@ struct LiveSessionView: View {
 @MainActor
 private struct LiveIdlePane: View {
     @Environment(SessionEngine.self) private var engine
-    @Environment(AppSettings.self) private var settings
+    @Environment(ProfileStore.self) private var profiles
     @Environment(WindowRouter.self) private var router
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
+
+    @Query(sort: \WorkLabel.sortIndex) private var labels: [WorkLabel]
 
     @State private var startLabel: WorkLabel?
     @State private var startTags: [WorkTag] = []
@@ -62,13 +64,13 @@ private struct LiveIdlePane: View {
             VStack(alignment: .leading, spacing: theme.spacingXL) {
                 header
                 startCard
-                if let takeaway = engine.lastTakeaway {
+                if let takeaway = engine.takeaway(for: profiles.activeProfileID) {
                     Card {
                         LiveTakeawayView(takeaway: takeaway)
                     }
                 }
                 LiveTodaySessionsQuery { sessions in
-                    LiveTodaySummary(sessions: sessions)
+                    LiveTodaySummary(sessions: sessions, scope: profiles.activeScope)
                 }
             }
             .padding(theme.spacingXL)
@@ -77,7 +79,15 @@ private struct LiveIdlePane: View {
         }
         .onAppear(perform: onAppear)
         .onReceive(LiveDayChange.publisher) { _ in today = Date() }
-        .onChange(of: settings.defaultLabelID) { _, _ in startLabel = engine.defaultLabel() }
+        // Switching profile: start over with that profile's default label and no tags.
+        .onChange(of: profiles.activeProfileID) { _, _ in
+            startLabel = engine.defaultLabel(for: currentProfile)
+            startTags = []
+        }
+        // The profile's default label changed (Settings ▸ Profiles).
+        .onChange(of: currentProfile?.defaultLabelUUID) { _, _ in
+            startLabel = engine.defaultLabel(for: currentProfile)
+        }
         .onChange(of: router.noteFocusRequest) { _, _ in handleNoteFocusRequest() }
         .onChange(of: router.splitRequest) { _, newValue in
             // Nothing to split while idle; mark it handled so it doesn't fire on the next active pane.
@@ -95,11 +105,32 @@ private struct LiveIdlePane: View {
                 .font(theme.largeTitleFont)
                 .foregroundStyle(theme.textPrimary)
                 .accessibilityAddTraits(.isHeader)
-            Spacer()
+            Spacer(minLength: theme.spacingM)
+            if profiles.hasMultipleProfiles {
+                ProfileBadge(profile: currentProfile, size: .small)
+                    .frame(minWidth: 0, maxWidth: 200, alignment: .trailing)
+                Text("·")
+                    .font(theme.captionFont)
+                    .foregroundStyle(theme.textTertiary)
+                    .accessibilityHidden(true)
+            }
             Text(today.formatted(.dateTime.weekday(.wide).month(.abbreviated).day()))
                 .font(theme.captionFont)
                 .foregroundStyle(theme.textSecondary)
+                .lineLimit(1)
+                .layoutPriority(1)
         }
+    }
+
+    /// The selected profile, if it still exists (the store reloads after a save; never read a deleted one).
+    private var currentProfile: WorkProfile? {
+        ModelLiveness.live(profiles.activeProfile)
+    }
+
+    /// Non-archived labels the current profile offers (global + its own).
+    private var offeredLabels: [WorkLabel] {
+        let scope = profiles.activeScope
+        return ModelLiveness.live(labels).filter { !$0.isArchived && scope.offers($0) }
     }
 
     private var startCard: some View {
@@ -118,9 +149,14 @@ private struct LiveIdlePane: View {
                     .accessibilityHint("Return starts the session.")
 
                 HStack(alignment: .firstTextBaseline, spacing: theme.spacingL) {
-                    LabelPicker(selection: $startLabel, includeNone: true, title: "Label")
-                        .fixedSize()
-                    TagPicker(selection: $startTags, scopeLabel: startLabel)
+                    if offeredLabels.isEmpty {
+                        noLabelsHint
+                    } else {
+                        LabelPicker(selection: $startLabel, includeNone: true, title: "Label",
+                                    profileID: profiles.activeProfileID)
+                            .fixedSize()
+                    }
+                    TagPicker(selection: $startTags, scopeLabel: startLabel, profileID: profiles.activeProfileID)
                         .frame(maxWidth: .infinity, alignment: .leading)
                 }
 
@@ -139,16 +175,31 @@ private struct LiveIdlePane: View {
         }
     }
 
+    /// A new profile (or one whose labels are all local elsewhere) has nothing to pick: point to Settings.
+    private var noLabelsHint: some View {
+        HStack(alignment: .firstTextBaseline, spacing: theme.spacingS) {
+            Text("No labels yet.")
+                .font(theme.captionFont)
+                .foregroundStyle(theme.textTertiary)
+            Button("Add labels") { router.showSettings(tab: "labels") }
+                .buttonStyle(QuietButtonStyle())
+                .controlSize(.small)
+                .help("Add labels")
+        }
+        .fixedSize()
+    }
+
     private func onAppear() {
         today = Date()
+        let profileID = profiles.activeProfileID
         if !didLoadDefaults {
             didLoadDefaults = true
-            startLabel = engine.defaultLabel()
-        } else if let label = startLabel, !LiveStartChoice.isUsable(label) {
-            // Deleted, merged or archived in Settings since: fall back to the default label.
-            startLabel = engine.defaultLabel()
+            startLabel = engine.defaultLabel(for: currentProfile)
+        } else if let label = startLabel, !LiveStartChoice.isUsable(label, in: profileID) {
+            // Deleted, merged, archived or made local to another profile since: fall back to the default label.
+            startLabel = engine.defaultLabel(for: currentProfile)
         }
-        startTags = LiveStartChoice.tags(startTags)
+        startTags = LiveStartChoice.tags(startTags, in: profileID)
         if router.noteFocusRequest > LiveRequestLedger.handledNoteFocusRequest {
             handleNoteFocusRequest()
         }
@@ -167,19 +218,21 @@ private struct LiveIdlePane: View {
 
     private func start() {
         guard !engine.isActive else { return }
-        // The picked label/tags may have been deleted, merged or archived in Settings since they were chosen.
-        let label = LiveStartChoice.label(startLabel, engine: engine)
-        let tags = LiveStartChoice.tags(startTags)
+        // Today's Start always uses the selected profile. The picked label/tags may have been deleted, merged,
+        // archived or scoped to another profile in Settings since they were chosen.
+        let profile = currentProfile
+        let label = LiveStartChoice.label(startLabel, engine: engine, profile: profile)
+        let tags = LiveStartChoice.tags(startTags, in: profile?.uuid)
         let focus = startFocus
         withAnimation(reduceMotion ? nil : .easeInOut(duration: 0.2)) {
-            _ = engine.start(label: label, tags: tags, focus: focus)
+            _ = engine.start(label: label, tags: tags, focus: focus, profile: profile)
         }
         startFocus = ""
         startTags = []
     }
 }
 
-/// Today total vs goal, session count and today's finished sessions.
+/// Today total vs goal, session count and today's finished sessions, for one profile (`scope`).
 @MainActor
 private struct LiveTodaySummary: View {
     @Environment(SessionEngine.self) private var engine
@@ -188,15 +241,17 @@ private struct LiveTodaySummary: View {
     @Environment(\.theme) private var theme
 
     private let sessions: [WorkSession]
+    private let scope: ProfileScope
 
-    init(sessions: [WorkSession]) {
+    init(sessions: [WorkSession], scope: ProfileScope) {
         self.sessions = sessions
+        self.scope = scope
     }
 
     var body: some View {
         let now = Date()
-        let total = LiveDayMath.totalToday(sessions, active: engine.activeSession, now: now)
-        let ended = LiveDayMath.endedToday(sessions, now: now)
+        let total = LiveDayMath.totalToday(sessions, active: engine.activeSession, now: now, scope: scope)
+        let ended = LiveDayMath.endedToday(sessions, now: now, scope: scope)
         let goal = LiveDayMath.goalSeconds(settings)
 
         VStack(alignment: .leading, spacing: theme.spacingL) {
@@ -282,6 +337,7 @@ private struct LiveTodaySessionRow: View {
 private struct LiveActivePane: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings
+    @Environment(ProfileStore.self) private var profiles
     @Environment(WindowRouter.self) private var router
     @Environment(\.modelContext) private var modelContext
     @Environment(\.theme) private var theme
@@ -419,12 +475,16 @@ private struct LiveActivePane: View {
                 LiveSegmentForm(mode: .edit, style: .popover) { showEditSegment = false }
                     .padding(theme.spacingL)
                     .frame(width: 300)
-                    .modifier(LiveEnvironmentBridge(engine: engine, theme: theme, context: modelContext))
+                    .modifier(LiveEnvironmentBridge(engine: engine, profiles: profiles, theme: theme,
+                                                    context: modelContext))
             }
 
             Spacer(minLength: theme.spacingS)
 
             VStack(alignment: .trailing, spacing: theme.spacingXS) {
+                if profiles.hasMultipleProfiles {
+                    LiveSessionProfileMenu(session: session)
+                }
                 Text("Started \(session.startedAt.shortTime) · \(segmentCount) \(segmentCount == 1 ? "segment" : "segments")")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textSecondary)
@@ -495,7 +555,8 @@ private struct LiveActivePane: View {
                 LiveSegmentForm(mode: .split, style: .popover) { showSplit = false }
                     .padding(theme.spacingL)
                     .frame(width: 300)
-                    .modifier(LiveEnvironmentBridge(engine: engine, theme: theme, context: modelContext))
+                    .modifier(LiveEnvironmentBridge(engine: engine, profiles: profiles, theme: theme,
+                                                    context: modelContext))
             }
 
             Button(action: stop) {
@@ -678,6 +739,89 @@ private struct LiveActivePane: View {
 }
 
 // MARK: - Active pane pieces
+
+/// The running session's profile (shown with 2+ profiles). A session keeps running in its own profile when the
+/// user switches: the menu offers "Switch to “Work”" when it isn't the selected profile, and "Move to" the other
+/// profiles (asking first when labels or tags would be copied).
+@MainActor
+private struct LiveSessionProfileMenu: View {
+    @Environment(ProfileStore.self) private var profiles
+    @Environment(\.modelContext) private var modelContext
+    @Environment(\.theme) private var theme
+    private let session: WorkSession
+
+    @State private var pendingMove: LiveProfileMove.Request?
+
+    init(session: WorkSession) {
+        self.session = session
+    }
+
+    var body: some View {
+        let sessionProfile = LiveModelGuard.isUsable(session) ? ModelLiveness.live(session.profile) : nil
+        let canSwitch = sessionProfile.map { !$0.isArchived && $0.uuid != profiles.activeProfileID } ?? false
+        let targets = ModelLiveness.live(profiles.profiles).filter { $0.uuid != sessionProfile?.uuid }
+
+        Menu {
+            if let sessionProfile, canSwitch {
+                Button("Switch to “\(sessionProfile.displayName)”") {
+                    profiles.select(sessionProfile)
+                }
+            }
+            if !targets.isEmpty {
+                Menu("Move to") {
+                    ForEach(targets, id: \.uuid) { target in
+                        Button {
+                            requestMove(to: target)
+                        } label: {
+                            Label {
+                                Text(target.displayName)
+                            } icon: {
+                                Image(nsImage: LabelMenuIcon.image(symbol: target.symbolName, hex: target.colorHex))
+                                    .renderingMode(.original)
+                            }
+                        }
+                    }
+                }
+            }
+        } label: {
+            HStack(spacing: theme.spacingXS) {
+                ProfileBadge(profile: sessionProfile, size: .small)
+                Image(systemName: "chevron.down")
+                    .font(theme.captionFont)
+                    .foregroundStyle(theme.textTertiary)
+                    .accessibilityHidden(true)
+            }
+            .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .frame(minWidth: 0, maxWidth: 220, alignment: .trailing)
+        .help("Profile")
+        .accessibilityLabel("Profile")
+        .accessibilityValue(sessionProfile?.displayName ?? "No profile")
+        .confirmationDialog(pendingMove?.title ?? "",
+                            isPresented: Binding(get: { pendingMove != nil },
+                                                 set: { if !$0 { pendingMove = nil } }),
+                            titleVisibility: .visible,
+                            presenting: pendingMove) { request in
+            Button("Move") {
+                pendingMove = nil
+                LiveProfileMove.perform(request, moving: session, profiles: profiles, in: modelContext)
+            }
+            Button("Cancel", role: .cancel) { pendingMove = nil }
+        } message: { request in
+            Text(request.message)
+        }
+    }
+
+    private func requestMove(to target: WorkProfile) {
+        if case .needsConfirmation(let request) = LiveProfileMove.begin(moving: session, to: target,
+                                                                        in: modelContext) {
+            pendingMove = request
+        }
+    }
+}
 
 @MainActor
 private struct LiveSegmentRow: View {

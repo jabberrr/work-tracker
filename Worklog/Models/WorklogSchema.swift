@@ -13,12 +13,18 @@ enum WorklogSchema {
 /// The plan is deliberately NOT passed to `ModelContainer` yet: staged migration refuses stores whose model isn't one of
 /// the listed versions ("unknown model version"), and development stores created before V1 was frozen would then fail
 /// to open. Additive changes (new properties with defaults) keep using automatic lightweight migration.
+///
+/// `models` lists the LIVE model types (it is not a frozen copy). Round 3 added `WorkProfile` plus three optional
+/// to-one relationships (`WorkSession.profile`, `WorkLabel.profile`, `WorkTag.profile`): an additive change handled by
+/// automatic lightweight migration, locally and in CloudKit (deploy the CloudKit dev schema to Production before
+/// release). Do NOT add a `WorklogSchemaV2` that lists the same live types: two identical schemas in a migration plan
+/// fail with a duplicate-checksum error.
 enum WorklogSchemaV1: VersionedSchema {
     static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
     static var models: [any PersistentModel.Type] {
         [
             WorkSession.self, Segment.self, Note.self, Attachment.self,
-            WorkLabel.self, WorkTag.self, LearningPoint.self,
+            WorkLabel.self, WorkTag.self, LearningPoint.self, WorkProfile.self,
         ]
     }
 }

@@ -34,8 +34,15 @@ final class AppSettings {
     let defaults: UserDefaults
 
     // MARK: General
+    /// LEGACY (before profiles). Read once by the profile migration (`SeedData.ensureProfiles` copies it into the
+    /// default profile's `defaultLabelUUID`). The UI no longer writes it; TaxonomyOps may still clear it.
     var defaultLabelID: UUID? = nil {
         didSet { defaults.set(defaultLabelID?.uuidString, forKey: Self.key("defaultLabelID")) }
+    }
+    /// Profile the menu bar and the overlay start sessions in. nil = "Current profile" (`ProfileStore.activeProfile`).
+    /// Stored as a uuidString under "settings.quickStartProfileID".
+    var quickStartProfileID: UUID? = nil {
+        didSet { defaults.set(quickStartProfileID?.uuidString, forKey: Self.key("quickStartProfileID")) }
     }
     var showMenuBarExtra: Bool { didSet { write(showMenuBarExtra, "showMenuBarExtra") } }
     var menuBarShowsTimer: Bool { didSet { write(menuBarShowsTimer, "menuBarShowsTimer") } }
@@ -122,8 +129,9 @@ final class AppSettings {
         backupInterval = defaults.string(forKey: Self.key("backupInterval")).flatMap(BackupInterval.init(rawValue:)) ?? .hourly
         storedBackupRetentionCount = Self.clampRetention(Self.int(defaults, "backupRetentionCount", 10))
         backupIncludesAttachments = Self.bool(defaults, "backupIncludesAttachments", true)
-        // Has an initial value, so it is assigned last (after every other stored property is initialized).
+        // These have initial values, so they are assigned last (after every other stored property is initialized).
         defaultLabelID = defaults.string(forKey: Self.key("defaultLabelID")).flatMap(UUID.init(uuidString:))
+        quickStartProfileID = defaults.string(forKey: Self.key("quickStartProfileID")).flatMap(UUID.init(uuidString:))
         // Persist the (possibly migrated) layout right away so the legacy booleans are read only once.
         write(overlayLayout.map(\.rawValue), "overlayLayout")
     }

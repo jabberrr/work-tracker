@@ -11,12 +11,15 @@ final class WorkTag {
     var isArchived: Bool = false
     var createdAt: Date = Date()
 
-    /// Optional parent label (tag acts as a sub-label). nil = global tag.
+    /// Optional parent label (tag acts as a sub-label). nil = not scoped to a label (unrelated to `profile`).
     @Relationship(deleteRule: .nullify, inverse: \WorkLabel.tags)
     var label: WorkLabel?
     var sessions: [WorkSession]? = []
     var segments: [Segment]? = []
     var learningPoints: [LearningPoint]? = []
+    /// nil = global (offered in every profile); else local to that profile.
+    @Relationship(deleteRule: .nullify, inverse: \WorkProfile.tags)
+    var profile: WorkProfile?
 
     init(name: String, colorHex: String = "#8E8E93", uuid: UUID = UUID()) {
         self.uuid = uuid
@@ -27,4 +30,6 @@ final class WorkTag {
 
 extension WorkTag {
     var usageCount: Int { (sessions?.count ?? 0) + (segments?.count ?? 0) + (learningPoints?.count ?? 0) }
+    /// Offered in every profile (no profile). A tag whose profile was deleted becomes global too.
+    var isGlobal: Bool { profile == nil }
 }

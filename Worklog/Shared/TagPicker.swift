@@ -2,7 +2,12 @@ import SwiftUI
 import SwiftData
 
 /// Chips for selected tags (removable) + "+" popover: search field, tags scoped to `scopeLabel` first,
-/// then global; if allowsCreate, "Create “x”" → TaxonomyOps.createTag(name:in:) via @Environment(\.modelContext).
+/// then tags for any label; if allowsCreate, "Create “x”" → `TaxonomyOps.createTag(name:profile:in:)` via
+/// @Environment(\.modelContext): the new tag is local to `profileID`'s profile (global when `profileID` is nil).
+///
+/// Profile scope: only tags offered in `profileID` (global + local to it) are listed; `profileID == nil` offers
+/// every tag. Selected tags that aren't offered (local to another profile) keep their chip and are listed under
+/// "Other profiles" with their profile's name, so they can be removed.
 ///
 /// Keyboard: in the popover, type to filter; Return toggles an exact/only match or creates the tag;
 /// Esc clears the query, Esc again closes the popover.
@@ -18,12 +23,14 @@ struct TagPicker: View {
     @Query(sort: \WorkTag.name) private var allTags: [WorkTag]
     @Binding private var selection: [WorkTag]
     private let scopeLabel: WorkLabel?
+    private let profileID: UUID?
     private let allowsCreate: Bool
     @State private var isPresented = false
 
-    init(selection: Binding<[WorkTag]>, scopeLabel: WorkLabel? = nil, allowsCreate: Bool = true) {
+    init(selection: Binding<[WorkTag]>, scopeLabel: WorkLabel? = nil, profileID: UUID?, allowsCreate: Bool = true) {
         self._selection = selection
         self.scopeLabel = scopeLabel
+        self.profileID = profileID
         self.allowsCreate = allowsCreate
     }
 
@@ -43,6 +50,12 @@ struct TagPicker: View {
 
     var body: some View {
         let chips = liveSelection
+        let scope = ProfileScope(profileID: profileID)
+        let offered = liveTags.filter { scope.offers($0) }
+        let foreign = chips.filter { !scope.offers($0) }
+        let foreignNames = Dictionary(
+            foreign.map { ($0.persistentModelID, ScopedItemTitle.foreignProfileName(of: $0, in: scope) ?? "") },
+            uniquingKeysWith: { first, _ in first })
         FlowLayout(spacing: 6, lineSpacing: 6) {
             ForEach(chips) { tag in
                 TagChip(tag: tag, onRemove: { remove(tag) })
@@ -63,7 +76,9 @@ struct TagPicker: View {
             .help("Add tag")
             .popover(isPresented: $isPresented, arrowEdge: .bottom) {
                 TagPickerPopover(selection: safeSelection,
-                                 allTags: liveTags,
+                                 allTags: offered,
+                                 foreignTags: foreign,
+                                 foreignProfileNames: foreignNames,
                                  scopeLabel: ModelLiveness.live(scopeLabel),
                                  allowsCreate: allowsCreate,
                                  onCreate: create)
@@ -95,7 +110,9 @@ struct TagPicker: View {
     private func create(_ name: String) {
         let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else { return }
-        let tag = TaxonomyOps.createTag(name: trimmed, in: modelContext)
+        // Fetched here (an action), never in `body`. A missing profile (nil id, or deleted) creates a global tag.
+        let profile = ProfileOps.profile(withID: profileID, in: modelContext)
+        let tag = TaxonomyOps.createTag(name: trimmed, profile: profile, in: modelContext)
         var current = ModelLiveness.live(selection)
         if !current.contains(where: { $0.persistentModelID == tag.persistentModelID }) {
             current.append(tag)
@@ -110,7 +127,12 @@ struct TagPicker: View {
 private struct TagPickerPopover: View {
     @Environment(\.theme) private var theme
     @Binding var selection: [WorkTag]
+    /// Live tags offered in the picker's profile.
     let allTags: [WorkTag]
+    /// Live selected tags NOT offered in the picker's profile (local to another profile).
+    let foreignTags: [WorkTag]
+    /// Profile name of each foreign tag, by persistentModelID.
+    let foreignProfileNames: [PersistentIdentifier: String]
     let scopeLabel: WorkLabel?
     let allowsCreate: Bool
     let onCreate: (String) -> Void
@@ -118,10 +140,13 @@ private struct TagPickerPopover: View {
     @State private var query = ""
     @FocusState private var searchFocused: Bool
 
-    init(selection: Binding<[WorkTag]>, allTags: [WorkTag], scopeLabel: WorkLabel?,
+    init(selection: Binding<[WorkTag]>, allTags: [WorkTag], foreignTags: [WorkTag],
+         foreignProfileNames: [PersistentIdentifier: String], scopeLabel: WorkLabel?,
          allowsCreate: Bool, onCreate: @escaping (String) -> Void) {
         self._selection = selection
         self.allTags = allTags
+        self.foreignTags = foreignTags
+        self.foreignProfileNames = foreignProfileNames
         self.scopeLabel = scopeLabel
         self.allowsCreate = allowsCreate
         self.onCreate = onCreate
@@ -157,8 +182,13 @@ private struct TagPickerPopover: View {
         }
     }
 
+    /// Selected tags of other profiles that match the query (listed so they can be unselected).
+    private var otherProfileTags: [WorkTag] {
+        foreignTags.filter { matches($0) }
+    }
+
     private var exactMatch: WorkTag? {
-        activeTags.first {
+        (activeTags + foreignTags).first {
             $0.name.trimmingCharacters(in: .whitespacesAndNewlines)
                 .caseInsensitiveCompare(trimmedQuery) == .orderedSame
         }
@@ -172,7 +202,8 @@ private struct TagPickerPopover: View {
         let scoped = scopedTags
         let global = globalTags
         let others = otherTags
-        let nothing = scoped.isEmpty && global.isEmpty && others.isEmpty
+        let foreign = otherProfileTags
+        let nothing = scoped.isEmpty && global.isEmpty && others.isEmpty && foreign.isEmpty
 
         VStack(spacing: 0) {
             SearchField(text: $query,
@@ -186,10 +217,11 @@ private struct TagPickerPopover: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: 1) {
                     if let scope = scopeLabel {
-                        group(title: scope.name, tags: scoped, showsParent: false)
+                        group(title: scope.name, tags: scoped, caption: { _ in nil })
                     }
-                    group(title: scopeLabel == nil ? "Tags" : "Global", tags: global, showsParent: false)
-                    group(title: "Other labels", tags: others, showsParent: true)
+                    group(title: scopeLabel == nil ? "Tags" : "Any label", tags: global, caption: { _ in nil })
+                    group(title: "Other labels", tags: others, caption: { parentLabel(of: $0)?.name })
+                    group(title: "Other profiles", tags: foreign, caption: { foreignProfileNames[$0.persistentModelID] })
                     if nothing && !canCreate {
                         Text(trimmedQuery.isEmpty ? "No tags yet." : "No matching tags.")
                             .font(theme.calloutFont)
@@ -232,7 +264,7 @@ private struct TagPickerPopover: View {
     }
 
     @ViewBuilder
-    private func group(title: String, tags: [WorkTag], showsParent: Bool) -> some View {
+    private func group(title: String, tags: [WorkTag], caption: @escaping (WorkTag) -> String?) -> some View {
         if !tags.isEmpty {
             Text(title)
                 .font(theme.captionFont.weight(.semibold))
@@ -243,12 +275,13 @@ private struct TagPickerPopover: View {
                 .padding(.bottom, 2)
                 .accessibilityAddTraits(.isHeader)
             ForEach(tags) { tag in
-                row(tag, showsParent: showsParent)
+                row(tag, caption: caption(tag))
             }
         }
     }
 
-    private func row(_ tag: WorkTag, showsParent: Bool) -> some View {
+    /// `caption`: trailing tertiary text (the parent label, or another profile's name).
+    private func row(_ tag: WorkTag, caption: String?) -> some View {
         let selected = isSelected(tag)
         return Button {
             toggle(tag)
@@ -266,8 +299,8 @@ private struct TagPickerPopover: View {
                     .foregroundStyle(theme.textPrimary)
                     .lineLimit(1)
                 Spacer(minLength: 0)
-                if showsParent, let parent = parentLabel(of: tag) {
-                    Text(parent.name)
+                if let caption, !caption.isEmpty {
+                    Text(caption)
                         .font(theme.captionFont)
                         .foregroundStyle(theme.textTertiary)
                         .lineLimit(1)
@@ -306,7 +339,7 @@ private struct TagPickerPopover: View {
         } else if canCreate {
             createFromQuery()
         } else {
-            let visible = scopedTags + globalTags + otherTags
+            let visible = scopedTags + globalTags + otherTags + otherProfileTags
             if visible.count == 1, let only = visible.first {
                 toggle(only)
                 query = ""

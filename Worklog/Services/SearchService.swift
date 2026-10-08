@@ -63,6 +63,12 @@ enum SearchService {
         return sessions.filter { matches($0, terms: parsed) }
     }
 
+    /// scope.filter(sessions) then filter(_:query:).
+    @MainActor
+    static func filter(_ sessions: [WorkSession], query: String, scope: ProfileScope) -> [WorkSession] {
+        filter(scope.filter(sessions), query: query)
+    }
+
     /// First match for the first term in field order (label, tag, segmentFocus, note, learning, learningPoint,
     /// attachmentCaption). The title has last priority: nil when only the title matched (rows already show it).
     static func snippet(for session: WorkSession, query: String) -> SearchSnippet? {

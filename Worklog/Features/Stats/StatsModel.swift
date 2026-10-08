@@ -8,25 +8,29 @@ import SwiftData
 final class StatsModel {
     private(set) var result: StatsResult?
     private(set) var isComputing = false
-    /// True once at least one session exists in the store (independent of the range).
+    /// True once at least one session exists in the shown profile(s) (independent of the range).
     private(set) var hasAnySession = false
 
     @ObservationIgnored private var snapshot: StatsSnapshot?
     @ObservationIgnored private var snapshotVersion: Int = -1
+    @ObservationIgnored private var snapshotScope: ProfileScope?
     @ObservationIgnored private var generation = 0
 
     init() {}
 
     /// - Parameters:
     ///   - sessions: every session (the view's @Query).
+    ///   - scope: the profile(s) shown; sessions outside it are left out. `.allProfiles` keeps every session.
     ///   - dataVersion: bumped by the view whenever the data may have changed.
-    func refresh(sessions: [WorkSession], dataVersion: Int, options: StatsOptions) async {
+    func refresh(sessions: [WorkSession], scope: ProfileScope, dataVersion: Int, options: StatsOptions) async {
         generation += 1
         let myGeneration = generation
 
-        if snapshot == nil || snapshotVersion != dataVersion {
-            snapshot = StatsSnapshot.make(from: sessions, now: .now)
+        if snapshot == nil || snapshotVersion != dataVersion || snapshotScope != scope {
+            let scoped = scope.isAllProfiles ? sessions : scope.filter(sessions)
+            snapshot = StatsSnapshot.make(from: scoped, now: .now)
             snapshotVersion = dataVersion
+            snapshotScope = scope
         }
         guard let snapshot else { return }
         hasAnySession = !snapshot.sessions.isEmpty

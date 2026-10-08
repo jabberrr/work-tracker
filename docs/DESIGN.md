@@ -7,6 +7,9 @@
 >
 > **Round 2** is folded in: Settings lives in the main window (§10.1, §10.11), app shortcuts are customizable
 > (§11.1), the overlay has an editable layout (§10.6), and all copy follows the guideline in §12.0.
+>
+> **Round 3 (Profiles)** is specified in §16: the sidebar profile switcher, `ProfileBadge`, the profile pickers
+> and the `profileID:` scoping of every label/tag picker. Where §16 and an earlier section disagree, §16 wins.
 
 Code lives in `Worklog/DesignSystem/**` and `Worklog/Shared/**`. Read the theme with
 `@Environment(\.theme) private var theme`. **Never hard-code a color, font, radius or spacing.** The only
@@ -295,13 +298,14 @@ need no Reduce Transparency handling (no materials). Signatures are final (ARCHI
 
 | Control | Behavior |
 |---|---|
-| `LabelPicker(selection:includeNone:title:)` | Native pop-up `Picker` (`.menu`): "None", divider, non-archived labels by `sortIndex` with colored symbol; an archived current selection is listed as "Name (archived)". Shows its `title` on the left; use `.labelsHidden()` in compact places. |
-| `LabelValuePicker(_:selection:)` | Settings value sentence over labels ("Default label **Work ⌄**", "Parent label **None ⌄**"): a `ValuePicker` with "None" + the same options as `LabelPicker` (archived current selection as "Name (archived)"); a deleted selection reads "None" and nil is written back. |
-| `TagPicker(selection:scopeLabel:allowsCreate:)` | Selected tags as removable chips + a dashed "+ Add tag" chip that opens a popover: search field (focused), **scope label's tags**, **Global**, and while searching **Other labels**; rows toggle (multi-select, popover stays open); "Create “x”" creates a *global* tag via `TaxonomyOps.createTag(name:in:)` and selects it. Return = toggle exact/only match or create. Bind with `$session.tagList`, `$segment.tagList`, `$point.tagList`. The picker does not call `touch()`. |
+| `LabelPicker(selection:includeNone:title:profileID:)` | Native pop-up `Picker` (`.menu`): "None", divider, the non-archived labels **offered in `profileID`** (global + local to it, §16.3) by `sortIndex` with colored symbol; an archived current selection is listed as "Name (archived)", a current selection local to another profile as "Name (Personal)". Shows its `title` on the left; use `.labelsHidden()` in compact places. |
+| `LabelValuePicker(_:selection:profileID:)` | Settings value sentence over labels ("Default label **Work ⌄**", "Parent label **None ⌄**"): a `ValuePicker` with "None" + the same options as `LabelPicker`; a deleted selection reads "None" and nil is written back. |
+| `TagPicker(selection:scopeLabel:profileID:allowsCreate:)` | Selected tags as removable chips + a dashed "+ Add tag" chip that opens a popover: search field (focused), **scope label's tags**, **Any label** (tags without a parent label), while searching **Other labels**, and selected tags of other profiles under **Other profiles**; only tags offered in `profileID` are listed otherwise. Rows toggle (multi-select, popover stays open); "Create “x”" creates a tag **local to `profileID`'s profile** (global when nil) via `TaxonomyOps.createTag(name:profile:in:)` and selects it. Return = toggle exact/only match or create. Bind with `$session.tagList`, `$segment.tagList`, `$point.tagList`. The picker does not call `touch()`. |
 | `TagChipsRow(tags:)` | Read-only chips; renders nothing when empty. |
 | `NoteRow(note:showsSegment:)` | `10:42` (caption, tabular, tertiary) · selectable body text (6 lines + "Show more") · optional segment caption (dot + focus) · "Edited". Read-only; add `.contextMenu` (Edit / Change time / Delete) in your feature. |
 | `LabelColorPicker(hex:)` | 15 swatches (wrapping) + system color well for custom; selected ring. |
-| `SymbolPicker(symbolName:)` | Adaptive grid (30 pt cells) of `LabelPalette.symbols`; current custom symbol shown first. Put it in a popover or a fixed-height area (~240 pt). |
+| `SymbolPicker(symbolName:)` / `SymbolPicker(symbolName:symbols:)` | Adaptive grid (30 pt cells) of `LabelPalette.symbols` (or the given list, e.g. `LabelPalette.profileSymbolChoices`); current custom symbol shown first. Put it in a popover or a fixed-height area (~240 pt). |
+| `ProfileBadge`, `ProfileSwitcher`, `ProfileCreateSheet`, `ProfilePicker`, `ProfileValuePicker`, `ProfileSymbolTile` | Round 3, see §16.2. |
 
 **Deleted models.** A label or tag can be deleted or merged in Settings while another view still holds it
 (Today's start label in `@State`, the menu bar picker, an open editor). Reading such a model traps, so:
@@ -1066,3 +1070,199 @@ Confirmation dialogs (title = the consequence, ≤ 8 words; message optional, �
 
 Theme ids persist by raw value (`"appearance.themeID"`); never rename or remove a case — unknown values
 fall back to `ThemeID.default` (`.graphite`).
+
+---
+
+## 16. Round 3: Profiles
+
+A **profile** ("Work", "Personal", …) is an independent context: its own sessions, its own local labels and
+tags, its own takeaway and stats. Global labels and tags (`profile == nil`) are offered in every profile. The
+contracts (models, `ProfileStore`, `ProfileScope`, `ProfileOps`) are in ARCHITECTURE §12; this section is the
+visual and interaction spec. The UI stays quiet with one profile: badges only appear with **2 or more** profiles
+(`profiles.hasMultipleProfiles`). The sidebar switcher is the exception, because it is where profiles are created.
+
+### 16.1 Visual language
+
+- **A profile is not a label.** A label is a chip (tinted capsule, `LabelBadge`). A profile is its SF Symbol in
+  the profile color followed by its name, with no fill and no outline (`ProfileBadge`). The only filled
+  profile shape is the **tile**: an 18 pt rounded square (`radiusS`) filled with `profile.color.opacity(0.18)`,
+  with the symbol in the profile color (`ProfileSymbolTile`). Use it in the switcher and in profile lists.
+- **Color** comes from `profile.color` (`DesignSystem/Model+Color.swift`; a deleted profile yields the neutral
+  tag gray). Profile colors use `LabelPalette.swatches`, like labels. New profiles default to the first palette
+  color no other profile uses.
+- **Symbols:** `LabelPalette.profileSymbols` (briefcase, house, person, graduation cap, building, hammer, heart,
+  star, leaf, laptop) come first in pickers; `LabelPalette.profileSymbolChoices` appends every label symbol.
+  The default is `briefcase.fill`.
+- **"No profile"** (a nil or deleted profile): `circle.dashed` in `textTertiary`, name "No profile" in
+  `textSecondary`. Unassigned sessions are repaired automatically, so this is rare and transient.
+- **Global items** (labels and tags offered in every profile) carry a trailing `globe` icon (`textTertiary`,
+  help "All profiles") in Settings ▸ Labels & Tags only. Pickers don't mark them.
+
+### 16.2 Components (`Worklog/Shared`)
+
+| Component | Signature | Look and behaviour |
+|---|---|---|
+| `ProfileBadge` | `ProfileBadge(profile: WorkProfile?, size: BadgeSize = .small)`, `ProfileBadge(name:colorHex:symbolName:size:)` | Symbol (profile color) + name, one line, tail truncation. `.small`: `captionFont`, `textSecondary`, 10 pt symbol. `.regular`: `calloutFont`, `textPrimary`, 12 pt. `.large`: `headlineFont`, `textPrimary`, 14 pt. The value init is for snapshots that must not hold a model (overlay data, popovers). a11y: label "Profile", value = name. |
+| `ProfileSymbolTile` (extra) | `ProfileSymbolTile(colorHex:symbolName:side: = 18)`, `ProfileSymbolTile(profile:side:)` | The tile of §16.1. Decorative (hidden from VoiceOver); pair it with the name. |
+| `ProfileSwitcher` | `ProfileSwitcher()` | Sidebar row, see §16.4. Reads `ProfileStore`, `WindowRouter` and the theme from the environment. |
+| `ProfileCreateSheet` | `ProfileCreateSheet(selectsNewProfile: Bool = true)` | "New profile" sheet, see §16.4. Reads `ProfileStore`. Settings ▸ Profiles passes `selectsNewProfile: false`. |
+| `ProfilePicker` | `ProfilePicker(selection: Binding<UUID?>, title: String = "Profile")` | Native `.menu` `Picker` over the non-archived profiles (+ an archived current selection as "Name (archived)"), tagged by UUID, symbols in color (`LabelMenuIcon`). An unresolved selection shows "No profile"; nil is never written. Session detail's profile row (the caller confirms and moves in the binding's setter). Reads `ProfileStore`. |
+| `ProfileValuePicker` | `ProfileValuePicker(_ prefix: String, selection: Binding<UUID?>, nilTitle: String)` | Value sentence ("Quick start in **Current profile ⌄**"): options nil (= `nilTitle`) + the non-archived profiles. A selection that no longer resolves reads as `nilTitle` and nil is written back (only once profiles are loaded). Reads `ProfileStore`. |
+| `LabelPicker` | `LabelPicker(selection:includeNone:title:profileID:)` | `profileID` is required: see §16.3. |
+| `LabelValuePicker` | `LabelValuePicker(_:selection:profileID:)` | Same scoping. |
+| `TagPicker` | `TagPicker(selection:scopeLabel:profileID:allowsCreate:)` | Same scoping; "Create “x”" makes a tag local to that profile. |
+| `ScopedItemTitle` (extra) | `ScopedItemTitle.title(for: WorkLabel/WorkTag, in: ProfileScope) -> String`, `.foreignProfileName(of: WorkTag, in:)` | The option titles the pickers use: "Name", "Name (Personal)" (not offered here), "Name (archived)". Use it if a feature builds its own label/tag menu (e.g. `LiveTagMenu`). |
+| `SymbolPicker` | `+ init(symbolName:symbols:)` | Pass `LabelPalette.profileSymbolChoices` in profile editors. |
+
+### 16.3 Picker scoping (labels and tags)
+
+Pass the profile whose items should be offered, never read the store inside the picker:
+
+| Where | `profileID:` |
+|---|---|
+| Today idle start form, Settings ▸ Labels & Tags (parent label) | `profiles.activeProfileID` |
+| Today active (segment form, tag menu), end-of-session sheet, Session detail, segment editors, split sheet, LearningsEditor | `session.profile?.uuid` (`engine.activeSessionProfileID` for the live session) |
+| Menu bar panel and overlay start pickers | `profiles.quickStartProfileID` (the panel profile) |
+| Settings ▸ Profiles default label | `profile.uuid` |
+
+Rules (all pickers):
+- **Offered** = live, non-archived, and `ProfileScope(profileID:).offers(_:)`: global, or local to that profile.
+  Other profiles' local items are never offered. `profileID == nil` offers everything (a store without
+  profiles degrades gracefully).
+- A **current selection that isn't offered** stays visible so the control never lies: `LabelPicker` and
+  `LabelValuePicker` list it as "Name (Personal)"; `TagPicker` keeps its chip and lists it under **Other
+  profiles** with the profile name trailing, so it can be removed. Archived selections keep "(archived)".
+- **Deleted models** are still never read: a deleted label selection becomes nil, deleted tags are dropped,
+  and the cleaned value is written back (§9).
+- **Creating a tag** from `TagPicker` resolves the profile in the action (`ProfileOps.profile(withID:in:)`) and
+  calls `TaxonomyOps.createTag(name:profile:in:)`: the tag is local to that profile, or global with no profile.
+  A same-name tag already offered there is reused.
+- In the tag popover the section for tags without a parent label is titled **Any label** (was "Global"), so
+  "global" only ever means "all profiles".
+
+### 16.4 Screens
+
+**Sidebar switcher** (`ProfileSwitcher`, placed by `RootView` between the mini status row and the footer;
+padding h `spacingS`, v `spacingXS`):
+```
+│ ● 1:12:40  ◉ Deep work │   ← mini status row (only while a session runs; a ProfileBadge dot
+│────────────────────────│      before the label when the session's profile isn't current)
+│ ▣ Work               ⇕ │   ← ProfileSwitcher: tile · name (calloutFont medium) · chevron.up.chevron.down
+│────────────────────────│
+│ ◯ Guest             ⚙  │   ← footer (account + Settings gear)
+```
+- The row is a full-width plain button: 6 × 5 pt padding, `radiusS` fill `textPrimary.opacity(0.06)` on hover
+  and while open, 0.10 pressed, accent focus ring. Name `textPrimary`, one line; chevron `textTertiary`, 9 pt.
+- Help "Switch profile"; VoiceOver: "Profile", value = name.
+- A click opens a **drop-up popover** (`arrowEdge: .top`, so it always opens above the footer), as wide as the
+  row and at least 220 pt, `elevatedSurface`:
+```
+        ┌──────────────────────────┐
+        │ ✓ ▣ Work                 │   ← non-archived profiles; checkmark = current
+        │   ▣ Personal             │
+        │ ──────────────────────── │
+        │   ＋ New Profile…         │   → ProfileCreateSheet (sheet from the switcher)
+        │   ⚙ Manage Profiles…     │   → Settings ▸ Profiles
+        └──────────────────────────┘
+                   ▼
+        │ ▣ Work               ⇕ │
+```
+- Rows behave like `ValuePicker`'s list: hover or ↑/↓ highlights (`textPrimary.opacity(0.07)`), click, Return or
+  Space picks and closes, Esc closes. Over 10 profiles, the profile rows scroll and the two actions stay visible.
+- Picking a profile calls `profiles.select(id:)`; every page re-scopes in place. A running session keeps running
+  in its own profile.
+
+**New profile sheet** (`ProfileCreateSheet`, width 420, padding `spacingXL`):
+```
+  New profile                                   ← titleFont
+  [ Name                                   ]    ← inset field, focused; Return creates
+  Color                                         ← captionFont semibold, textSecondary
+  ● ● ● ● ● ● ● ● ● ● ● ● ● ● ●  ◐               ← LabelColorPicker
+  Symbol
+  ┌ SymbolPicker (profileSymbolChoices), 160 pt, scrolls ┐
+  ( Cancel )                          [ Create ]   ← Create = default action, disabled while the name is blank
+```
+
+**Today** (F1): idle, with 2+ profiles, `ProfileBadge(profile: profiles.activeProfile, size: .small)` sits next to
+the date in the header. If the profile offers no labels, the start card shows "No labels yet." (caption,
+`textTertiary`) and a Quiet "Add labels" button. Active, with 2+ profiles, the header carries a `Menu` labelled
+with `ProfileBadge(profile: engine.activeSessionProfile)`: "Switch to “Work”" (only when the session's profile
+isn't current) and a "Move to" submenu. A move that copies labels asks first: "Move to Personal?" / "Labels and
+tags not in Personal are copied." / "Move".
+```
+  Today                                 ⌂ Personal   Wednesday, Oct 7
+```
+
+**Session detail** (F1): with 2+ profiles a header row `ProfilePicker(selection:title: "Profile")`; the binding's
+setter confirms as above, then moves.
+
+**End-of-session sheet, menu bar, overlay** (F1/F2): with 2+ profiles a `.small` `ProfileBadge` in the header
+(sheet), in the status row while active or left of Start while idle (menu bar). The overlay header shows a 6 pt
+dot in the profile color and the name in `captionFont` `textTertiary`, truncating.
+
+**Settings ▸ Profiles** (F3, `SettingsProfilesTab`):
+```
+  Quick start in **Current profile ⌄**        ← ProfileValuePicker(nilTitle: "Current profile")
+  Used by the menu bar and the overlay.       ← SettingsFootnote
+  ┌ list (230) ─────────────┬ editor ──────────────────────────────────────────────────┐
+  │ Profiles                │ Name [ Work                  ]                           │
+  │  ✓ ▣ Work      12       │ Color  ● ● ● ● …   (LabelColorPicker)                    │
+  │    ▣ Personal   3       │ Symbol [grid 240 pt] (SymbolPicker, profileSymbolChoices)│
+  │ Archived                │ Default label **Deep work ⌄**  (LabelValuePicker,        │
+  │    ▣ Old job            │   profileID: profile.uuid)  “None” uses your first label.│
+  │ [+]   Drag to reorder   │ 12 sessions                                              │
+  │                         │ ( Switch to ) ( Archive ) {! Delete… }                   │
+  └─────────────────────────┴──────────────────────────────────────────────────────────┘
+```
+- List rows: checkmark slot (current profile), `ProfileSymbolTile`, name, session count trailing (`captionFont`,
+  `textTertiary`, tabular). [+] presents `ProfileCreateSheet(selectsNewProfile: false)`.
+- Archive and Delete are disabled for the last active profile (help "Keep at least one profile").
+- Delete sheet: "Delete “Personal”?" / "12 sessions use it." / Picker "Move sessions to" (other non-archived
+  profiles, then "Delete sessions") / ( Cancel ) {!Delete}. "Delete sessions" with sessions asks again:
+  "Delete 12 sessions?" / "This can’t be undone." / "Delete Sessions". A `.sessionRunning` result shows "Stop the
+  session first." under the picker (`danger`, `captionFont`).
+
+**Settings ▸ Labels & Tags** (F3): lists show the items offered in the current profile; global rows end with the
+`globe` icon. The editor adds `ValuePicker("Available in", …)` with "All profiles" / "Work only". Making an item
+local that other profiles use asks: "Make “Meetings” Work only?" / "Other profiles keep their own copy." /
+"Make Local".
+```
+  Available in **All profiles ⌄**
+```
+
+**Stats** (F3): with 2+ profiles, a native menu `Picker` (labels hidden) in the header: "Work" / "All profiles".
+In All-profiles mode a "By profile" chart (horizontal bars in profile colors, profile names as the axis labels,
+so color is never the only signal).
+
+### 16.5 Copy (exact strings)
+
+Follows §12.0. Menu items and buttons in title case where they are commands (macOS menus), sentence case
+elsewhere.
+
+| Where | String |
+|---|---|
+| Switcher help / a11y | "Switch profile" / label "Profile", value = name |
+| Switcher popover | "New Profile…" · "Manage Profiles…" |
+| Create sheet | "New profile" · prompt "Name" · "Color" · "Symbol" · "Cancel" · "Create" |
+| Badge, no profile | "No profile" |
+| Picker option suffixes | "Name (archived)" · "Name (Personal)" |
+| Tag popover sections | "Any label" · "Other labels" · "Other profiles" |
+| Settings tab | "Profiles" |
+| Quick start | "Quick start in" · "Current profile" · footnote "Used by the menu bar and the overlay." |
+| Scope | "Available in" · "All profiles" · "X only" · globe help "All profiles" |
+| Scope confirm | "Make “X” Y only?" · "Other profiles keep their own copy." · "Make Local" |
+| Move | "Move to" · "Move to Y?" · "Labels and tags not in Y are copied." · "Move" · "Switch to “Y”" |
+| Shortcut | menu "Next Profile" · Shortcuts row "Switch to Next Profile" (no default) |
+| Today, empty profile | "No labels yet." · "Add labels" |
+| Results / disabled help | "Keep at least one profile." (help without the period) · "Stop the session first." · "Choose another profile." |
+| Delete | "Delete “X”?" · "N sessions use it." · "Move sessions to" · "Delete sessions" · "Delete N sessions?" · "This can’t be undone." · "Delete Sessions" |
+| Stats | "All profiles" · "By profile" |
+
+### 16.6 Do / Don't
+
+- Do show profile context only with 2+ profiles (badges, menus, Stats picker); the switcher is always there.
+- Do pass `profileID:` explicitly to every label/tag picker; don't read `ProfileStore` inside popovers.
+- Do use `ProfileBadge` for a profile; don't put a profile in a chip or reuse `LabelBadge`.
+- Do resolve held profiles with `ModelLiveness.live(_:)` before reading them; pass UUIDs and value snapshots
+  into popovers and menus, never models.
+- Don't filter `@Query` by profile with `#Predicate`; filter in memory with `ProfileScope` (ARCHITECTURE §12).

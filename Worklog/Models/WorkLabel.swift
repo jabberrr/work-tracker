@@ -17,6 +17,9 @@ final class WorkLabel {
     var segments: [Segment]? = []
     /// Sub-labels (tags scoped to this label).
     var tags: [WorkTag]? = []
+    /// nil = global (offered in every profile); else local to that profile.
+    @Relationship(deleteRule: .nullify, inverse: \WorkProfile.labels)
+    var profile: WorkProfile?
 
     init(name: String, colorHex: String = "#5B8DEF", symbolName: String = "circle.fill",
          sortIndex: Int = 0, uuid: UUID = UUID()) {
@@ -30,4 +33,6 @@ final class WorkLabel {
 
 extension WorkLabel {
     var usageCount: Int { (sessions?.count ?? 0) + (segments?.count ?? 0) }
+    /// Offered in every profile (no profile). A label whose profile was deleted becomes global too.
+    var isGlobal: Bool { profile == nil }
 }

@@ -9,6 +9,7 @@ optional floating overlay give quick access while you work.
 
 ## Features
 
+- **Profiles**: keep separate sets of sessions ("Work", "Personal", …), each with its own labels and tags, stats, takeaway and default label. Switch with the profile switcher above the sidebar footer (or View ▸ Next Profile); the selection is remembered per Mac. Labels and tags can be available in all profiles or only in one. Stats can show the current profile or all profiles. The menu bar and the overlay start sessions in the *quick start* profile (Settings ▸ Profiles; "Current profile" by default), while ⇧⌘S and Today always use the current profile.
 - **Live sessions**: start, pause and resume, stop or discard. You can split a session into segments (each with its own label, tags and focus) and add timestamped notes.
 - **End-of-session review**: title, label and tags, free-text learnings, a short "takeaway" shown in the next session's overlay, and tagged learning points with a 1–5 mastery rating.
 - **History**: grouped by day and sortable by date, length or label. Full-text search covers titles, labels, tags, segment focus, notes, learnings and image captions. Every session can be edited after the fact: times, labels, segments (split, merge, delete, move a boundary), notes and images.
@@ -20,7 +21,7 @@ optional floating overlay give quick access while you work.
 - **Images**: add them by picking files, pasting or dragging. They are downscaled to 2048 px and compressed, and sync through iCloud.
 - **Account**: Sign in with Apple, or continue without signing in.
 - **Data**: JSON export and import (merge or replace), CSV export (sessions and segments), rolling local backups with restore, and a recovery flow if the data store can't be opened.
-- **Settings in the main window**: Settings is a page of the main window (the gear in the sidebar footer, ⌘, or the app menu's "Settings…"), not a separate window. Sections: General, Appearance, Overlay, Shortcuts, Labels & Tags, Account, Data.
+- **Settings in the main window**: Settings is a page of the main window (the gear in the sidebar footer, ⌘, or the app menu's "Settings…"), not a separate window. Sections: General, Appearance, Overlay, Shortcuts, Profiles, Labels & Tags, Account, Data.
 - **Customizable keyboard shortcuts**: every app shortcut can be re-recorded, cleared or reset in Settings ▸ Shortcuts. Conflicts, combos reserved by macOS, shortcuts without ⌘ or ⌃ and ⇧ with a digit or symbol are rejected; changes apply immediately and survive relaunch. Defaults:
 
   | Action | Default |
@@ -32,6 +33,7 @@ optional floating overlay give quick access while you work.
   | Discard session | – |
   | Toggle overlay | ⇧⌘O |
   | Today, History, Learning, Stats | ⌘1–⌘4 |
+  | Switch to next profile | – |
   | Find in History | ⌘F |
   | Save session review | ⌘↩ |
 
@@ -79,7 +81,7 @@ disk, which is useful only when files were added outside Xcode, e.g. by tooling 
    - Push Notifications, which CloudKit uses to deliver changes silently
    - Sign in with Apple
 
-4. **Before the first release**, open the CloudKit Console and **deploy the development schema to Production**. Development builds create the schema automatically, production builds can't. Schema changes must be additive only: new properties need defaults, and fields can't be renamed or removed. Free-text fields are marked `allowsCloudEncryption` (see *Privacy*); that choice can't be changed for a field after the schema is deployed to Production. If your development container already has these fields unencrypted from an earlier build, reset the development environment in the CloudKit Console first.
+4. **Before the first release**, open the CloudKit Console and **deploy the development schema to Production**. Development builds create the schema automatically, production builds can't. Schema changes must be additive only: new properties need defaults, and fields can't be renamed or removed. **Profiles (round 3)** added the `CD_WorkProfile` record type and a `CD_profile` field on `CD_WorkSession`, `CD_WorkLabel` and `CD_WorkTag`: run a development build against the development container once, then deploy the schema to Production *before* shipping the release, or production builds can't sync profiles. Free-text fields are marked `allowsCloudEncryption` (see *Privacy*); that choice can't be changed for a field after the schema is deployed to Production. If your development container already has these fields unencrypted from an earlier build, reset the development environment in the CloudKit Console first.
 
 5. **Developer ID distribution** (outside the Mac App Store): Worklog.entitlements uses the development push environment. For a Developer ID build set `com.apple.developer.aps-environment` to `production` and add `com.apple.developer.icloud-container-environment` = `Production`, otherwise the app talks to the development CloudKit database.
 
@@ -96,6 +98,7 @@ The unit tests run in in-memory SwiftData containers. Under XCTest, `AppServices
 - a JSON export → import round trip, merge never overwriting newer data, CSV quoting and the formula-injection guard
 - duplicate-row tie-breaking and the backup retention policy
 - the overlay layout migration from the old per-element toggles, and resetting it
+- profiles: the migration of existing data, profile dedupe and repair, `ProfileScope`, scoped tag creation, making labels/tags local (copies for other profiles), moving sessions between profiles, deleting/archiving profiles, the persisted selection, the profile-aware engine (start, default label, today total, per-profile takeaways), scoped search and export format 2 (including importing format-1 files)
 - shortcut defaults, display strings, validation (conflicts, reserved combos, missing ⌘/⌃, ⇧ without a letter), clearing, reset (and the action it clears) and persistence (including de-duplicating stored overrides)
 
 ## Architecture
@@ -106,12 +109,14 @@ The full contract (names, signatures, ownership) is in [`docs/ARCHITECTURE.md`](
 Worklog/
   App/            @main WorklogApp (Window + MenuBarExtra scenes; Settings is a page of the window), AppDelegate,
                   AppServices (service container + View.withAppServices), RootView, WindowRouter, commands
-  Models/         SwiftData @Model types: WorkSession, Segment, Note, Attachment, WorkLabel, WorkTag, LearningPoint
+  Models/         SwiftData @Model types: WorkSession, Segment, Note, Attachment, WorkLabel, WorkTag, LearningPoint,
+                  WorkProfile
   Persistence/    PersistenceController (CloudKit → local → in-memory fallback), SeedData, PreviewData
   Services/       SessionEngine (live state machine), SessionEditor (after-the-fact edits), TaxonomyOps,
                   AuthService + KeychainStore, ExportService + DTOs, BackupService, SearchService,
                   AttachmentImporter, AppSettings, OverlayLayout (overlay elements), ShortcutStore (customizable
-                  shortcuts), OverlayPanelController, SyncMonitor (iCloud status)
+                  shortcuts), ProfileStore + ProfileScope (current profile, in-memory scoping), ProfileOps,
+                  OverlayPanelController, SyncMonitor (iCloud status)
   Utilities/      Formatting helpers, Log
   DesignSystem/   Theme, ThemeManager, components (designer-owned)
   Shared/         Data-bound pickers shared by features
@@ -163,6 +168,14 @@ Changing the iCloud sync toggle takes effect at the next launch.
 - Copies of the same label, tag or session (e.g. the same backup restored on two Macs) are merged on launch and activation (`SeedData.deduplicate`). Every row also carries an `instanceID`, so all Macs keep the *same* copy; when two copies can't be told apart, both are kept rather than risking deleting both.
 - A session running on one Mac shows as running on the other after sync. Only the Mac that controls it auto-pauses it on sleep or quit. If both Macs had a session running, the older one ends when the newer one started (or at its last activity if that was more than the long-session warning ago), and Worklog says so.
 
+**Profiles.**
+- On the first launch of this version, a "Work" profile is created with a fixed UUID and every existing session is put in it. Existing labels and tags become available in all profiles; nothing else is rewritten. When two Macs upgrade, both create the same "Work" profile and the copies are merged after sync (the older one wins).
+- A new Mac with iCloud sync creates a provisional "Work" profile at launch so the app always has a profile. After the first iCloud download it is merged into the synced "Work", or removed if it is still empty and you had deleted "Work" on another Mac.
+- A session without a profile (created by an older app version on another Mac, or whose profile was deleted on another Mac) is moved into the home profile ("Work" if it exists) on launch, activation and sync. Labels and tags whose profile was deleted become available everywhere. Nothing is lost.
+- **Upgrade every Mac.** Older app versions don't know profiles: their new sessions arrive without a profile (and are repaired into the home profile), and they show every profile's sessions and labels together.
+- Making a label or tag local to one profile while other profiles use it gives each of those profiles its own copy; moving a session to another profile copies the labels and tags that profile doesn't have. A session never ends up with a label or tag its profile doesn't offer.
+- The current profile is stored per Mac (`profiles.activeProfileID`); the quick start profile is a setting.
+
 **Backups.** Rolling JSON snapshots are written to:
 
 ```
@@ -182,8 +195,8 @@ Changing the iCloud sync toggle takes effect at the next launch.
 **Recovery.** If the store can't be opened, **Recover…** moves the damaged store files aside to `Application Support/Worklog/Recovered/Store-<date>/` (nothing is ever deleted), then relaunches Worklog with a fresh store and either restores the backup you chose (replace when local-only, merge when iCloud sync is on) or, with iCloud sync on, downloads your data again. When a new app version first launches, Worklog also copies the store to `Recovered/PreOpen-<date>/` (the last two are kept) before opening it, so a failed upgrade can be undone by hand.
 
 **Export and import.**
-- **JSON:** versioned (`formatVersion`), ISO-8601 dates, images optional as base64. Imported images are checked to be JPEG/PNG/HEIC of sane size.
-- **CSV:** one file per session or per segment, RFC 4180 quoting. Values starting with `=`, `+`, `-`, `@`, tab or CR get a leading `'` so spreadsheet apps don't run them as formulas.
+- **JSON:** versioned (`formatVersion`, currently 2: profiles and each label's, tag's and session's profile), ISO-8601 dates, images optional as base64. Format-1 files from earlier versions still import: their sessions go to the home profile and their labels and tags become available in all profiles. Delete All Data and Replace with a file without profiles recreate the "Work" profile. Imported images are checked to be JPEG/PNG/HEIC of sane size.
+- **CSV:** one file per session or per segment, RFC 4180 quoting, with the profile name as the last column. Values starting with `=`, `+`, `-`, `@`, tab or CR get a leading `'` so spreadsheet apps don't run them as formulas.
 - **Importing:** importing an archive exported without images keeps the images already in the store, in merge mode.
 - **Images you add** are limited to 100 MB files and 150 megapixels, then downscaled to 2048 px.
 
@@ -197,6 +210,7 @@ These can't be checked in CI and should be tried on real Macs before a release:
 
 - **Toggling iCloud sync** reopens the same store file with and without CloudKit. Core Data may log "Forcing into Read Only mode store" or re-import on the next CloudKit launch; check that data survives switching sync off and on again (make a manual backup first).
 - **Two Macs**: start sessions on both, let them sync, and check the handoff end time, the "running on another Mac" hint, and that sleeping the idle Mac doesn't pause the other Mac's session.
+- **Profiles across Macs**: upgrade two Macs with existing data and check that one "Work" profile remains with all sessions; on a new Mac with sync, check that a "Work" profile deleted elsewhere doesn't come back; delete a profile on one Mac and check its sessions land in the home profile on the other.
 - **Duplicate merge**: restore the same backup on two Macs with sync on and check that exactly one copy of each session remains on both.
 - **Encrypted fields** appear as encrypted in the CloudKit Console and sync between Macs signed in to the same account.
 - **Recovery**: corrupt a copy of the store (e.g. truncate `Worklog.store` while the app is quit) and walk through Recover… with a backup and with a fresh store.

@@ -10,14 +10,20 @@ struct ImportSummary: Equatable {
     var labels = 0, tags = 0, sessionsInserted = 0, sessionsUpdated = 0, attachments = 0
     /// Merge only: sessions left alone because the local copy is running or at least as new as the archived one.
     var sessionsSkipped = 0
+    /// Profiles in the archive (inserted or already present). 0 for v1 archives.
+    var profiles = 0
 
-    /// "Imported 12 sessions (3 updated), 5 labels, 9 tags." (+ " 4 sessions were already up to date." on merge)
+    /// "Imported 12 sessions (3 updated), 5 labels, 9 tags, 2 profiles." (", N profile(s)" only when the archive has
+    /// profiles; + " 4 sessions were already up to date." on merge)
     var description: String {
         let sessions = sessionsInserted + sessionsUpdated
         var text = "Imported \(sessions) \(sessions == 1 ? "session" : "sessions") (\(sessionsUpdated) updated), "
             + "\(labels) \(labels == 1 ? "label" : "labels"), \(tags) \(tags == 1 ? "tag" : "tags")"
         if attachments > 0 {
             text += ", \(attachments) \(attachments == 1 ? "image" : "images")"
+        }
+        if profiles > 0 {
+            text += ", \(profiles) \(profiles == 1 ? "profile" : "profiles")"
         }
         text += "."
         if sessionsSkipped > 0 {
@@ -57,6 +63,7 @@ final class ExportService {
     // MARK: - Export
 
     func makeArchive(includeAttachments: Bool) throws -> ExportArchive {
+        let profiles = ProfileOps.allProfiles(in: context)
         let labels = try context.fetch(FetchDescriptor<WorkLabel>(sortBy: [SortDescriptor(\WorkLabel.sortIndex)]))
         let tags = try context.fetch(FetchDescriptor<WorkTag>(sortBy: [SortDescriptor(\WorkTag.createdAt)]))
         let sessions = try context.fetch(FetchDescriptor<WorkSession>(sortBy: [SortDescriptor(\WorkSession.startedAt)]))
@@ -67,7 +74,8 @@ final class ExportService {
             includesAttachments: includeAttachments,
             labels: labels.filter { !$0.isDeleted }.map { Self.dto($0) },
             tags: tags.filter { !$0.isDeleted }.map { Self.dto($0) },
-            sessions: sessions.filter { !$0.isDeleted }.map { Self.dto($0, includeAttachments: includeAttachments) }
+            sessions: sessions.filter { !$0.isDeleted }.map { Self.dto($0, includeAttachments: includeAttachments) },
+            profiles: profiles.map { Self.dto($0) }
         )
     }
 
@@ -86,14 +94,14 @@ final class ExportService {
         try write(data, to: url)
     }
 
-    /// Sessions CSV header (RFC 4180 quoting, ISO-8601 dates, tags joined by "; "):
-    /// id,title,label,tags,startedAt,endedAt,activeMinutes,pausedMinutes,segmentCount,noteCount,learningPointCount,learningText
+    /// Sessions CSV header (RFC 4180 quoting, ISO-8601 dates, tags joined by "; "; profile = profile name, "" if none):
+    /// id,title,label,tags,startedAt,endedAt,activeMinutes,pausedMinutes,segmentCount,noteCount,learningPointCount,learningText,profile
     func exportSessionsCSV(to url: URL) throws {
         let now = Date.now
         let sessions = try context.fetch(FetchDescriptor<WorkSession>(sortBy: [SortDescriptor(\WorkSession.startedAt)]))
         var rows: [[String]] = [[
             "id", "title", "label", "tags", "startedAt", "endedAt", "activeMinutes", "pausedMinutes",
-            "segmentCount", "noteCount", "learningPointCount", "learningText",
+            "segmentCount", "noteCount", "learningPointCount", "learningText", "profile",
         ]]
         for session in sessions where !session.isDeleted {
             rows.append([
@@ -109,17 +117,19 @@ final class ExportService {
                 String((session.notes ?? []).count),
                 String((session.learningPoints ?? []).count),
                 session.learningText,
+                Self.profileName(of: session),
             ])
         }
         try write(Self.csvData(rows), to: url)
     }
 
-    /// Header: sessionID,sessionTitle,segmentID,index,startedAt,endedAt,activeMinutes,label,tags,focus
+    /// Header: sessionID,sessionTitle,segmentID,index,startedAt,endedAt,activeMinutes,label,tags,focus,profile
     func exportSegmentsCSV(to url: URL) throws {
         let now = Date.now
         let sessions = try context.fetch(FetchDescriptor<WorkSession>(sortBy: [SortDescriptor(\WorkSession.startedAt)]))
         var rows: [[String]] = [[
             "sessionID", "sessionTitle", "segmentID", "index", "startedAt", "endedAt", "activeMinutes", "label", "tags", "focus",
+            "profile",
         ]]
         for session in sessions where !session.isDeleted {
             for (index, segment) in session.sortedSegments.enumerated() {
@@ -134,6 +144,7 @@ final class ExportService {
                     segment.effectiveLabel?.name ?? "",
                     segment.tagList.map(\.name).sorted().joined(separator: "; "),
                     segment.focus,
+                    Self.profileName(of: session),
                 ])
             }
         }
@@ -205,6 +216,12 @@ final class ExportService {
     /// Image bytes from the archive are accepted only if they are a JPEG/PNG/HEIC of sane size.
     /// Saves, posts .worklogDataDidImport.
     ///
+    /// Profiles (v2), imported first: merge upserts by uuid and keeps existing profiles untouched (like labels).
+    /// New labels/tags get the archived scope (`profileID`, nil = global); in merge mode existing ones keep their
+    /// scope, in replace mode the archived scope is set. A session goes to its archived profile, else its local
+    /// profile, else the home profile (created when none exists) — so a v1 archive lands in the home profile with
+    /// global labels/tags. Unassigned sessions are repaired before saving.
+    ///
     /// Merge never touches the locally running session. A still-open session from the archive is ended at its local
     /// end time if it was already stopped here, or at its last activity when a session is running here (so an import
     /// can neither re-open a stopped session nor stop the live one).
@@ -219,6 +236,28 @@ final class ExportService {
         }
         let hasLocalActive = !localActive.isEmpty
         var summary = ImportSummary()
+
+        // Profiles
+        var profilesByID = Self.index(ProfileOps.allProfiles(in: context), by: \.uuid)
+        for dto in archive.profiles ?? [] {
+            summary.profiles += 1
+            if profilesByID[dto.id] != nil { continue }   // existing profiles are kept untouched (both modes)
+            let profile = WorkProfile(name: dto.name, colorHex: dto.colorHex, symbolName: dto.symbolName,
+                                      sortIndex: dto.sortIndex, uuid: dto.id)
+            context.insert(profile)
+            profile.isArchived = dto.isArchived
+            profile.createdAt = dto.createdAt
+            profile.defaultLabelUUID = dto.defaultLabelID
+            profile.modifiedAt = dto.modifiedAt
+            profilesByID[dto.id] = profile
+        }
+        var homeProfile: WorkProfile?
+        func home() -> WorkProfile? {
+            if let homeProfile, ModelLiveness.isLive(homeProfile) { return homeProfile }
+            homeProfile = ProfileOps.homeProfile(in: context)
+                ?? ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: nil, in: context)
+            return homeProfile
+        }
 
         // Labels
         let existingLabels = try context.fetch(FetchDescriptor<WorkLabel>()).filter { !$0.isDeleted }
@@ -242,6 +281,7 @@ final class ExportService {
             label.sortIndex = dto.sortIndex
             label.isArchived = dto.isArchived
             label.createdAt = dto.createdAt
+            label.profile = dto.profileID.flatMap { profilesByID[$0] }
             summary.labels += 1
         }
 
@@ -266,6 +306,7 @@ final class ExportService {
             tag.isArchived = dto.isArchived
             tag.createdAt = dto.createdAt
             tag.label = dto.labelID.flatMap { labelsByID[$0] }
+            tag.profile = dto.profileID.flatMap { profilesByID[$0] }
             summary.tags += 1
         }
 
@@ -311,6 +352,7 @@ final class ExportService {
             session.createdAt = dto.createdAt
             session.label = dto.labelID.flatMap { labelsByID[$0] }
             session.tagList = tags(for: dto.tagIDs)
+            session.profile = dto.profileID.flatMap { profilesByID[$0] } ?? ModelLiveness.live(session.profile) ?? home()
 
             // Segments (upsert by uuid; extras removed)
             var segmentsByID = Self.index((session.segments ?? []).filter { !$0.isDeleted }, by: \.uuid)
@@ -457,6 +499,10 @@ final class ExportService {
             session.modifiedAt = dto.modifiedAt
         }
 
+        if mode == .replace {
+            ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: nil, in: context)
+        }
+        ProfileOps.repairSessionProfiles(in: context)
         try saveOrRollback()
         NotificationCenter.default.post(name: .worklogDataDidImport, object: nil)
         Log.persistence.info("Import finished: \(summary.description, privacy: .public)")
@@ -468,10 +514,13 @@ final class ExportService {
         return try importArchive(archive, mode: mode)
     }
 
-    /// Deletes all model objects (blocked while a session is active → .sessionActive). Posts .worklogDataDidImport.
+    /// Deletes all model objects, profiles included (blocked while a session is active → .sessionActive), then
+    /// recreates the default profile so the app always has one. Posts .worklogDataDidImport.
     func deleteAllData() throws {
         guard try fetchActiveSessions().isEmpty else { throw DataTransferError.sessionActive }
         try deleteEverything()
+        ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: nil, in: context)
+        ProfileOps.repairSessionProfiles(in: context)
         try saveOrRollback()
         NotificationCenter.default.post(name: .worklogDataDidImport, object: nil)
         Log.persistence.info("Deleted all data")
@@ -540,6 +589,9 @@ final class ExportService {
         for label in try context.fetch(FetchDescriptor<WorkLabel>()) where !label.isDeleted {
             context.delete(label)
         }
+        for profile in try context.fetch(FetchDescriptor<WorkProfile>()) where !profile.isDeleted {
+            context.delete(profile)
+        }
     }
 
     private func saveOrRollback() throws {
@@ -585,14 +637,26 @@ final class ExportService {
 
     // MARK: DTO mapping
 
+    private static func dto(_ profile: WorkProfile) -> ProfileDTO {
+        ProfileDTO(id: profile.uuid, name: profile.name, colorHex: profile.colorHex, symbolName: profile.symbolName,
+                   sortIndex: profile.sortIndex, isArchived: profile.isArchived, createdAt: profile.createdAt,
+                   modifiedAt: profile.modifiedAt, defaultLabelID: profile.defaultLabelUUID)
+    }
+
     private static func dto(_ label: WorkLabel) -> LabelDTO {
         LabelDTO(id: label.uuid, name: label.name, colorHex: label.colorHex, symbolName: label.symbolName,
-                 sortIndex: label.sortIndex, isArchived: label.isArchived, createdAt: label.createdAt)
+                 sortIndex: label.sortIndex, isArchived: label.isArchived, createdAt: label.createdAt,
+                 profileID: ModelLiveness.live(label.profile)?.uuid)
     }
 
     private static func dto(_ tag: WorkTag) -> TagDTO {
         TagDTO(id: tag.uuid, name: tag.name, colorHex: tag.colorHex, labelID: tag.label?.uuid,
-               isArchived: tag.isArchived, createdAt: tag.createdAt)
+               isArchived: tag.isArchived, createdAt: tag.createdAt, profileID: ModelLiveness.live(tag.profile)?.uuid)
+    }
+
+    /// The session's profile name for CSV ("" if none).
+    private static func profileName(of session: WorkSession) -> String {
+        ModelLiveness.live(session.profile)?.name ?? ""
     }
 
     private static func dto(_ session: WorkSession, includeAttachments: Bool) -> SessionDTO {
@@ -620,7 +684,8 @@ final class ExportService {
             learningPoints: session.sortedLearningPoints.filter { !$0.isDeleted }.map { point in
                 LearningPointDTO(id: point.uuid, createdAt: point.createdAt, text: point.text,
                                  sortIndex: point.sortIndex, mastery: point.mastery, tagIDs: point.tagList.map(\.uuid))
-            }
+            },
+            profileID: ModelLiveness.live(session.profile)?.uuid
         )
     }
 

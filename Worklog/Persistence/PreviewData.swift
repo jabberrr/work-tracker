@@ -3,22 +3,44 @@ import SwiftData
 
 /// Sample content for SwiftUI previews (and `AppServices(inMemory: true)`).
 @MainActor enum PreviewData {
-    /// Seeds labels/tags + 12 ended sessions over the past 3 weeks (multi-segment, notes, learning points with tags,
-    /// one session with showInOverlay + overlaySummary) and NO active session.
+    /// Seeds labels/tags, two profiles ("Work" with the default uuid and default label "Deep work"; "Personal" with a
+    /// local label "Errands" and a local tag "family") + 12 ended sessions over the past 3 weeks (9 Work, 3 Personal;
+    /// multi-segment, notes, learning points with tags, one session with showInOverlay + overlaySummary) and NO
+    /// active session.
     static func populate(_ context: ModelContext) {
         SeedData.insertDefaults(into: context)
 
-        let labels = ((try? context.fetch(FetchDescriptor<WorkLabel>(sortBy: [SortDescriptor(\WorkLabel.sortIndex)]))) ?? [])
+        let globalLabels = ((try? context.fetch(FetchDescriptor<WorkLabel>(sortBy: [SortDescriptor(\WorkLabel.sortIndex)]))) ?? [])
         let tags = ((try? context.fetch(FetchDescriptor<WorkTag>(sortBy: [SortDescriptor(\WorkTag.name)]))) ?? [])
-        guard !labels.isEmpty else { return }
+        guard !globalLabels.isEmpty else { return }
 
+        // Profiles: "Work" (fixed default uuid) and "Personal".
+        let work = ProfileOps.profile(withID: ProfileOps.defaultProfileUUID, in: context)
+            ?? WorkProfile(name: ProfileOps.defaultProfileName, colorHex: ProfileOps.defaultProfileColorHex,
+                           symbolName: ProfileOps.defaultProfileSymbol, sortIndex: 0,
+                           uuid: ProfileOps.defaultProfileUUID)
+        if work.modelContext == nil { context.insert(work) }
+        work.defaultLabelUUID = globalLabels.first { $0.name == "Deep work" }?.uuid
+        let personal = WorkProfile(name: "Personal", colorHex: "#27AE60", symbolName: "house.fill", sortIndex: 1)
+        context.insert(personal)
+
+        // Personal-local label and tag.
+        let errands = WorkLabel(name: "Errands", colorHex: "#F2C94C", symbolName: "cart.fill",
+                                sortIndex: (globalLabels.map(\.sortIndex).max() ?? 0) + 1)
+        context.insert(errands)
+        errands.profile = personal
+        let familyTag = WorkTag(name: "family", colorHex: "#EB5757")
+        context.insert(familyTag)
+        familyTag.profile = personal
+
+        let labels = globalLabels + [errands]
         func label(_ name: String) -> WorkLabel? { labels.first { $0.name == name } ?? labels.first }
 
         // A sub-label tag scoped to "Deep work".
         let swiftUITag = WorkTag(name: "swiftui", colorHex: "#F2994A")
         context.insert(swiftUITag)
         swiftUITag.label = label("Deep work")
-        let allTags = tags + [swiftUITag]
+        let allTags = tags + [swiftUITag, familyTag]
         func anyTag(_ name: String) -> WorkTag? { allTags.first { $0.name == name } }
 
         struct Blueprint {
@@ -34,6 +56,8 @@ import SwiftData
             var notes: [(Int, String)]
             var learning: String
             var points: [(String, [String], Int)]
+            /// In the "Personal" profile (else "Work").
+            var personal = false
         }
 
         let blueprints: [Blueprint] = [
@@ -60,9 +84,9 @@ import SwiftData
                       learning: "SwiftData + CloudKit needs defaults on every attribute and no unique constraints.",
                       points: [("All attributes need defaults for CloudKit", ["research", "coding"], 4),
                                ("Ordered relationships aren't supported", ["research"], 3)]),
-            Blueprint(daysAgo: 6, hour: 13, title: "Inbox zero", label: "Admin & email", tags: [],
-                      segments: [("Email", 30, nil)], pauseAfterMinutes: nil, pauseMinutes: 0,
-                      notes: [], learning: "", points: []),
+            Blueprint(daysAgo: 6, hour: 13, title: "Groceries and errands", label: "Errands", tags: ["family"],
+                      segments: [("Shopping", 30, nil)], pauseAfterMinutes: nil, pauseMinutes: 0,
+                      notes: [], learning: "", points: [], personal: true),
             Blueprint(daysAgo: 7, hour: 9, title: "Session engine", label: "Deep work", tags: ["coding"],
                       segments: [("State machine", 80, nil), ("Unit tests", 60, nil), ("Docs", 20, nil)],
                       pauseAfterMinutes: 90, pauseMinutes: 20,
@@ -74,7 +98,7 @@ import SwiftData
                       pauseAfterMinutes: nil, pauseMinutes: 0,
                       notes: [(50, "RectangleMark works well for weekday × hour.")],
                       learning: "Swift Charts handles stacking automatically with foregroundStyle(by:).",
-                      points: [("Use foregroundStyle(by:) for stacked bars", ["coding"], 2)]),
+                      points: [("Use foregroundStyle(by:) for stacked bars", ["coding"], 2)], personal: true),
             Blueprint(daysAgo: 11, hour: 15, title: "Customer call", label: "Meetings", tags: ["review"],
                       segments: [("Call", 50, nil)], pauseAfterMinutes: nil, pauseMinutes: 0,
                       notes: [(10, "They want CSV export."), (40, "Follow up on Friday.")], learning: "", points: []),
@@ -87,9 +111,10 @@ import SwiftData
             Blueprint(daysAgo: 15, hour: 10, title: "Code review backlog", label: "Admin & email", tags: ["review"],
                       segments: [("PR #12", 30, nil), ("PR #15", 25, nil)], pauseAfterMinutes: nil, pauseMinutes: 0,
                       notes: [], learning: "", points: [("Smaller PRs get reviewed faster", ["review"], 2)]),
-            Blueprint(daysAgo: 17, hour: 9, title: "Quarterly goals", label: "Planning", tags: ["writing"],
+            Blueprint(daysAgo: 17, hour: 9, title: "Family budget", label: "Planning", tags: ["family"],
                       segments: [("Draft", 60, nil), ("Refine", 30, nil)], pauseAfterMinutes: 50, pauseMinutes: 10,
-                      notes: [(20, "Keep it to three goals.")], learning: "Fewer goals, clearer focus.", points: []),
+                      notes: [(20, "Keep it to three categories.")], learning: "Fewer categories, clearer picture.",
+                      points: [], personal: true),
             Blueprint(daysAgo: 20, hour: 22, title: "Late-night bug hunt", label: "Deep work", tags: ["coding"],
                       segments: [("Repro", 70, nil), ("Fix", 80, nil)], pauseAfterMinutes: 100, pauseMinutes: 10,
                       notes: [(30, "Crash only happens across midnight."), (140, "Fixed: clip to day intervals.")],
@@ -104,6 +129,7 @@ import SwiftData
                   let start = calendar.date(byAdding: .hour, value: bp.hour, to: day) else { continue }
             let session = WorkSession(startedAt: start, title: bp.title)
             context.insert(session)
+            session.profile = bp.personal ? personal : work
             session.label = label(bp.label)
             session.tagList = bp.tags.compactMap { anyTag($0) }
 

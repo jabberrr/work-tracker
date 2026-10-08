@@ -5,10 +5,13 @@ import SwiftUI
 ///
 /// Left: search + "All" / "Untagged" / tags with counts. Right: the selected tag's points per week (+ average
 /// mastery), then a chronological timeline grouped by month or week, each point linking to its session.
+///
+/// Scoped to the current profile: only points and reflections of its sessions (tag rows derive from those).
 @MainActor
 struct LearningView: View {
     @Environment(\.theme) private var theme
     @Environment(AppSettings.self) private var settings
+    @Environment(ProfileStore.self) private var profileStore
 
     @Query(sort: \LearningPoint.createdAt, order: .reverse) private var points: [LearningPoint]
     /// Sessions with free-text learnings (shown under "All" when the session has no learning points).
@@ -26,9 +29,12 @@ struct LearningView: View {
     init() {}
 
     var body: some View {
-        let index = LearningPageIndex(points: points, reflectionSessions: reflectionSessions, query: appliedQuery)
+        let scope = profileStore.activeScope
+        let scopedPoints = points.filter { scope.contains($0) }
+        let scopedReflections = scope.filter(reflectionSessions)
+        let index = LearningPageIndex(points: scopedPoints, reflectionSessions: scopedReflections, query: appliedQuery)
         Group {
-            if index.totalPointCount == 0 && reflectionSessions.allSatisfy({ $0.learningText.isBlank }) {
+            if index.totalPointCount == 0 && scopedReflections.allSatisfy({ $0.learningText.isBlank }) {
                 LearningPageEmptyState()
             } else {
                 HStack(spacing: 0) {
@@ -41,6 +47,10 @@ struct LearningView: View {
             }
         }
         .themedBackground()
+        .onChange(of: profileStore.activeProfileID) {
+            // A tag of the previous profile may have nothing here.
+            selection = .all
+        }
         .task(id: searchText) {
             // Debounce typing.
             if searchText.isEmpty {

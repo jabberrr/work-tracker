@@ -8,11 +8,16 @@ import SwiftData
 /// Time edits go through `SessionEditor` (which touches, recomputes, normalizes and saves); direct field
 /// edits (title, tags, captions, segment label/tags/focus) touch the session and save on commit/disappear.
 /// Works for the active session too, except that start/end times and deletion are locked while it runs.
+///
+/// Profiles: every label/tag picker here offers the session's own profile's items. With 2+ profiles a Profile
+/// picker moves the session (`SessionEditor.moveSession`, asking first when labels or tags would be copied);
+/// a session moved out of the current profile leaves History and the selection clears.
 @MainActor
 struct SessionDetailView: View {
     @Environment(\.theme) private var theme
     @Environment(\.modelContext) private var environmentContext
     @Environment(WindowRouter.self) private var router: WindowRouter?
+    @Environment(ProfileStore.self) private var profiles: ProfileStore?
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     @Bindable private var session: WorkSession
@@ -21,6 +26,7 @@ struct SessionDetailView: View {
     @State private var isEditingTimes = false
     @State private var confirmDelete = false
     @State private var errorMessage: String?
+    @State private var pendingMove: LiveProfileMove.Request?
     @FocusState private var titleFocused: Bool
 
     init(session: WorkSession) {
@@ -83,6 +89,16 @@ struct SessionDetailView: View {
         } message: {
             Text("This can’t be undone.")
         }
+        .confirmationDialog(pendingMove?.title ?? "",
+                            isPresented: Binding(get: { pendingMove != nil },
+                                                 set: { if !$0 { pendingMove = nil } }),
+                            titleVisibility: .visible,
+                            presenting: pendingMove) { request in
+            Button("Move") { confirmMove(request) }
+            Button("Cancel", role: .cancel) { pendingMove = nil }
+        } message: { request in
+            Text(request.message)
+        }
         .alert("Couldn’t change the session",
                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
@@ -118,13 +134,20 @@ struct SessionDetailView: View {
 
             metaLine
 
+            if profiles?.hasMultipleProfiles == true {
+                // Constant cap, like the label picker, so a long profile name can't widen the column.
+                ProfilePicker(selection: profileBinding, title: "Profile")
+                    .frame(minWidth: 0, maxWidth: 260, alignment: .leading)
+                    .help("Profile")
+            }
+
             HStack(alignment: .center, spacing: theme.spacingM) {
                 // Constant cap instead of `.fixedSize()`, so a long label name can't widen the column.
-                LabelPicker(selection: labelBinding, includeNone: true, title: "Label")
+                LabelPicker(selection: labelBinding, includeNone: true, title: "Label", profileID: sessionProfileID)
                     .labelsHidden()
                     .frame(minWidth: 0, maxWidth: 220, alignment: .leading)
                     .help("Label")
-                TagPicker(selection: $session.tagList, scopeLabel: session.label)
+                TagPicker(selection: $session.tagList, scopeLabel: session.label, profileID: sessionProfileID)
                     .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             }
 
@@ -247,6 +270,47 @@ struct SessionDetailView: View {
                 SessionEditor.setPrimaryLabel(newValue, for: session, in: context)
             }
         )
+    }
+
+    /// The session's own profile (labels and tags offered here); nil while unassigned (all are offered).
+    private var sessionProfileID: UUID? {
+        isAlive ? ModelLiveness.live(session.profile)?.uuid : nil
+    }
+
+    /// Picking another profile moves the session there (after a confirmation when labels or tags are copied).
+    private var profileBinding: Binding<UUID?> {
+        Binding(
+            get: { sessionProfileID },
+            set: { newValue in
+                guard isAlive, let id = newValue, id != sessionProfileID,
+                      let target = ModelLiveness.live(profiles?.profile(withID: id)) else { return }
+                save()
+                switch LiveProfileMove.begin(moving: session, to: target, in: context) {
+                case .moved:
+                    didMove(to: id)
+                case .needsConfirmation(let request):
+                    pendingMove = request
+                case .unchanged:
+                    break
+                }
+            }
+        )
+    }
+
+    private func confirmMove(_ request: LiveProfileMove.Request) {
+        pendingMove = nil
+        guard let profiles, isAlive else { return }
+        if LiveProfileMove.perform(request, moving: session, profiles: profiles, in: context) {
+            didMove(to: request.id)
+        }
+    }
+
+    /// A session moved out of the current profile is no longer in History: clear the selection so this view
+    /// unmounts (History would clear it on its next refresh anyway).
+    private func didMove(to profileID: UUID) {
+        guard let router, profileID != profiles?.activeProfileID,
+              router.selectedSessionID == session.persistentModelID else { return }
+        router.selectedSessionID = nil
     }
 
     // MARK: - Actions

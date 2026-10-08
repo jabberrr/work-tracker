@@ -17,10 +17,11 @@ struct OverlayLayoutEditor: View {
     @Environment(AppSettings.self) private var settings
     @Environment(SessionEngine.self) private var engine
     @Environment(WindowRouter.self) private var router
+    @Environment(ProfileStore.self) private var profiles
     @Environment(\.modelContext) private var modelContext
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
-    /// The sample's label is the default label (no fetch in `body`).
+    /// The sample's label is the quick start profile's default label (no fetch in `body`).
     @Query(sort: \WorkLabel.sortIndex) private var labels: [WorkLabel]
 
     @State private var isEditing = false
@@ -130,10 +131,15 @@ struct OverlayLayoutEditor: View {
         )
     }
 
+    /// Sample timer values, with the profile the real overlay starts in (the quick start profile, which is the
+    /// current profile unless Settings ▸ Profiles names another): its default label, takeaway and header tag.
     private var previewData: OverlayDisplayData {
-        let label = LiveStartChoice.defaultLabel(in: labels, settings: settings)
+        let profile = profiles.quickStartProfile
+        let label = LiveStartChoice.defaultLabel(in: labels, profile: profile, settings: settings)
         let status: OverlayDisplayData.Status = (isEditing || previewStatus == .running) ? .running : .idle
-        return .sample(status: status, label: label, takeaway: engine.lastTakeaway)
+        let fields = OverlayDisplayData.profileFields(profile, showsProfile: profiles.hasMultipleProfiles)
+        return .sample(status: status, label: label, takeaway: engine.takeaway(for: profiles.quickStartProfileID),
+                       profileName: fields.name, profileColorHex: fields.colorHex)
     }
 
     /// The element as it looks on the panel, unrotated, for the drag image. Environment passed explicitly in
@@ -149,6 +155,7 @@ struct OverlayLayoutEditor: View {
             .environment(\.theme, theme)
             .environment(engine)
             .environment(router)
+            .environment(profiles)
             .environment(\.modelContext, modelContext)
     }
 

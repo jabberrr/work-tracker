@@ -108,6 +108,13 @@ struct StatsTagInfo: Hashable, Sendable {
     let colorHex: String
 }
 
+struct StatsProfileInfo: Hashable, Sendable {
+    let uuid: UUID
+    let name: String
+    let colorHex: String
+    let sortIndex: Int
+}
+
 struct StatsSegmentSnapshot: Sendable {
     let start: Date
     /// Already resolved: segment end, else session end, else the snapshot time.
@@ -127,6 +134,8 @@ struct StatsSessionSnapshot: Sendable {
     let segments: [StatsSegmentSnapshot]
     /// Session tags ∪ segment tags.
     let allTagIDs: [UUID]
+    /// The session's (live) profile; nil = unassigned.
+    let profileID: UUID?
 }
 
 struct StatsSnapshot: Sendable {
@@ -134,8 +143,9 @@ struct StatsSnapshot: Sendable {
     let sessions: [StatsSessionSnapshot]
     let labels: [UUID: StatsLabelInfo]
     let tags: [UUID: StatsTagInfo]
+    let profiles: [UUID: StatsProfileInfo]
 
-    static let empty = StatsSnapshot(takenAt: .now, sessions: [], labels: [:], tags: [:])
+    static let empty = StatsSnapshot(takenAt: .now, sessions: [], labels: [:], tags: [:], profiles: [:])
 
     /// Copies everything the calculator needs out of the models. Main actor (touches SwiftData objects); linear in
     /// sessions + segments, no fetching.
@@ -143,6 +153,7 @@ struct StatsSnapshot: Sendable {
     static func make(from sessions: [WorkSession], now: Date = .now) -> StatsSnapshot {
         var labels: [UUID: StatsLabelInfo] = [:]
         var tags: [UUID: StatsTagInfo] = [:]
+        var profiles: [UUID: StatsProfileInfo] = [:]
         var result: [StatsSessionSnapshot] = []
         result.reserveCapacity(sessions.count)
 
@@ -164,6 +175,14 @@ struct StatsSnapshot: Sendable {
                 ids.append(tag.uuid)
             }
             return ids
+        }
+        func registerProfile(_ profile: WorkProfile?) -> UUID? {
+            guard let profile = ModelLiveness.live(profile) else { return nil }
+            if profiles[profile.uuid] == nil {
+                profiles[profile.uuid] = StatsProfileInfo(uuid: profile.uuid, name: profile.displayName,
+                                                          colorHex: profile.colorHex, sortIndex: profile.sortIndex)
+            }
+            return profile.uuid
         }
 
         for session in sessions where !session.isDeleted {
@@ -194,10 +213,11 @@ struct StatsSnapshot: Sendable {
                 pauses: session.pauseIntervals,
                 activeDuration: session.activeDuration(at: now),
                 segments: segments,
-                allTagIDs: allTagIDs
+                allTagIDs: allTagIDs,
+                profileID: registerProfile(session.profile)
             ))
         }
-        return StatsSnapshot(takenAt: now, sessions: result, labels: labels, tags: tags)
+        return StatsSnapshot(takenAt: now, sessions: result, labels: labels, tags: tags, profiles: profiles)
     }
 }
 
@@ -243,6 +263,20 @@ struct StatsTagValue: Identifiable, Hashable, Sendable {
     var id: UUID { tagID }
 }
 
+/// Active time of one profile in the window ("By profile"). `profileID == nil` → sessions without a profile.
+struct StatsProfileValue: Identifiable, Hashable, Sendable {
+    let profileID: UUID?
+    /// Unique display name (used as the chart category).
+    let name: String
+    /// nil → no profile (theme color).
+    let colorHex: String?
+    let seconds: TimeInterval
+    let fraction: Double
+    /// Sessions started in range in this profile.
+    let sessionCount: Int
+    var id: String { profileID?.uuidString ?? StatsCalculator.unassignedProfileKey }
+}
+
 struct StatsHeatCell: Identifiable, Hashable, Sendable {
     /// 0…6 in display order (Monday-first or Sunday-first).
     let row: Int
@@ -283,6 +317,8 @@ struct StatsResult: Sendable {
     let heatCells: [StatsHeatCell]
     let heatMax: TimeInterval
     let weekdayNames: [String]
+    /// Time per profile, largest first. Empty unless at least two profiles have time in the window.
+    let profileTotals: [StatsProfileValue]
 
     var isEmpty: Bool { sessionCount == 0 && totalActive < 1 }
 
@@ -303,6 +339,8 @@ enum StatsCalculator {
     static let activeDayThreshold: TimeInterval = 60
     static let unlabeledKey = "unlabeled"
     static let unlabeledName = "Unlabeled"
+    static let unassignedProfileKey = "no-profile"
+    static let unassignedProfileName = "No profile"
     static let maxTagCount = 10
 
     /// Longest window (in days) still drawn with daily bars; longer windows use weeks.
@@ -376,6 +414,8 @@ enum StatsCalculator {
         var tagSeconds: [UUID: TimeInterval] = [:]
         var tagSessions: [UUID: Int] = [:]
         var labelSessions: [String: Int] = [:]
+        var profileSeconds: [UUID?: TimeInterval] = [:]
+        var profileSessions: [UUID?: Int] = [:]
         var heat = Array(repeating: Array(repeating: TimeInterval(0), count: 24), count: 7)
 
         var sessionCount = 0
@@ -389,6 +429,7 @@ enum StatsCalculator {
                 longest = max(longest, session.activeDuration)
                 for tagID in session.allTagIDs { tagSessions[tagID, default: 0] += 1 }
                 labelSessions[session.labelID?.uuidString ?? unlabeledKey, default: 0] += 1
+                profileSessions[session.profileID, default: 0] += 1
             }
 
             for segment in session.segments where segment.end > segment.start {
@@ -409,6 +450,7 @@ enum StatsCalculator {
                             let key = bucketStart(forDay: dayStart)
                             bucketSeries[key, default: [:]][seriesKey, default: 0] += active
                             seriesTotals[seriesKey, default: 0] += active
+                            profileSeconds[session.profileID, default: 0] += active
                             for tagID in segment.tagIDs { tagSeconds[tagID, default: 0] += active }
                             addHeat(piece: piece, pauses: session.pauses, now: now, calendar: calendar,
                                     rowForWeekday: rowForWeekday, into: &heat)
@@ -505,6 +547,10 @@ enum StatsCalculator {
                           colorHex: value.colorHex, seconds: value.seconds, sessionCount: value.sessionCount)
         }
 
+        // Profiles: only meaningful with two or more in the window.
+        let profileTotals = makeProfileTotals(seconds: profileSeconds, sessions: profileSessions,
+                                              profiles: snapshot.profiles)
+
         // Heatmap cells.
         var cells: [StatsHeatCell] = []
         cells.reserveCapacity(7 * 24)
@@ -541,8 +587,43 @@ enum StatsCalculator {
             tags: tags,
             heatCells: cells,
             heatMax: heatMax,
-            weekdayNames: weekdayNames
+            weekdayNames: weekdayNames,
+            profileTotals: profileTotals
         )
+    }
+
+    /// "By profile" values, largest first (ties by profile order, then name); [] with fewer than two profiles.
+    private static func makeProfileTotals(seconds: [UUID?: TimeInterval], sessions: [UUID?: Int],
+                                          profiles: [UUID: StatsProfileInfo]) -> [StatsProfileValue] {
+        let keys = seconds.filter { $0.value > 0 }.map(\.key)
+        guard keys.count >= 2 else { return [] }
+        let total = keys.reduce(TimeInterval(0)) { $0 + (seconds[$1] ?? 0) }
+        let ordered = keys.sorted { a, b in
+            let sa = seconds[a] ?? 0
+            let sb = seconds[b] ?? 0
+            if sa != sb { return sa > sb }
+            let ia = a.flatMap { profiles[$0] }
+            let ib = b.flatMap { profiles[$0] }
+            switch (ia, ib) {
+            case let (x?, y?):
+                if x.sortIndex != y.sortIndex { return x.sortIndex < y.sortIndex }
+                return x.name.localizedCaseInsensitiveCompare(y.name) == .orderedAscending
+            case (.some, .none): return true
+            case (.none, .some): return false
+            case (.none, .none): return false
+            }
+        }
+        var usedNames = Set<String>()
+        return ordered.map { key in
+            let info = key.flatMap { profiles[$0] }
+            let value = seconds[key] ?? 0
+            return StatsProfileValue(profileID: key,
+                                     name: uniqueName(info?.name ?? unassignedProfileName, used: &usedNames),
+                                     colorHex: info?.colorHex,
+                                     seconds: value,
+                                     fraction: total > 0 ? value / total : 0,
+                                     sessionCount: sessions[key] ?? 0)
+        }
     }
 
     // MARK: Helpers

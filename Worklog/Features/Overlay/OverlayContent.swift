@@ -1,4 +1,5 @@
 import AppKit
+import SwiftData
 import SwiftUI
 
 // The floating overlay's renderer, shared by the live panel (`OverlayView`) and the layout editor in
@@ -36,13 +37,25 @@ struct OverlayDisplayData {
     var startLabel: WorkLabel?
     var hasPendingReview: Bool
     var isOnAnotherMac: Bool
+    /// The panel profile (running session's profile, else the quick start profile), shown subtly in the header.
+    /// Both nil with only one profile.
+    var profileName: String? = nil
+    var profileColorHex: String? = nil
 
     var isActive: Bool { status != .idle }
     var isPaused: Bool { status == .paused }
 
+    /// Header profile fields for `profile`: nil unless `showsProfile` (2 or more profiles) and it is live.
+    @MainActor
+    static func profileFields(_ profile: WorkProfile?, showsProfile: Bool) -> (name: String?, colorHex: String?) {
+        guard showsProfile, let profile = ModelLiveness.live(profile) else { return (nil, nil) }
+        return (profile.displayName, profile.colorHex)
+    }
+
     /// Preview data: 1:12:40 elapsed, segment 24:10, focus "Refactor parser", today 2h 15m.
     /// `takeaway` nil uses a sample takeaway, so the preview always shows that element.
-    static func sample(status: Status, label: WorkLabel?, takeaway: SessionTakeaway?) -> OverlayDisplayData {
+    static func sample(status: Status, label: WorkLabel?, takeaway: SessionTakeaway?,
+                       profileName: String? = nil, profileColorHex: String? = nil) -> OverlayDisplayData {
         OverlayDisplayData(
             status: status,
             label: status == .idle ? nil : label,
@@ -53,7 +66,9 @@ struct OverlayDisplayData {
             takeaway: takeaway ?? sampleTakeaway,
             startLabel: label,
             hasPendingReview: false,
-            isOnAnotherMac: false
+            isOnAnotherMac: false,
+            profileName: profileName,
+            profileColorHex: profileColorHex
         )
     }
 
@@ -168,6 +183,11 @@ struct OverlayContent<ElementChrome: View>: View {
                 inlineRun(run)
             }
 
+            if let name = data.profileName {
+                profileTag(name)
+                    .opacity(panelOpacity)
+            }
+
             closeButton
                 .opacity(panelOpacity)
         }
@@ -184,6 +204,28 @@ struct OverlayContent<ElementChrome: View>: View {
                 .font(isCompact ? theme.calloutFont.weight(.medium) : theme.headlineFont)
                 .foregroundStyle(theme.textPrimary)
         }
+    }
+
+    /// Subtle: a 6 pt dot in the profile color and the name (caption, tertiary), truncating.
+    private func profileTag(_ name: String) -> some View {
+        HStack(spacing: 4) {
+            Circle()
+                .fill(data.profileColorHex.map { Color(hex: $0) } ?? theme.textTertiary)
+                .frame(width: 6, height: 6)
+                .accessibilityHidden(true)
+            Text(name)
+                .font(theme.captionFont)
+                .foregroundStyle(theme.textTertiary)
+                .lineLimit(1)
+                .truncationMode(.tail)
+        }
+        // Ideal width, capped: long names truncate instead of crowding the header.
+        .frame(maxWidth: isCompact ? 64 : 96, alignment: .trailing)
+        .fixedSize()
+        .help(name)
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Profile")
+        .accessibilityValue(name)
     }
 
     private var closeButton: some View {

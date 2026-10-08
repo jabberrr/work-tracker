@@ -5,13 +5,20 @@ import SwiftUI
 struct SymbolPicker: View {
     @Environment(\.theme) private var theme
     @Binding private var symbolName: String
+    private let palette: [String]
 
     init(symbolName: Binding<String>) {
         self._symbolName = symbolName
+        self.palette = LabelPalette.symbols
+    }
+
+    /// (Extra, round 3) A custom symbol list, e.g. `LabelPalette.profileSymbolChoices` for profiles.
+    init(symbolName: Binding<String>, symbols: [String]) {
+        self._symbolName = symbolName
+        self.palette = symbols
     }
 
     private var symbols: [String] {
-        let palette = LabelPalette.symbols
         if symbolName.isEmpty || palette.contains(symbolName) { return palette }
         return [symbolName] + palette
     }

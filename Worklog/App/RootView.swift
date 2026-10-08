@@ -9,6 +9,7 @@ struct RootView: View {
     @Environment(AuthService.self) private var auth
     @Environment(WindowRouter.self) private var router
     @Environment(SessionEngine.self) private var engine
+    @Environment(ProfileStore.self) private var profiles
     @Environment(PersistenceController.self) private var persistence
     @Environment(AppSettings.self) private var settings
     @Environment(SyncMonitor.self) private var sync
@@ -160,6 +161,7 @@ struct RootView: View {
         }
         .listStyle(.sidebar)
         // Pinned to the bottom of the sidebar column (not a VStack sibling), so it can't be pushed off-screen.
+        // Order: mini status row (while active) → profile switcher (always: it's where profiles are created) → footer.
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if engine.isActive {
@@ -167,6 +169,10 @@ struct RootView: View {
                         .padding(.horizontal, theme.spacingS)
                         .padding(.vertical, theme.spacingS)
                 }
+                Divider()
+                ProfileSwitcher()
+                    .padding(.horizontal, theme.spacingS)
+                    .padding(.vertical, theme.spacingXS)
                 Divider()
                 sidebarFooter
                     .padding(.horizontal, theme.spacingM)
@@ -196,6 +202,10 @@ struct RootView: View {
                         .help("Running on another Mac")
                         .accessibilityLabel("Running on another Mac")
                 }
+                if showsSessionProfile {
+                    ProfileBadge(profile: engine.activeSessionProfile, size: .small)
+                        .layoutPriority(-1)
+                }
                 LabelBadge(label: engine.currentLabel, size: .small)
             }
             .padding(.horizontal, theme.spacingS)
@@ -210,6 +220,12 @@ struct RootView: View {
         .help("Show session")
         .accessibilityLabel(engine.isPaused ? "Session paused" : "Session running")
         .accessibilityHint("Shows Today.")
+    }
+
+    /// The running session belongs to another profile than the current one (only with 2+ profiles).
+    private var showsSessionProfile: Bool {
+        guard profiles.hasMultipleProfiles, let sessionProfileID = engine.activeSessionProfileID else { return false }
+        return sessionProfileID != profiles.activeProfileID
     }
 
     @ViewBuilder

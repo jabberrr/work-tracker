@@ -19,6 +19,10 @@
 			isa = PBXBuildFile;
 			fileRef = 15E3BEE04DD0F34407F870DC;
 		};
+		08A946C004DCF44AA3FCC601 = {
+			isa = PBXBuildFile;
+			fileRef = BB3740FCB85531BCC2A56861;
+		};
 		0D682EAFA6962D23B7A5C426 = {
 			isa = PBXBuildFile;
 			fileRef = A7D653AE081D84B2400DFAE1;
@@ -103,6 +107,10 @@
 			isa = PBXBuildFile;
 			fileRef = 24DABBE3AE1EDB2AA7CA3DC0;
 		};
+		2CB3F83F56B9FC2AB89D25EF = {
+			isa = PBXBuildFile;
+			fileRef = E5AC06B00F7945E5616898DA;
+		};
 		2CC06D38576F8A7CFD7BA849 = {
 			isa = PBXBuildFile;
 			fileRef = 9BAD66802D6F49034C74A41C;
@@ -130,6 +138,10 @@
 		3509506D75AD7DA367F4E924 = {
 			isa = PBXBuildFile;
 			fileRef = 8A07A151C187DB60793171CE;
+		};
+		3D186EB705C59193098ED206 = {
+			isa = PBXBuildFile;
+			fileRef = B737B9845B291C99728EDAD7;
 		};
 		3D642B7BC890A75C991AFD6F = {
 			isa = PBXBuildFile;
@@ -275,6 +287,10 @@
 			isa = PBXBuildFile;
 			fileRef = 2F8B0594F582BF3F13002F9A;
 		};
+		89B380C136294364FD47757E = {
+			isa = PBXBuildFile;
+			fileRef = 26C61219014BA12AB30325B8;
+		};
 		8F692AC4967228D17D0A0B0E = {
 			isa = PBXBuildFile;
 			fileRef = 7B57B10FB0295A1FAA764F5A;
@@ -351,6 +367,10 @@
 			isa = PBXBuildFile;
 			fileRef = 2D721BC20164D6A4B718B335;
 		};
+		AEF070A4E2816740F698F918 = {
+			isa = PBXBuildFile;
+			fileRef = 18B5381317C5BEE23C0AE8F7;
+		};
 		B1B649D3A54189F056BBF85D = {
 			isa = PBXBuildFile;
 			fileRef = 8E1BC4BE6E753DFEEC2AE03E;
@@ -366,6 +386,10 @@
 		B83C5FFF2D416450BE611BD1 = {
 			isa = PBXBuildFile;
 			fileRef = 94841E4A7E50BAEC3450194C;
+		};
+		B87C3EE35DAEB56268C713BF = {
+			isa = PBXBuildFile;
+			fileRef = 89654D79238DAEA556E6B85B;
 		};
 		BA9881B6CF298B5269F08034 = {
 			isa = PBXBuildFile;
@@ -386,6 +410,10 @@
 		C2D90128381B0284408CC4A0 = {
 			isa = PBXBuildFile;
 			fileRef = FA35B815F057E0CF11F8696F;
+		};
+		C4B38500D9ACEE9A92D2282C = {
+			isa = PBXBuildFile;
+			fileRef = 410219524203CB273BEFDD21;
 		};
 		C5B89BC447E15804B4E525C5 = {
 			isa = PBXBuildFile;
@@ -443,9 +471,17 @@
 			isa = PBXBuildFile;
 			fileRef = 90D660727D7ADB698102A485;
 		};
+		EAFB8B3290F0663C4960AD84 = {
+			isa = PBXBuildFile;
+			fileRef = B75CC818C07BC4D3318D28FC;
+		};
 		EAFFF73BF8AA582EFED6E130 = {
 			isa = PBXBuildFile;
 			fileRef = 747469ADD3AB476F9EFA074F;
+		};
+		EB44934A92CBDC2593B2C700 = {
+			isa = PBXBuildFile;
+			fileRef = 0EFA4F4808E198D443B9F1AB;
 		};
 		EDE3872FA98789884AA381E5 = {
 			isa = PBXBuildFile;
@@ -544,6 +580,12 @@
 			path = Formatting.swift;
 			sourceTree = "<group>";
 		};
+		0EFA4F4808E198D443B9F1AB = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ProfileCreateSheet.swift;
+			sourceTree = "<group>";
+		};
 		14A0FDF1C1188C190D42B537 = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
@@ -554,6 +596,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = EmptyStateView.swift;
+			sourceTree = "<group>";
+		};
+		18B5381317C5BEE23C0AE8F7 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ProfileOps.swift;
 			sourceTree = "<group>";
 		};
 		1CBF6F4772EA067183744442 = {
@@ -578,6 +626,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = DetailAttachmentsSection.swift;
+			sourceTree = "<group>";
+		};
+		26C61219014BA12AB30325B8 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = SettingsProfilesTab.swift;
 			sourceTree = "<group>";
 		};
 		2771DB10745510DD11A53DA4 = {
@@ -650,6 +704,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = SettingsTagsPane.swift;
+			sourceTree = "<group>";
+		};
+		410219524203CB273BEFDD21 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = WorkProfile.swift;
 			sourceTree = "<group>";
 		};
 		491ADA26F3316FDD919003FF = {
@@ -851,6 +911,12 @@
 			path = AuthService.swift;
 			sourceTree = "<group>";
 		};
+		89654D79238DAEA556E6B85B = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ProfileStore.swift;
+			sourceTree = "<group>";
+		};
 		898313FD4806FDB9F25136E8 = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
@@ -1013,10 +1079,28 @@
 			path = LabelColorPicker.swift;
 			sourceTree = "<group>";
 		};
+		B737B9845B291C99728EDAD7 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ProfileTests.swift;
+			sourceTree = "<group>";
+		};
+		B75CC818C07BC4D3318D28FC = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ProfilePicker.swift;
+			sourceTree = "<group>";
+		};
 		B963C43735ACB0E83D4547B4 = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = SessionDetailView.swift;
+			sourceTree = "<group>";
+		};
+		BB3740FCB85531BCC2A56861 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ProfileSwitcher.swift;
 			sourceTree = "<group>";
 		};
 		BBD694351C56140020B322B2 = {
@@ -1140,6 +1224,12 @@
 			path = OverlayLayoutEditor.swift;
 			sourceTree = "<group>";
 		};
+		E5AC06B00F7945E5616898DA = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = ProfileBadge.swift;
+			sourceTree = "<group>";
+		};
 		E5B04F7385E5D8C368C67569 = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
@@ -1260,6 +1350,8 @@
 				A8300780A95A25C3B9CD26CE,
 				E4353DB692E4BB1E48BC2879,
 				CCE560F646AB525C347CDA9E,
+				18B5381317C5BEE23C0AE8F7,
+				89654D79238DAEA556E6B85B,
 				5F3EDAA0811A014174B32D02,
 				8A13BF582982BA121933FD95,
 				A9A5A341C705E447FC0FE2B0,
@@ -1362,6 +1454,7 @@
 				70FB65231A246CD726062448,
 				305E698306A46939138A2BAA,
 				2D721BC20164D6A4B718B335,
+				26C61219014BA12AB30325B8,
 				C93DCAE6D3B907506E372E61,
 				77A2B4F44D272048CB6D1421,
 				3D9979F589DF893DB8BC2C81,
@@ -1378,6 +1471,10 @@
 				09EC2087BD9FA549DF994894,
 				ECA0E9473DB2B9DB06E54364,
 				E5B04F7385E5D8C368C67569,
+				E5AC06B00F7945E5616898DA,
+				0EFA4F4808E198D443B9F1AB,
+				B75CC818C07BC4D3318D28FC,
+				BB3740FCB85531BCC2A56861,
 				6B4EB14AF993A8A9D318100B,
 				B4397333DDC3C15AD237CB1A,
 				58B82BE736C232D54B133DB0,
@@ -1435,6 +1532,7 @@
 				9B0409CFD8868D2D78357561,
 				5327E5289672553ED4FEDFBC,
 				014DF8DD5B4F1F5123EF9988,
+				B737B9845B291C99728EDAD7,
 				9EF131408202AC171E68904A,
 				9E9C480630C17BE835576D40,
 				C5014AB9671E080FD5E3BA24,
@@ -1460,6 +1558,7 @@
 				8A07A151C187DB60793171CE,
 				9CF1FD0D73BBEEB8736B61B4,
 				32F240F6320441CFE58134E1,
+				410219524203CB273BEFDD21,
 				0D7CE01109B1568C06399987,
 				548C4DAD9ABB00BB62FFCF52,
 				90D660727D7ADB698102A485,
@@ -1705,6 +1804,7 @@
 				1197839B7D1F70C4119A1C99,
 				826DF7DE0F15836BFB5646B6,
 				ADD8137A62259E6900BF87BC,
+				89B380C136294364FD47757E,
 				BA9881B6CF298B5269F08034,
 				9A9639592FC4E78FCE90CFF1,
 				E396C459AFACC64F81C16960,
@@ -1720,6 +1820,7 @@
 				3509506D75AD7DA367F4E924,
 				B6E2D128A469A1F6B96DF326,
 				3099CCE93C43F099E75E40FC,
+				C4B38500D9ACEE9A92D2282C,
 				28A4E05C075C360049C20E59,
 				18F73433741014DB4D8F6E88,
 				E8B46E149D47880C6FAEAD5D,
@@ -1735,6 +1836,8 @@
 				15E2C19ED5714F62AE44107D,
 				CB861C64D1097DC7195AD798,
 				C5B89BC447E15804B4E525C5,
+				AEF070A4E2816740F698F918,
+				B87C3EE35DAEB56268C713BF,
 				0D97C71E58E2BDD7F7989F68,
 				8658F28F8A7C5129BDAE2222,
 				61D84DD9F44227FE5F86F275,
@@ -1745,6 +1848,10 @@
 				82B36A5241DA542B79FC2C94,
 				A354D3592EC43C66719CD6C2,
 				82A41913E9B1BDD87346557D,
+				2CB3F83F56B9FC2AB89D25EF,
+				EB44934A92CBDC2593B2C700,
+				EAFB8B3290F0663C4960AD84,
+				08A946C004DCF44AA3FCC601,
 				9645D5DB940FF9C7B3F81E63,
 				BD75C236EBBD8416713D49EF,
 				A2A811B432E129C243435AFE,
@@ -1760,6 +1867,7 @@
 				79AE83D492AFC9A48B88462C,
 				D538B806D55D31B98BFC8DF8,
 				62E3A25EA6C7DF10C5597AD7,
+				3D186EB705C59193098ED206,
 				0EC6185EAAA109F601A1FB10,
 				31BB7DB4599D377C2B2628A9,
 				147C88E2248D2B08E385916C,

@@ -2,8 +2,10 @@ import SwiftUI
 import SwiftData
 import AppKit
 
-/// Menu-style picker of non-archived labels (sorted by sortIndex) with color dot + symbol; optional "None".
-/// Shows the current selection even if archived.
+/// Menu-style picker of the non-archived labels offered in a profile (global + local to `profileID`, by sortIndex)
+/// with color dot + symbol; optional "None". `profileID == nil` offers every label (no profile scope).
+/// Shows the current selection even when it is archived ("Name (archived)") or not offered in the profile
+/// ("Name (Personal)"); other profiles' local labels are never offered otherwise.
 ///
 /// A selection that was deleted (or merged away) while the caller still holds it is treated as nil:
 /// it is never read, never offered, and nil is written back to the binding (on appear and whenever
@@ -17,11 +19,13 @@ struct LabelPicker: View {
     @Binding private var selection: WorkLabel?
     private let includeNone: Bool
     private let title: String
+    private let profileID: UUID?
 
-    init(selection: Binding<WorkLabel?>, includeNone: Bool = true, title: String = "Label") {
+    init(selection: Binding<WorkLabel?>, includeNone: Bool = true, title: String = "Label", profileID: UUID?) {
         self._selection = selection
         self.includeNone = includeNone
         self.title = title
+        self.profileID = profileID
     }
 
     /// The selection when it still exists; nil when it was deleted.
@@ -30,9 +34,10 @@ struct LabelPicker: View {
     /// Live labels (the query can briefly include deleted-but-unsaved ones).
     private var liveLabels: [WorkLabel] { ModelLiveness.live(allLabels) }
 
-    /// Active labels, plus the current selection when it is archived (so the button can display it).
-    private var options: [WorkLabel] {
-        var list = liveLabels.filter { !$0.isArchived }
+    /// Offered active labels, plus the current selection when it is archived or not offered (so the button can
+    /// display it).
+    private func options(in scope: ProfileScope) -> [WorkLabel] {
+        var list = liveLabels.filter { !$0.isArchived && scope.offers($0) }
         if let current = liveSelection,
            !list.contains(where: { $0.persistentModelID == current.persistentModelID }) {
             list.append(current)
@@ -49,7 +54,8 @@ struct LabelPicker: View {
     }
 
     var body: some View {
-        let items = options
+        let scope = ProfileScope(profileID: profileID)
+        let items = options(in: scope)
         let current = liveSelection
         Picker(selection: safeSelection) {
             if includeNone || current == nil {
@@ -61,7 +67,7 @@ struct LabelPicker: View {
             }
             ForEach(items) { label in
                 Label {
-                    Text(label.isArchived ? "\(label.name) (archived)" : label.name)
+                    Text(ScopedItemTitle.title(for: label, in: scope))
                 } icon: {
                     Image(nsImage: LabelMenuIcon.image(symbol: label.symbolName, hex: label.colorHex))
                         .renderingMode(.original)
@@ -89,24 +95,27 @@ struct LabelPicker: View {
 }
 
 /// Settings-style label picker: "Default label **Work** ⌄" (a `ValuePicker`: value bold in the accent color,
-/// popover list). Same options as `LabelPicker`: "None", then non-archived labels in sortIndex order, plus the
-/// current selection when it is archived. A selection that was deleted reads as "None" and nil is written back.
+/// popover list). Same options as `LabelPicker`: "None", then the non-archived labels offered in `profileID`
+/// (global + local; nil = every label) in sortIndex order, plus the current selection when it is archived or
+/// not offered. A selection that was deleted reads as "None" and nil is written back.
 @MainActor
 struct LabelValuePicker: View {
     @Query(sort: \WorkLabel.sortIndex) private var allLabels: [WorkLabel]
     @Binding private var selection: WorkLabel?
     private let prefix: String
+    private let profileID: UUID?
 
-    init(_ prefix: String, selection: Binding<WorkLabel?>) {
+    init(_ prefix: String, selection: Binding<WorkLabel?>, profileID: UUID?) {
         self.prefix = prefix
         self._selection = selection
+        self.profileID = profileID
     }
 
     private var liveLabels: [WorkLabel] { ModelLiveness.live(allLabels) }
 
-    /// Active labels, plus the current selection when it is archived.
-    private var options: [WorkLabel] {
-        var list = liveLabels.filter { !$0.isArchived }
+    /// Offered active labels, plus the current selection when it is archived or not offered.
+    private func options(in scope: ProfileScope) -> [WorkLabel] {
+        var list = liveLabels.filter { !$0.isArchived && scope.offers($0) }
         if let current = ModelLiveness.live(selection),
            !list.contains(where: { $0.persistentModelID == current.persistentModelID }) {
             list.append(current)
@@ -125,8 +134,9 @@ struct LabelValuePicker: View {
     }
 
     var body: some View {
-        let items = options
-        let names = Dictionary(items.map { ($0.uuid, $0.isArchived ? "\($0.name) (archived)" : $0.name) },
+        let scope = ProfileScope(profileID: profileID)
+        let items = options(in: scope)
+        let names = Dictionary(items.map { ($0.uuid, ScopedItemTitle.title(for: $0, in: scope)) },
                                uniquingKeysWith: { first, _ in first })
         let ids: [UUID?] = [nil] + items.map { $0.uuid }
         ValuePicker(prefix, selection: idSelection, options: ids,
@@ -142,6 +152,34 @@ struct LabelValuePicker: View {
         if let current = selection, !ModelLiveness.isLive(current) {
             selection = nil
         }
+    }
+}
+
+/// (Extra, round 3) Option titles for scoped label/tag pickers: "Name"; "Name (Personal)" when the item is not
+/// offered in the picker's profile (local to another profile); "Name (archived)" when it is archived.
+/// Pass live models only (the pickers filter with `ModelLiveness` first).
+@MainActor
+enum ScopedItemTitle {
+    static func title(for label: WorkLabel, in scope: ProfileScope) -> String {
+        title(name: label.name, isArchived: label.isArchived,
+              owner: scope.offers(label) ? nil : ModelLiveness.live(label.profile))
+    }
+
+    static func title(for tag: WorkTag, in scope: ProfileScope) -> String {
+        title(name: tag.name, isArchived: tag.isArchived,
+              owner: scope.offers(tag) ? nil : ModelLiveness.live(tag.profile))
+    }
+
+    /// The name of the profile a not-offered item belongs to, or nil when it is offered (or its profile is gone).
+    static func foreignProfileName(of tag: WorkTag, in scope: ProfileScope) -> String? {
+        scope.offers(tag) ? nil : ModelLiveness.live(tag.profile)?.displayName
+    }
+
+    private static func title(name: String, isArchived: Bool, owner: WorkProfile?) -> String {
+        if let owner {
+            return "\(name) (\(owner.displayName))"
+        }
+        return isArchived ? "\(name) (archived)" : name
     }
 }
 

@@ -23,6 +23,8 @@ final class WindowRouter {
     private(set) var isMainWindowOpen = false
 
     @ObservationIgnored private var openWindowAction: OpenWindowAction?
+    /// Set by AppServices; `showSession(_:)` switches to the session's profile so History can show it.
+    @ObservationIgnored weak var profiles: ProfileStore?
 
     init() {}
 
@@ -93,8 +95,15 @@ final class WindowRouter {
         showMainWindow()
     }
 
-    /// .history + selectedSessionID = session.persistentModelID (and brings the main window forward).
+    /// Selects the session's profile first when it is live, non-archived and not current (History is scoped to the
+    /// current profile); then .history + selectedSessionID = session.persistentModelID (and brings the main window
+    /// forward).
     func showSession(_ session: WorkSession) {
+        guard ModelLiveness.isLive(session) else { return }
+        if let profile = ModelLiveness.live(session.profile), !profile.isArchived,
+           let profiles, profiles.activeProfileID != profile.uuid {
+            profiles.select(profile)
+        }
         selection = .history
         selectedSessionID = session.persistentModelID
         showMainWindow()

@@ -423,6 +423,7 @@ struct SettingsPendingImport: Identifiable {
 private struct SettingsImportSheet: View {
     @Environment(ExportService.self) private var exporter
     @Environment(BackupService.self) private var backups
+    @Environment(ProfileStore.self) private var profileStore
     @Environment(\.theme) private var theme
 
     let pending: SettingsPendingImport
@@ -448,6 +449,14 @@ private struct SettingsImportSheet: View {
         }
     }
 
+
+    /// An older file (no profiles) puts its sessions in the home profile: its name, when there is a choice.
+    private var legacyHomeProfileName: String? {
+        guard archive.profiles == nil, profileStore.hasMultipleProfiles else { return nil }
+        let active = ModelLiveness.live(profileStore.profiles)
+        let home = active.first { $0.uuid == ProfileOps.defaultProfileUUID } ?? active.first
+        return home?.displayName
+    }
 
     private var archiveImageCount: Int {
         archive.sessions.reduce(0) { $0 + $1.attachments.count }
@@ -489,6 +498,9 @@ private struct SettingsImportSheet: View {
                 SettingsFootnote("Your current data is backed up first.")
             } else {
                 SettingsFootnote("The more recently edited copy of a session wins.")
+            }
+            if mode == .merge, let home = legacyHomeProfileName {
+                SettingsFootnote("This file has no profiles, so its sessions go to “\(home)”.")
             }
 
             if let errorText {
@@ -533,6 +545,10 @@ private struct SettingsImportSheet: View {
             "\(archive.labels.count) \(archive.labels.count == 1 ? "label" : "labels")",
             "\(archive.tags.count) \(archive.tags.count == 1 ? "tag" : "tags")",
         ]
+        let profiles = archive.profiles?.count ?? 0
+        if profiles > 0 {
+            parts.insert("\(profiles) \(profiles == 1 ? "profile" : "profiles")", at: 1)
+        }
         parts.append(archive.includesAttachments
                      ? "\(archiveImageCount) \(archiveImageCount == 1 ? "image" : "images")"
                      : "no images")

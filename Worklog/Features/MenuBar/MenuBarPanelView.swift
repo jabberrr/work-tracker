@@ -4,6 +4,10 @@ import SwiftUI
 
 /// Content of the `MenuBarExtra` (`.window` style, 320 pt wide): live status and controls, inline split,
 /// quick note, last takeaway, today's total, overlay toggle and app rows.
+///
+/// Profiles: everything here follows the *panel profile*, the running session's profile while active, else the
+/// quick start profile (`ProfileStore.quickStartProfile`, Settings ▸ Profiles). Start, the label picker, the
+/// takeaway and today's total all use it; a `ProfileBadge` names it when there are 2 or more profiles.
 @MainActor
 struct MenuBarPanelView: View {
     @Environment(SessionEngine.self) private var engine
@@ -11,12 +15,15 @@ struct MenuBarPanelView: View {
     @Environment(WindowRouter.self) private var router
     @Environment(OverlayPanelController.self) private var overlay
     @Environment(ShortcutStore.self) private var shortcuts
+    @Environment(ProfileStore.self) private var profiles
     @Environment(\.openWindow) private var openWindow
     @Environment(\.theme) private var theme
 
     @State private var isSplitting = false
     @State private var startLabel: WorkLabel?
     @State private var didLoadDefaults = false
+    /// The quick start profile `startLabel` was chosen for (the panel may be closed when it changes).
+    @State private var startLabelProfileID: UUID?
 
     init() {}
 
@@ -45,8 +52,8 @@ struct MenuBarPanelView: View {
         .onChange(of: engine.isActive) { _, isActive in
             if !isActive { isSplitting = false }
         }
-        .onChange(of: settings.defaultLabelID) { _, _ in
-            startLabel = engine.defaultLabel()
+        .onChange(of: profiles.quickStartProfileID) { _, _ in
+            resetStartLabel()
         }
     }
 
@@ -59,13 +66,24 @@ struct MenuBarPanelView: View {
 
     private func onAppear() {
         router.register(openWindow: openWindow)
-        if !didLoadDefaults {
+        let profileID = profiles.quickStartProfileID
+        if !didLoadDefaults || startLabelProfileID != profileID {
             didLoadDefaults = true
-            startLabel = engine.defaultLabel()
-        } else if startLabel.map({ !LiveStartChoice.isUsable($0) }) ?? true {
-            // Never loaded (no labels yet at first open), or deleted/merged/archived in Settings since.
-            startLabel = engine.defaultLabel()
+            resetStartLabel()
+        } else if startLabel.map({ !LiveStartChoice.isUsable($0, in: profileID) }) ?? true {
+            // Never loaded (no labels yet at first open), or deleted/merged/archived/re-scoped in Settings since.
+            resetStartLabel()
         }
+    }
+
+    private func resetStartLabel() {
+        startLabelProfileID = profiles.quickStartProfileID
+        startLabel = engine.defaultLabel(for: profiles.quickStartProfile)
+    }
+
+    /// Running session's profile while active, else the quick start profile.
+    private var panelProfileID: UUID? {
+        engine.isActive ? engine.activeSessionProfileID : profiles.quickStartProfileID
     }
 
     // MARK: Active
@@ -78,6 +96,12 @@ struct MenuBarPanelView: View {
                 Text(isPaused ? "Paused" : "Running")
                     .font(theme.captionFont.weight(.medium))
                     .foregroundStyle(theme.textSecondary)
+                    .fixedSize()
+                if profiles.hasMultipleProfiles {
+                    ProfileBadge(profile: engine.activeSessionProfile, size: .small)
+                        .frame(maxWidth: 96, alignment: .leading)
+                        .fixedSize()
+                }
                 Spacer(minLength: theme.spacingS)
                 LabelBadge(label: engine.currentLabel, size: .small)
             }
@@ -192,7 +216,14 @@ struct MenuBarPanelView: View {
                 }
             }
             HStack(spacing: theme.spacingS) {
-                LabelPicker(selection: $startLabel, includeNone: true, title: "Label")
+                if profiles.hasMultipleProfiles {
+                    // Ideal width, capped: a long name truncates instead of squeezing the picker.
+                    ProfileBadge(profile: profiles.quickStartProfile, size: .small)
+                        .frame(maxWidth: 80, alignment: .leading)
+                        .fixedSize()
+                }
+                LabelPicker(selection: $startLabel, includeNone: true, title: "Label",
+                            profileID: profiles.quickStartProfileID)
                     .labelsHidden()
                     .controlSize(.small)
                 Spacer(minLength: 0)
@@ -208,21 +239,24 @@ struct MenuBarPanelView: View {
 
     private func startSession() {
         // The picked label may have been deleted, merged or archived in Settings since it was chosen.
-        _ = engine.start(label: LiveStartChoice.label(startLabel, engine: engine))
+        let profile = profiles.quickStartProfile
+        _ = engine.start(label: LiveStartChoice.label(startLabel, engine: engine, profile: profile),
+                         profile: profile)
     }
 
     // MARK: Takeaway + today
 
     @ViewBuilder
     private var infoSection: some View {
-        let takeaway = settings.menuBarShowLastTakeaway ? engine.lastTakeaway : nil
+        let profileID = panelProfileID
+        let takeaway = settings.menuBarShowLastTakeaway ? engine.takeaway(for: profileID) : nil
         rule
         VStack(alignment: .leading, spacing: theme.spacingM) {
             if let takeaway {
                 LiveTakeawayView(takeaway: takeaway, lineLimit: 3, showsTitle: false, isCompact: true)
             }
             LiveTodaySessionsQuery { sessions in
-                MenuBarTodayRow(sessions: sessions)
+                MenuBarTodayRow(sessions: sessions, scope: ProfileScope(profileID: profileID))
             }
         }
         .padding(.horizontal, theme.spacingL)
@@ -302,21 +336,23 @@ struct MenuBarPanelView: View {
     }
 }
 
-/// "Today 2h 15m of 4h" + goal meter, live while running.
+/// "Today 2h 15m of 4h" + goal meter, live while running. Counts only sessions in `scope` (the panel profile).
 @MainActor
 private struct MenuBarTodayRow: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings
     @Environment(\.theme) private var theme
     private let sessions: [WorkSession]
+    private let scope: ProfileScope
 
-    init(sessions: [WorkSession]) {
+    init(sessions: [WorkSession], scope: ProfileScope) {
         self.sessions = sessions
+        self.scope = scope
     }
 
     var body: some View {
         LiveClock(isTicking: engine.isRunning) { date in
-            let total = LiveDayMath.totalToday(sessions, active: engine.activeSession, now: date)
+            let total = LiveDayMath.totalToday(sessions, active: engine.activeSession, now: date, scope: scope)
             let goal = LiveDayMath.goalSeconds(settings)
             VStack(alignment: .leading, spacing: theme.spacingXS) {
                 HStack(spacing: theme.spacingXS) {

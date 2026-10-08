@@ -86,25 +86,29 @@ enum LiveDayChange {
     }
 }
 
-/// Today-total math on already-fetched sessions (midnight-safe: clips every session to today's interval).
+/// Today-total math on already-fetched sessions (midnight-safe: clips every session to today's interval),
+/// limited to one profile's sessions (`ProfileScope.allProfiles` counts every session).
 @MainActor
 enum LiveDayMath {
-    /// Active seconds today across `sessions` (+ `active` if the query missed it, e.g. started > 2 days ago).
-    static func totalToday(_ sessions: [WorkSession], active: WorkSession?, now: Date) -> TimeInterval {
+    /// Active seconds today across the in-scope `sessions` (+ `active` if it is in scope and the query missed it,
+    /// e.g. started > 2 days ago).
+    static func totalToday(_ sessions: [WorkSession], active: WorkSession?, now: Date,
+                           scope: ProfileScope) -> TimeInterval {
         let today = now.dayInterval
-        var all = sessions.filter { LiveModelGuard.isUsable($0) }
-        if let active, LiveModelGuard.isUsable(active), !all.contains(where: { $0 === active }) {
+        var all = scope.filter(sessions.filter { LiveModelGuard.isUsable($0) })
+        if let active, LiveModelGuard.isUsable(active), scope.contains(active),
+           !all.contains(where: { $0 === active }) {
             all.append(active)
         }
         return all.reduce(0) { $0 + $1.activeDuration(in: today, now: now) }
     }
 
-    /// Ended sessions that overlap today, newest first.
-    static func endedToday(_ sessions: [WorkSession], now: Date) -> [WorkSession] {
+    /// Ended in-scope sessions that overlap today, newest first.
+    static func endedToday(_ sessions: [WorkSession], now: Date, scope: ProfileScope) -> [WorkSession] {
         let today = now.dayInterval
-        return sessions
+        return scope.filter(sessions.filter { LiveModelGuard.isUsable($0) })
             .filter { session in
-                guard LiveModelGuard.isUsable(session), let end = session.endedAt else { return false }
+                guard let end = session.endedAt else { return false }
                 return end > today.start && session.startedAt < today.end
             }
             .sorted { $0.startedAt > $1.startedAt }
@@ -125,15 +129,24 @@ enum LiveModelGuard {
 }
 
 /// Start/split choices are held in `@State` across Settings edits: a label or tag picked earlier may have been
-/// deleted, merged or archived since. Resolve them right before handing them to the engine.
+/// deleted, merged or archived since, or belong to another profile after a profile switch. Resolve them right
+/// before handing them to the engine.
 @MainActor
 enum LiveStartChoice {
     /// The picked label if it can still be used; a picked-but-gone label falls back to the default label.
-    /// `nil` (the user chose "None") stays `nil`.
+    /// `nil` (the user chose "None") stays `nil`. Same as `label(_:engine:profile:)` with no profile.
     static func label(_ picked: WorkLabel?, engine: SessionEngine) -> WorkLabel? {
+        label(picked, engine: engine, profile: nil)
+    }
+
+    /// The picked label if it is still usable and offered in `profile` (nil = the engine's current profile, any
+    /// label is accepted here and the engine checks it); otherwise `engine.defaultLabel(for: profile)`.
+    /// `nil` (the user chose "None") stays `nil`.
+    static func label(_ picked: WorkLabel?, engine: SessionEngine, profile: WorkProfile?) -> WorkLabel? {
         guard let picked else { return nil }
-        if isUsable(picked) { return picked }
-        return engine.defaultLabel()
+        let liveProfile = ModelLiveness.live(profile)
+        if isUsable(picked, in: liveProfile?.uuid) { return picked }
+        return engine.defaultLabel(for: liveProfile)
     }
 
     /// Like `label(_:engine:)`, but a gone label becomes `nil` (the engine then keeps the current label).
@@ -146,31 +159,101 @@ enum LiveStartChoice {
         picked.filter { LiveModelGuard.isUsable($0) && !$0.isArchived }
     }
 
+    /// Usable tags that `profileID` offers (nil = all profiles).
+    static func tags(_ picked: [WorkTag], in profileID: UUID?) -> [WorkTag] {
+        let scope = ProfileScope(profileID: profileID)
+        return tags(picked).filter { scope.offers($0) }
+    }
+
     static func isUsable(_ label: WorkLabel) -> Bool {
         LiveModelGuard.isUsable(label) && !label.isArchived
     }
 
-    /// Same rule as `SessionEngine.defaultLabel()`, computed from `@Query` results (no fetch in `body`).
-    static func defaultLabel(in labels: [WorkLabel], settings: AppSettings) -> WorkLabel? {
-        let active = labels.filter { isUsable($0) }
-        if let id = settings.defaultLabelID, let match = active.first(where: { $0.uuid == id }) {
+    /// Usable and offered in `profileID` (global or local to it; nil = all profiles).
+    static func isUsable(_ label: WorkLabel, in profileID: UUID?) -> Bool {
+        isUsable(label) && ProfileScope(profileID: profileID).offers(label)
+    }
+
+    /// Same rule as `SessionEngine.defaultLabel(for:)`, computed from `@Query` results (no fetch in `body`):
+    /// non-archived labels offered in `profile`, by sort order; `profile.defaultLabelUUID` first; with no profile
+    /// at all, the legacy `settings.defaultLabelID`; else the first one.
+    static func defaultLabel(in labels: [WorkLabel], profile: WorkProfile?, settings: AppSettings) -> WorkLabel? {
+        let liveProfile = ModelLiveness.live(profile)
+        let candidates = labels
+            .filter { isUsable($0, in: liveProfile?.uuid) }
+            .sorted { $0.sortIndex < $1.sortIndex }
+        let preferred: UUID?
+        if let liveProfile {
+            preferred = liveProfile.defaultLabelUUID
+        } else {
+            preferred = settings.defaultLabelID
+        }
+        if let id = preferred, let match = candidates.first(where: { $0.uuid == id }) {
             return match
         }
-        return active.first
+        return candidates.first
+    }
+}
+
+// MARK: - Moving a session to another profile
+
+/// Moving a session (running or ended) to another profile, shared by Today's profile menu and Session detail's
+/// Profile picker. A move that would copy labels or tags into the target asks first ("Move to Personal?").
+@MainActor
+enum LiveProfileMove {
+    /// A pending confirmation. Holds the target's uuid and name, never the model (it may go away meanwhile).
+    struct Request: Identifiable, Equatable {
+        let id: UUID
+        let name: String
+
+        var title: String { "Move to \(name)?" }
+        var message: String { "Labels and tags not in \(name) are copied." }
+    }
+
+    enum Outcome: Equatable {
+        /// Moved (nothing had to be copied).
+        case moved
+        /// Nothing to do: already in that profile, or the session/profile is gone.
+        case unchanged
+        /// Labels or tags would be copied: confirm, then call `perform(_:moving:profiles:in:)`.
+        case needsConfirmation(Request)
+    }
+
+    static func begin(moving session: WorkSession, to target: WorkProfile, in context: ModelContext) -> Outcome {
+        guard LiveModelGuard.isUsable(session), LiveModelGuard.isUsable(target) else { return .unchanged }
+        guard ModelLiveness.live(session.profile)?.uuid != target.uuid else { return .unchanged }
+        if SessionEditor.taxonomyCopiedByMove(of: session, to: target).isEmpty {
+            SessionEditor.moveSession(session, to: target, in: session.modelContext ?? context)
+            return .moved
+        }
+        return .needsConfirmation(Request(id: target.uuid, name: target.displayName))
+    }
+
+    /// The confirmed move. Returns false when the session or the target profile no longer exists.
+    @discardableResult
+    static func perform(_ request: Request, moving session: WorkSession, profiles: ProfileStore,
+                        in context: ModelContext) -> Bool {
+        guard LiveModelGuard.isUsable(session),
+              let target = ModelLiveness.live(profiles.profile(withID: request.id)) else { return false }
+        SessionEditor.moveSession(session, to: target, in: session.modelContext ?? context)
+        return true
     }
 }
 
 // MARK: - Environment bridge for popovers
 
 /// Popovers and inline sub-windows are hosted in their own window; pass the services and theme explicitly so
-/// `@Environment(SessionEngine.self)`, `@Query` (LabelPicker/TagPicker) and `\.theme` always resolve there.
+/// `@Environment(SessionEngine.self)`, `@Environment(ProfileStore.self)`, `@Query` (LabelPicker/TagPicker) and
+/// `\.theme` always resolve there.
 struct LiveEnvironmentBridge: ViewModifier {
     let engine: SessionEngine
+    let profiles: ProfileStore
     let theme: Theme
     let context: ModelContext
 
-    init(engine: SessionEngine, theme: Theme, context: ModelContext) {
+    init(engine: SessionEngine, profiles: ProfileStore, theme: Theme, context: ModelContext) {
         self.engine = engine
+        self.profiles = profiles
         self.theme = theme
         self.context = context
     }
@@ -178,6 +261,7 @@ struct LiveEnvironmentBridge: ViewModifier {
     func body(content: Content) -> some View {
         content
             .environment(engine)
+            .environment(profiles)
             .environment(\.theme, theme)
             .modelContext(context)
             .font(theme.bodyFont)
@@ -227,6 +311,8 @@ struct LiveSegmentForm: View {
     }
 
     private var isInline: Bool { style != .popover }
+    /// Labels and tags offered here are the running session's profile's (not the selected profile's).
+    private var profileID: UUID? { engine.activeSessionProfileID }
     private var spacing: CGFloat { style == .inlineCompact ? theme.spacingS : theme.spacingM }
 
     var body: some View {
@@ -244,18 +330,18 @@ struct LiveSegmentForm: View {
                 .accessibilityLabel(mode == .split ? "New focus" : "Focus")
 
             if isInline {
-                LabelPicker(selection: $label, includeNone: false, title: "Label")
+                LabelPicker(selection: $label, includeNone: false, title: "Label", profileID: profileID)
                     .labelsHidden()
                     .controlSize(.small)
-                LiveTagMenu(selection: $tags, scopeLabel: label)
+                LiveTagMenu(selection: $tags, scopeLabel: label, profileID: profileID)
             } else {
-                LabelPicker(selection: $label, includeNone: false, title: "Label")
+                LabelPicker(selection: $label, includeNone: false, title: "Label", profileID: profileID)
                     .fixedSize()
                 HStack(alignment: .firstTextBaseline, spacing: theme.spacingS) {
                     Text("Tags")
                         .font(theme.calloutFont)
                         .foregroundStyle(theme.textSecondary)
-                    TagPicker(selection: $tags, scopeLabel: label)
+                    TagPicker(selection: $tags, scopeLabel: label, profileID: profileID)
                 }
             }
 
@@ -326,22 +412,29 @@ struct LiveSegmentForm: View {
 // MARK: - Tag menu (native, for panels)
 
 /// Native pull-down menu of tags with checkmarks: label-scoped tags first, then global tags, then other labels'
-/// tags in a submenu. Native menus never take key status, so this is safe inside the menu bar window/overlay.
+/// tags in a submenu. Only tags offered in `profileID` are listed (plus any selected tag that isn't, so it can be
+/// removed). Native menus never take key status, so this is safe inside the menu bar window/overlay.
 @MainActor
 struct LiveTagMenu: View {
     @Environment(\.theme) private var theme
     @Query(sort: \WorkTag.name) private var allTags: [WorkTag]
     @Binding private var selection: [WorkTag]
     private let scopeLabel: WorkLabel?
+    private let profileID: UUID?
 
-    init(selection: Binding<[WorkTag]>, scopeLabel: WorkLabel?) {
+    init(selection: Binding<[WorkTag]>, scopeLabel: WorkLabel?, profileID: UUID?) {
         self._selection = selection
         self.scopeLabel = scopeLabel
+        self.profileID = profileID
     }
 
     var body: some View {
         // Never read a tag or label deleted/merged in Settings while this menu is on screen.
-        let active = ModelLiveness.live(allTags).filter { !$0.isArchived }
+        let profileScope = ProfileScope(profileID: profileID)
+        let selectedIDs = Set(liveSelection.map(\.persistentModelID))
+        let active = ModelLiveness.live(allTags).filter { tag in
+            (!tag.isArchived && profileScope.offers(tag)) || selectedIDs.contains(tag.persistentModelID)
+        }
         let scope = ModelLiveness.live(scopeLabel)
         let scopeID = scope?.persistentModelID
         let scoped = active.filter { ModelLiveness.live($0.label)?.persistentModelID == scopeID && scopeID != nil }
@@ -400,7 +493,7 @@ struct LiveTagMenu: View {
 
     private func toggle(for tag: WorkTag) -> some View {
         let tagID = tag.persistentModelID
-        return Toggle(tag.name, isOn: Binding(
+        return Toggle(ScopedItemTitle.title(for: tag, in: ProfileScope(profileID: profileID)), isOn: Binding(
             get: { liveSelection.contains(where: { $0.persistentModelID == tagID }) },
             set: { isOn in
                 var next = liveSelection
@@ -494,7 +587,8 @@ struct LiveQuickNoteField: View {
 // MARK: - Takeaway
 
 /// "Last takeaway" block: quote glyph, the takeaway text, "title · day" metadata (a link that opens the source
-/// session in History) and a "Done" checkmark (`engine.dismissTakeaway()`: the takeaway stops showing everywhere).
+/// session in History) and a "Done" checkmark (`engine.dismissTakeaway(takeaway)`: this takeaway stops showing
+/// everywhere; other profiles' takeaways stay).
 @MainActor
 struct LiveTakeawayView: View {
     @Environment(SessionEngine.self) private var engine
@@ -558,7 +652,7 @@ struct LiveTakeawayView: View {
 
             if showsDone {
                 Button {
-                    engine.dismissTakeaway()
+                    engine.dismissTakeaway(takeaway)
                 } label: {
                     Image(systemName: "checkmark")
                 }

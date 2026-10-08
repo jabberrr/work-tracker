@@ -48,6 +48,7 @@ struct EndSessionSheet: View {
 @MainActor
 private struct EndSessionForm: View {
     @Environment(SessionEngine.self) private var engine
+    @Environment(ProfileStore.self) private var profiles
     @Environment(ShortcutStore.self) private var shortcuts
     @Environment(\.modelContext) private var modelContext
     @Environment(\.theme) private var theme
@@ -122,10 +123,19 @@ private struct EndSessionForm: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: theme.spacingXS) {
-            Text("Session complete")
-                .font(theme.titleFont)
-                .foregroundStyle(theme.textPrimary)
-                .accessibilityAddTraits(.isHeader)
+            HStack(alignment: .firstTextBaseline, spacing: theme.spacingM) {
+                Text("Session complete")
+                    .font(theme.titleFont)
+                    .foregroundStyle(theme.textPrimary)
+                    .lineLimit(1)
+                    .layoutPriority(1)
+                    .accessibilityAddTraits(.isHeader)
+                if profiles.hasMultipleProfiles {
+                    Spacer(minLength: theme.spacingS)
+                    ProfileBadge(profile: sessionProfile, size: .small)
+                        .frame(minWidth: 0, maxWidth: 200, alignment: .trailing)
+                }
+            }
             Text(summaryLine)
                 .font(theme.calloutFont)
                 .foregroundStyle(theme.textSecondary)
@@ -183,12 +193,13 @@ private struct EndSessionForm: View {
                 }
             }
             fieldRow("Label") {
-                LabelPicker(selection: primaryLabelBinding, includeNone: true, title: "Label")
+                LabelPicker(selection: primaryLabelBinding, includeNone: true, title: "Label",
+                            profileID: sessionProfile?.uuid)
                     .labelsHidden()
                     .frame(minWidth: 0, maxWidth: 260, alignment: .leading)
             }
             fieldRow("Tags") {
-                TagPicker(selection: sessionTagsBinding, scopeLabel: session.label)
+                TagPicker(selection: sessionTagsBinding, scopeLabel: session.label, profileID: sessionProfile?.uuid)
             }
             fieldRow("Takeaway") {
                 takeawayField
@@ -242,6 +253,11 @@ private struct EndSessionForm: View {
             content()
                 .frame(maxWidth: .infinity, alignment: .leading)
         }
+    }
+
+    /// Labels and tags offered here are the session's own profile's.
+    private var sessionProfile: WorkProfile? {
+        LiveModelGuard.isUsable(session) ? ModelLiveness.live(session.profile) : nil
     }
 
     /// Changing the primary label also relabels the segments that followed the old one.

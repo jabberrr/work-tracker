@@ -64,7 +64,9 @@ final class ShortcutStoreTests: XCTestCase {
         XCTAssertEqual(ShortcutAction.allCases.filter { $0.group == .session },
                        [.startStop, .pauseResume, .addNote, .splitSegment, .discardSession, .toggleOverlay])
         XCTAssertEqual(ShortcutAction.allCases.filter { $0.group == .navigation },
-                       [.showToday, .showHistory, .showLearning, .showStats])
+                       [.showToday, .showHistory, .showLearning, .showStats, .nextProfile])
+        XCTAssertNil(ShortcutAction.nextProfile.defaultShortcut, "Next Profile has no default shortcut")
+        XCTAssertEqual(ShortcutAction.nextProfile.title, "Switch to Next Profile")
         XCTAssertEqual(ShortcutAction.allCases.filter { $0.group == .editing }, [.findInHistory, .saveReview])
     }
 

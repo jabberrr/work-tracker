@@ -38,6 +38,10 @@ final class WorkSession {
     var attachments: [Attachment]? = []
     @Relationship(deleteRule: .cascade, inverse: \LearningPoint.session)
     var learningPoints: [LearningPoint]? = []
+    /// The profile this session belongs to. nil = unassigned (legacy, from an older app version on another Mac, or
+    /// its profile was deleted remotely); `ProfileOps.repairSessionProfiles` moves those into the home profile.
+    @Relationship(deleteRule: .nullify, inverse: \WorkProfile.sessions)
+    var profile: WorkProfile?
 
     init(startedAt: Date = .now, title: String = "", uuid: UUID = UUID()) {
         self.uuid = uuid

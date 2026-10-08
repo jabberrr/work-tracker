@@ -10,13 +10,18 @@ import SwiftUI
 /// Focus: the panel is borderless + `.nonactivatingPanel`, `canBecomeKey == true` and
 /// `becomesKeyOnlyIfNeeded == true`, so clicking a text field makes it key (typing works) without
 /// activating Worklog; buttons work without taking key status.
+///
+/// Profiles: like the menu bar, everything follows the *panel profile*: the running session's profile while
+/// active, else the quick start profile. Start, the takeaway and today's total use it; the header names it when
+/// there are 2 or more profiles.
 @MainActor
 struct OverlayView: View {
     @Environment(SessionEngine.self) private var engine
     @Environment(AppSettings.self) private var settings
     @Environment(WindowRouter.self) private var router
     @Environment(OverlayPanelController.self) private var overlay
-    /// For the idle Start button's "Start · <default label>" (no fetch in `body`).
+    @Environment(ProfileStore.self) private var profiles
+    /// For the idle Start button's "Start · <default label>" in the quick start profile (no fetch in `body`).
     @Query(sort: \WorkLabel.sortIndex) private var labels: [WorkLabel]
 
     @State private var isSplitting = false
@@ -47,26 +52,37 @@ struct OverlayView: View {
     // MARK: Data
 
     private func liveData(sessions: [WorkSession], at date: Date) -> OverlayDisplayData {
-        let startLabel = LiveStartChoice.defaultLabel(in: labels, settings: settings)
-        let todayTotal = LiveDayMath.totalToday(sessions, active: engine.activeSession, now: date)
+        let quickStart = profiles.quickStartProfile
+        let startLabel = LiveStartChoice.defaultLabel(in: labels, profile: quickStart, settings: settings)
         guard let session = engine.activeSession, LiveModelGuard.isUsable(session) else {
+            let scope = ProfileScope(profileID: profiles.quickStartProfileID)
+            let profile = OverlayDisplayData.profileFields(quickStart, showsProfile: profiles.hasMultipleProfiles)
             return OverlayDisplayData(
-                status: .idle, label: nil, elapsed: 0, segmentElapsed: 0, todayTotal: todayTotal, focus: "",
-                takeaway: engine.lastTakeaway, startLabel: startLabel,
-                hasPendingReview: engine.pendingEndSession != nil, isOnAnotherMac: false
+                status: .idle, label: nil, elapsed: 0, segmentElapsed: 0,
+                todayTotal: LiveDayMath.totalToday(sessions, active: engine.activeSession, now: date, scope: scope),
+                focus: "",
+                takeaway: engine.takeaway(for: profiles.quickStartProfileID), startLabel: startLabel,
+                hasPendingReview: engine.pendingEndSession != nil, isOnAnotherMac: false,
+                profileName: profile.name, profileColorHex: profile.colorHex
             )
         }
+        let profileID = engine.activeSessionProfileID
+        let scope = ProfileScope(profileID: profileID)
+        let profile = OverlayDisplayData.profileFields(engine.activeSessionProfile,
+                                                       showsProfile: profiles.hasMultipleProfiles)
         return OverlayDisplayData(
             status: engine.isPaused ? .paused : .running,
             label: engine.currentLabel,
             elapsed: engine.elapsed(at: date),
             segmentElapsed: engine.currentSegmentElapsed(at: date),
-            todayTotal: todayTotal,
+            todayTotal: LiveDayMath.totalToday(sessions, active: session, now: date, scope: scope),
             focus: engine.currentSegment?.focus.trimmed ?? "",
-            takeaway: engine.lastTakeaway,
+            takeaway: engine.takeaway(for: profileID),
             startLabel: startLabel,
             hasPendingReview: engine.pendingEndSession != nil,
-            isOnAnotherMac: engine.isActiveSessionOnAnotherMac
+            isOnAnotherMac: engine.isActiveSessionOnAnotherMac,
+            profileName: profile.name,
+            profileColorHex: profile.colorHex
         )
     }
 
@@ -84,8 +100,10 @@ struct OverlayView: View {
         )
     }
 
+    /// Same label the button names (`defaultLabel(in:profile:settings:)` mirrors the engine's rule).
     private func start() {
-        _ = engine.start(label: engine.defaultLabel())
+        let profile = profiles.quickStartProfile
+        _ = engine.start(label: engine.defaultLabel(for: profile), profile: profile)
     }
 
     private func toggleSplit() {

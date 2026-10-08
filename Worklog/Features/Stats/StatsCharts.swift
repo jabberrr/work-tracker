@@ -294,6 +294,85 @@ struct StatsLabelShareCard: View {
     }
 }
 
+// MARK: - By profile
+
+/// "All profiles" only: active time per profile as horizontal bars in the profile colors.
+struct StatsProfileShareCard: View {
+    @Environment(\.theme) private var theme
+    let result: StatsResult
+
+    private func color(_ value: StatsProfileValue) -> Color {
+        value.colorHex.map { Color(hex: $0) } ?? theme.textTertiary
+    }
+
+    private func valueText(_ value: StatsProfileValue) -> String {
+        "\(value.seconds.formattedShort) · \(statsPercent(value.fraction))"
+    }
+
+    var body: some View {
+        Card {
+            VStack(alignment: .leading, spacing: theme.spacingM) {
+                StatsCardTitle(title: "By profile", systemImage: "person.crop.rectangle.stack") {
+                    Text("time · share")
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textTertiary)
+                }
+                chart
+                    .frame(height: max(80, CGFloat(result.profileTotals.count) * 28 + 24))
+            }
+        }
+    }
+
+    private var chart: some View {
+        let items = result.profileTotals
+        let names = items.map(\.name)
+        let colors = items.map { color($0) }
+        return Chart {
+            ForEach(items) { value in
+                BarMark(
+                    x: .value("Hours", value.seconds / 3600),
+                    y: .value("Profile", value.name),
+                    height: .ratio(0.6)
+                )
+                .foregroundStyle(by: .value("Profile", value.name))
+                .cornerRadius(theme.radiusS / 2)
+                .annotation(position: .trailing, alignment: .leading, spacing: 4) {
+                    Text(valueText(value))
+                        .font(theme.captionFont)
+                        .monospacedDigit()
+                        .foregroundStyle(theme.textSecondary)
+                }
+                .accessibilityLabel(value.name)
+                .accessibilityValue("\(valueText(value)), \(value.sessionCount) \(value.sessionCount == 1 ? "session" : "sessions")")
+            }
+        }
+        .chartForegroundStyleScale(domain: names, range: colors)
+        .chartLegend(.hidden)
+        .chartYScale(domain: names)
+        .chartXAxis {
+            AxisMarks(values: .automatic(desiredCount: 4)) { value in
+                AxisGridLine(stroke: StrokeStyle(lineWidth: 0.5))
+                    .foregroundStyle(theme.separator)
+                AxisValueLabel {
+                    if let hours = value.as(Double.self) {
+                        Text(statsHoursAxisLabel(hours))
+                    }
+                }
+                .font(theme.captionFont)
+                .foregroundStyle(theme.textTertiary)
+            }
+        }
+        .chartYAxis {
+            AxisMarks { _ in
+                AxisValueLabel()
+                    .font(theme.captionFont)
+                    .foregroundStyle(theme.textSecondary)
+            }
+        }
+        .accessibilityLabel("Time by profile")
+    }
+}
+
 // MARK: - Top tags
 
 struct StatsTopTagsCard: View {

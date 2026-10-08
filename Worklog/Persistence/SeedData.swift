@@ -3,6 +3,12 @@ import SwiftData
 
 @MainActor enum SeedData {
     static let didSeedDefaultsKey = "seed.didSeedDefaults"
+    /// instanceID (uuidString) of a default profile created before the first iCloud import (see `ensureProfiles`).
+    static let provisionalDefaultProfileKey = "profiles.provisionalDefaultInstanceID"
+    /// Set by AppServices while a provisional default profile waits for the first iCloud import: `deduplicate` then
+    /// skips the repair of unassigned sessions, so sessions whose profile hasn't arrived yet aren't moved into the
+    /// provisional profile. Cleared (and the repair run) once the import finished or the wait timed out.
+    static var defersSessionProfileRepair = false
 
     /// Default labels: name, hex, SF Symbol, fixed uuid (fixed so copies created on two Macs can be merged).
     static let defaultLabels: [(name: String, hex: String, symbol: String, uuid: String)] = [
@@ -57,6 +63,56 @@ import SwiftData
         }
     }
 
+    // MARK: - Profiles
+
+    /// Launch step (AppServices, after pending-restore/seeding, before deduplicate):
+    /// 1. If no WorkProfile exists: ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: settings.defaultLabelID).
+    ///    If `provisional` (CloudKit on and the first iCloud import hasn't completed yet), store the new profile's
+    ///    instanceID under `provisionalDefaultProfileKey` (in `settings.defaults`).
+    /// 2. ProfileOps.repairSessionProfiles. Saves if anything changed. Never touches a session's modifiedAt.
+    static func ensureProfiles(in context: ModelContext, settings: AppSettings, provisional: Bool = false) {
+        var changed = false
+        if let created = ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: settings.defaultLabelID, in: context) {
+            changed = true
+            if provisional {
+                settings.defaults.set(created.instanceID.uuidString, forKey: provisionalDefaultProfileKey)
+            }
+        }
+        if ProfileOps.repairSessionProfiles(in: context) > 0 {
+            changed = true
+        }
+        guard changed else { return }
+        do {
+            try context.save()
+        } catch {
+            Log.persistence.error("Profile setup save failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// After the first iCloud import: if the profile whose instanceID == stored key still exists, has no sessions and
+    /// no local labels/tags, and another non-archived profile exists → delete it. Always clears the key once evaluated.
+    /// (Prevents a new Mac from resurrecting a "Work" profile the user deleted elsewhere.)
+    static func discardProvisionalDefaultProfile(in context: ModelContext, defaults: UserDefaults = .standard) {
+        guard let raw = defaults.string(forKey: provisionalDefaultProfileKey) else { return }
+        defaults.removeObject(forKey: provisionalDefaultProfileKey)
+        guard let instanceID = UUID(uuidString: raw) else { return }
+        let all = ProfileOps.allProfiles(in: context)
+        guard let provisional = all.first(where: { $0.instanceID == instanceID }) else { return }
+        guard ModelLiveness.live(provisional.sessions ?? []).isEmpty,
+              ModelLiveness.live(provisional.labels ?? []).isEmpty,
+              ModelLiveness.live(provisional.tags ?? []).isEmpty,
+              all.contains(where: { $0 !== provisional && !$0.isArchived }) else { return }
+        context.delete(provisional)
+        do {
+            try context.save()
+            Log.persistence.info("Removed the provisional default profile")
+        } catch {
+            Log.persistence.error("Removing the provisional profile failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Deduplicate
+
     /// Merge duplicate WorkLabel/WorkTag objects sharing the same uuid (CloudKit can import a second copy of the
     /// seeded rows from another Mac) and duplicate ended sessions sharing a uuid (same archive imported on two Macs).
     ///
@@ -68,11 +124,19 @@ import SwiftData
     ///
     /// Extra running sessions are NOT ended here: `SessionEngine.reconcile()` (always called right after) ends them at
     /// the handoff time and tells the user.
+    ///
+    /// Order: profiles (same rules as labels; sessions, labels and tags of a duplicate move to the survivor) → labels →
+    /// tags → sessions → `ProfileOps.repairSessionProfiles` (unassigned sessions → home profile; skipped while
+    /// `defersSessionProfileRepair`) → save if anything changed. Nothing here touches a session's modifiedAt.
     static func deduplicate(in context: ModelContext) {
         var changed = false
+        changed = deduplicateProfiles(in: context) || changed
         changed = deduplicateLabels(in: context) || changed
         changed = deduplicateTags(in: context) || changed
         changed = deduplicateSessions(in: context) || changed
+        if !defersSessionProfileRepair {
+            changed = ProfileOps.repairSessionProfiles(in: context) > 0 || changed
+        }
         guard changed else { return }
         do {
             try context.save()
@@ -108,6 +172,32 @@ import SwiftData
     }
 
     // MARK: - Private
+
+    private static func deduplicateProfiles(in context: ModelContext) -> Bool {
+        let profiles = ModelLiveness.live((try? context.fetch(FetchDescriptor<WorkProfile>())) ?? [])
+        var changed = false
+        for group in Dictionary(grouping: profiles, by: \.uuid).values where group.count > 1 {
+            guard let pick = pickSurvivor(group, precedes: {
+                taxonomyPrecedes(createdAt: $0.createdAt, instanceID: $0.instanceID, $1.createdAt, $1.instanceID)
+            }) else {
+                Log.persistence.info("Skipped merging \(group.count) indistinguishable profile copies")
+                continue
+            }
+            let survivor = pick.survivor
+            for duplicate in pick.duplicates {
+                for session in duplicate.sessions ?? [] where !session.isDeleted { session.profile = survivor }
+                for label in duplicate.labels ?? [] where !label.isDeleted { label.profile = survivor }
+                for tag in duplicate.tags ?? [] where !tag.isDeleted { tag.profile = survivor }
+                if survivor.defaultLabelUUID == nil, let labelID = duplicate.defaultLabelUUID {
+                    survivor.defaultLabelUUID = labelID
+                }
+                context.delete(duplicate)
+                changed = true
+            }
+            Log.persistence.info("Merged duplicate profile \(survivor.name, privacy: .private)")
+        }
+        return changed
+    }
 
     private static func deduplicateLabels(in context: ModelContext) -> Bool {
         let labels = ((try? context.fetch(FetchDescriptor<WorkLabel>())) ?? []).filter { !$0.isDeleted }

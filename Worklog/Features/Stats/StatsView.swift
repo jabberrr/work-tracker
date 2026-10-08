@@ -7,18 +7,23 @@ import SwiftUI
 /// All aggregation lives in `StatsCalculator` and runs off the main actor (`StatsModel`). The body only reads the
 /// cached `StatsResult`. Recomputation is triggered by: range/bucket/goal/week-start changes, a cheap fingerprint of
 /// the queried sessions/labels/tags, `ModelContext.didSave`, imports, and once a minute while a session is running.
+///
+/// Scoped to the current profile. With more than one profile a header menu switches to "All profiles", which
+/// adds a "By profile" card.
 @MainActor
 struct StatsView: View {
     @Environment(\.theme) private var theme
     @Environment(AppSettings.self) private var settings
     @Environment(SessionEngine.self) private var engine
     @Environment(WindowRouter.self) private var router
+    @Environment(ProfileStore.self) private var profileStore
 
     @Query(sort: \WorkSession.startedAt) private var sessions: [WorkSession]
     @Query private var labels: [WorkLabel]
     @Query private var tags: [WorkTag]
 
     @AppStorage("stats.range") private var range: StatsRange = .last30Days
+    @AppStorage("stats.allProfiles") private var prefersAllProfiles = false
     @State private var bucketChoice: StatsBucket?
     @State private var model = StatsModel()
     @State private var dataVersion = 0
@@ -55,11 +60,21 @@ struct StatsView: View {
                 try? await Task.sleep(for: .milliseconds(150))
                 if Task.isCancelled { return }
             }
-            await model.refresh(sessions: sessions, dataVersion: dataVersion, options: options)
+            await model.refresh(sessions: sessions, scope: scope, dataVersion: dataVersion, options: options)
         }
     }
 
     // MARK: - Options
+
+    /// The profile menu is offered when there is more than one profile (archived ones count: their time shows
+    /// under "All profiles").
+    private var offersProfileScope: Bool {
+        profileStore.profiles.count + profileStore.archivedProfiles.count > 1
+    }
+
+    private var showsAllProfiles: Bool { prefersAllProfiles && offersProfileScope }
+
+    private var scope: ProfileScope { showsAllProfiles ? .allProfiles : profileStore.activeScope }
 
     private var effectiveBucket: StatsBucket {
         if let bucketChoice, range.allowedBuckets.contains(bucketChoice) { return bucketChoice }
@@ -74,10 +89,11 @@ struct StatsView: View {
 
     private struct RefreshKey: Hashable {
         var options: StatsOptions
+        var scope: ProfileScope
         var dataVersion: Int
     }
 
-    private var refreshKey: RefreshKey { RefreshKey(options: options, dataVersion: dataVersion) }
+    private var refreshKey: RefreshKey { RefreshKey(options: options, scope: scope, dataVersion: dataVersion) }
 
     /// Cheap change detector over the queried models (attribute reads only, no relationship traversal).
     private var dataFingerprint: Int {
@@ -125,6 +141,19 @@ struct StatsView: View {
                 ProgressView()
                     .controlSize(.small)
                     .accessibilityLabel("Updating stats")
+            }
+            if offersProfileScope {
+                Picker("Profiles", selection: $prefersAllProfiles) {
+                    Text(ModelLiveness.live(profileStore.activeProfile)?.displayName ?? "Current profile")
+                        .tag(false)
+                    Text("All profiles")
+                        .tag(true)
+                }
+                .pickerStyle(.menu)
+                .labelsHidden()
+                .fixedSize()
+                .help("Profiles")
+                .accessibilityLabel("Profiles")
             }
             Picker("Range", selection: $range) {
                 ForEach(StatsRange.allCases) { item in
@@ -189,6 +218,10 @@ struct StatsView: View {
                                                                           dayCount: result.dayCount),
                            bucket: Binding(get: { result.bucket }, set: { bucketChoice = $0 }),
                            dailyGoalHours: settings.dailyGoalHours)
+
+        if showsAllProfiles && !result.profileTotals.isEmpty {
+            StatsProfileShareCard(result: result)
+        }
 
         LazyVGrid(columns: [GridItem(.adaptive(minimum: 340), spacing: theme.spacingL, alignment: .top)],
                   alignment: .leading, spacing: theme.spacingL) {

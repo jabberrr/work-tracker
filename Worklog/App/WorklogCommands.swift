@@ -24,7 +24,9 @@ struct WorklogCommands: Commands {
                     engine.stop()
                     services.router.showMainWindow()
                 } else {
-                    engine.start(label: engine.defaultLabel())
+                    // ⇧⌘S always starts in the CURRENT profile (the quick-start profile is for the menu bar/overlay).
+                    let profile = services.profiles.activeProfile
+                    engine.start(label: engine.defaultLabel(for: profile), profile: profile)
                 }
             }
 
@@ -69,6 +71,10 @@ struct WorklogCommands: Commands {
             }
             ShortcutCommandButton(title: "Stats", action: .showStats, store: services.shortcuts) {
                 services.router.show(.stats)
+            }
+            Divider()
+            ShortcutCommandButton(title: "Next Profile", action: .nextProfile, store: services.shortcuts) {
+                services.profiles.selectNext()
             }
         }
     }

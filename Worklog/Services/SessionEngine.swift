@@ -12,6 +12,8 @@ struct SessionTakeaway: Equatable {
     var date: Date           // session.startedAt
     var text: String         // session.takeawayText
     var labelName: String?
+    /// uuid of the session's profile (nil = unassigned). Last, so existing memberwise calls still compile.
+    var profileID: UUID? = nil
 }
 
 /// The live-session state machine shared by the main window, the menu bar extra and the overlay.
@@ -27,8 +29,15 @@ final class SessionEngine {
     var pendingEndSession: WorkSession? = nil {
         didSet { pendingSessionUUID = pendingEndSession?.uuid }
     }
-    /// Most recent ended session with showInOverlay == true and a non-nil takeawayText.
-    private(set) var lastTakeaway: SessionTakeaway? = nil
+    /// Latest takeaway per profile uuid (nil key = unassigned sessions): the most recent ended session of that profile
+    /// with showInOverlay == true and a non-nil takeawayText. Rebuilt by refreshTakeaway().
+    private(set) var takeaways: [UUID?: SessionTakeaway] = [:]
+    /// The takeaway of `contextProfileID` (computed; observation tracks it through takeaways, activeSession and the
+    /// ProfileStore's activeProfileID).
+    var lastTakeaway: SessionTakeaway? {
+        let key: UUID? = contextProfileID
+        return takeaways[key]
+    }
     /// Set when the engine paused automatically (sleep / quit). Persisted in UserDefaults "engine.autoPauseReason".
     private(set) var autoPauseReason: AutoPauseReason? = nil {
         didSet {
@@ -56,6 +65,18 @@ final class SessionEngine {
     var isRunning: Bool { isActive && !isPaused }
     var currentSegment: Segment? { activeSession?.currentSegment }
     var currentLabel: WorkLabel? { currentSegment?.effectiveLabel ?? activeSession?.label }
+    /// Live profile of the active session (nil when idle/unassigned).
+    var activeSessionProfile: WorkProfile? {
+        guard let session = ModelLiveness.live(activeSession) else { return nil }
+        return ModelLiveness.live(session.profile)
+    }
+    var activeSessionProfileID: UUID? { activeSessionProfile?.uuid }
+    /// Profile whose takeaway/today context applies: active session's profile when active, else
+    /// profiles?.activeProfileID.
+    var contextProfileID: UUID? {
+        if activeSession != nil { return activeSessionProfileID }
+        return profiles?.activeProfileID
+    }
     /// The active session was last controlled from another Mac (its owner is set and isn't this install).
     var isActiveSessionOnAnotherMac: Bool {
         guard let owner = activeSession?.ownerDeviceID, !owner.isEmpty else { return false }
@@ -71,6 +92,8 @@ final class SessionEngine {
 
     private let context: ModelContext
     private let settings: AppSettings
+    /// The current profile (nil in tests that don't use profiles: everything then behaves as before profiles).
+    private let profiles: ProfileStore?
     private var defaults: UserDefaults { settings.defaults }
     /// Identity of the pending session, captured when it is set, so reconcile never has to touch a model
     /// object that may have been deleted underneath us (import/replace, remote deletion).
@@ -86,9 +109,10 @@ final class SessionEngine {
     /// The pending (ended) session discarded from the end sheet; deleted by `finishPendingDiscard()`.
     @ObservationIgnored private var pendingDiscardUUID: UUID?
 
-    init(context: ModelContext, settings: AppSettings) {
+    init(context: ModelContext, settings: AppSettings, profiles: ProfileStore? = nil) {
         self.context = context
         self.settings = settings
+        self.profiles = profiles
         if let stored = settings.defaults.string(forKey: Self.deviceIDKey), !stored.isEmpty {
             deviceID = stored
         } else {
@@ -234,9 +258,10 @@ final class SessionEngine {
         currentSegment?.activeDuration(at: date) ?? 0
     }
 
-    /// Sum of activeDuration(in: today) over all sessions overlapping today (fetch startedAt >= today−2d, filter in
-    /// memory). The active session is always included, even if it started earlier.
-    func totalActiveToday(now: Date = .now) -> TimeInterval {
+    /// Sum of activeDuration(in: today) over the sessions in `scope` overlapping today (fetch startedAt >= today−2d,
+    /// filter in memory). The active session is included when it is in scope, even if it started earlier.
+    /// `scope` defaults to .allProfiles.
+    func totalActiveToday(now: Date = .now, scope: ProfileScope = .allProfiles) -> TimeInterval {
         let today = now.dayInterval
         let cutoff = Calendar.current.date(byAdding: .day, value: -2, to: today.start)
             ?? today.start.addingTimeInterval(-2 * 86_400)
@@ -245,14 +270,24 @@ final class SessionEngine {
         if let active = activeSession, !sessions.contains(where: { $0 === active }) {
             sessions.append(active)
         }
-        return sessions.reduce(0) { $0 + $1.activeDuration(in: today, now: now) }
+        return scope.filter(sessions).reduce(0) { $0 + $1.activeDuration(in: today, now: now) }
     }
 
-    /// Label with uuid == settings.defaultLabelID (non-archived), else first non-archived by sortIndex, else nil.
-    func defaultLabel() -> WorkLabel? {
+    /// profile nil → profiles?.activeProfile. Candidates: non-archived labels offered in that profile
+    /// (ProfileScope(profileID:)), by sortIndex. Preference: profile.defaultLabelUUID; when no profile at all, legacy
+    /// settings.defaultLabelID; else first.
+    func defaultLabel(for profile: WorkProfile? = nil) -> WorkLabel? {
+        let target = ModelLiveness.live(profile) ?? ModelLiveness.live(profiles?.activeProfile)
+        let scope = ProfileScope(profileID: target?.uuid)
         let descriptor = FetchDescriptor<WorkLabel>(sortBy: [SortDescriptor(\WorkLabel.sortIndex)])
-        let labels = ((try? context.fetch(descriptor)) ?? []).filter { !$0.isArchived }
-        if let id = settings.defaultLabelID, let match = labels.first(where: { $0.uuid == id }) {
+        let labels = ((try? context.fetch(descriptor)) ?? []).filter { scope.offers($0) && !$0.isArchived }
+        let preferred: UUID?
+        if let target {
+            preferred = target.defaultLabelUUID
+        } else {
+            preferred = settings.defaultLabelID   // legacy: no profile at all
+        }
+        if let id = preferred, let match = labels.first(where: { $0.uuid == id }) {
             return match
         }
         return labels.first
@@ -260,23 +295,44 @@ final class SessionEngine {
 
     // MARK: - Controls
 
-    /// If a session is already active, returns it unchanged. Otherwise inserts a WorkSession(startedAt: date),
-    /// sets session.label = label, session.tags = tags, inserts first Segment(sortIndex 0, label, focus, tags: []),
-    /// saves, clears autoPauseReason, starts tick.
+    /// If a session is already active, returns it unchanged. Otherwise inserts a WorkSession(startedAt: date) in
+    /// the resolved profile (profile nil → profiles?.activeProfile when live & non-archived, else nil), sets
+    /// session.label = label, session.tags = tags, inserts first Segment(sortIndex 0, label, focus, tags: []),
+    /// saves, clears autoPauseReason, starts tick. A label not offered in that profile is replaced by
+    /// defaultLabel(for:); tags not offered there are dropped.
     @discardableResult
-    func start(label: WorkLabel?, tags: [WorkTag] = [], focus: String = "", at date: Date = .now) -> WorkSession {
+    func start(label: WorkLabel?, tags: [WorkTag] = [], focus: String = "", at date: Date = .now,
+               profile: WorkProfile? = nil) -> WorkSession {
         if let session = activeSession { return session }
+
+        let resolvedProfile: WorkProfile?
+        if let given = ModelLiveness.live(profile) {
+            resolvedProfile = given
+        } else if let current = ModelLiveness.live(profiles?.activeProfile), !current.isArchived {
+            resolvedProfile = current
+        } else {
+            resolvedProfile = nil
+        }
+        let scope = ProfileScope(profileID: resolvedProfile?.uuid)
+        let resolvedLabel: WorkLabel?
+        if let label {
+            resolvedLabel = scope.offers(label) ? label : defaultLabel(for: resolvedProfile)
+        } else {
+            resolvedLabel = nil
+        }
+        let resolvedTags = tags.filter { scope.offers($0) }
 
         let session = WorkSession(startedAt: date)
         context.insert(session)
         session.ownerDeviceID = deviceID
-        session.label = label
-        session.tags = tags
+        session.profile = resolvedProfile
+        session.label = resolvedLabel
+        session.tags = resolvedTags
         rememberTakeawaySource(for: session)
 
         let segment = Segment(startedAt: date, endedAt: nil, sortIndex: 0, focus: focus.trimmed)
         context.insert(segment)
-        segment.label = label
+        segment.label = resolvedLabel
         segment.tags = []
         segment.session = session
 
@@ -503,28 +559,36 @@ final class SessionEngine {
         refreshTakeaway()
     }
 
+    /// Rebuilds `takeaways`: per profile uuid, the newest candidate (fetch limit 200) wins. Assigns only on change.
     func refreshTakeaway() {
         var descriptor = FetchDescriptor<WorkSession>(
             predicate: #Predicate<WorkSession> { $0.endedAt != nil && $0.showInOverlay == true },
             sortBy: [SortDescriptor(\WorkSession.startedAt, order: .reverse)]
         )
-        descriptor.fetchLimit = 50
+        descriptor.fetchLimit = 200
         let candidates = (try? context.fetch(descriptor)) ?? []
-        var newValue: SessionTakeaway?
+        var newValue: [UUID?: SessionTakeaway] = [:]
         for session in candidates where session !== pendingEndSession && !session.isDeleted
             && !discardingUUIDs.contains(session.uuid) {
-            guard let text = session.takeawayText else { continue }
-            newValue = SessionTakeaway(sessionUUID: session.uuid, title: session.displayTitle,
-                                       date: session.startedAt, text: text, labelName: session.label?.name)
-            break
+            let key: UUID? = ModelLiveness.live(session.profile)?.uuid
+            guard newValue[key] == nil, let text = session.takeawayText else { continue }
+            newValue[key] = SessionTakeaway(sessionUUID: session.uuid, title: session.displayTitle,
+                                            date: session.startedAt, text: text,
+                                            labelName: ModelLiveness.live(session.label)?.name, profileID: key)
         }
-        if newValue != lastTakeaway { lastTakeaway = newValue }
+        if newValue != takeaways { takeaways = newValue }
     }
 
-    /// "Done" on a takeaway: turns off showInOverlay on the shown takeaway's session (and on older sessions that would
-    /// otherwise resurface in its place), saves, refreshTakeaway().
-    func dismissTakeaway() {
-        guard let takeaway = lastTakeaway else { return }
+    /// The latest takeaway of that profile (nil = unassigned sessions).
+    func takeaway(for profileID: UUID?) -> SessionTakeaway? {
+        takeaways[profileID]
+    }
+
+    /// "Done" on a takeaway (nil → lastTakeaway): turns off showInOverlay on its session (and on older sessions of
+    /// the same profile that would otherwise resurface in its place), saves, refreshTakeaway(). Other profiles'
+    /// takeaways are untouched.
+    func dismissTakeaway(_ takeaway: SessionTakeaway? = nil) {
+        guard let takeaway = takeaway ?? lastTakeaway else { return }
         if let source = fetchSession(uuid: takeaway.sessionUUID) {
             retireTakeaways(through: source)
             source.touch()
@@ -620,7 +684,7 @@ final class SessionEngine {
     /// Records which takeaway was on screen when `session` started, so its review can retire it.
     private func rememberTakeawaySource(for session: WorkSession) {
         refreshTakeaway()
-        if let source = lastTakeaway?.sessionUUID {
+        if let source = takeaway(for: ModelLiveness.live(session.profile)?.uuid)?.sessionUUID {
             defaults.set(session.uuid.uuidString, forKey: Self.takeawayConsumerKey)
             defaults.set(source.uuidString, forKey: Self.takeawaySourceKey)
         } else {
@@ -640,17 +704,19 @@ final class SessionEngine {
         retireTakeaways(through: source)
     }
 
-    /// showInOverlay = false on `source` and on every older ended session that still has it on (so dismissing or
-    /// retiring a takeaway never brings back an older one).
+    /// showInOverlay = false on `source` and on every older ended session OF THE SAME PROFILE that still has it on (so
+    /// dismissing or retiring a takeaway never brings back an older one). Filtered by profile in memory.
     private func retireTakeaways(through source: WorkSession) {
         if source.showInOverlay { source.showInOverlay = false }
         let cutoff = source.startedAt
+        let sourceProfileID = ModelLiveness.live(source.profile)?.uuid
         var descriptor = FetchDescriptor<WorkSession>(
             predicate: #Predicate<WorkSession> { $0.endedAt != nil && $0.showInOverlay == true && $0.startedAt <= cutoff }
         )
         descriptor.fetchLimit = 500
         let older = (try? context.fetch(descriptor)) ?? []
-        for session in older where !session.isDeleted && session !== pendingEndSession {
+        for session in older where !session.isDeleted && session !== pendingEndSession
+            && ModelLiveness.live(session.profile)?.uuid == sourceProfileID {
             session.showInOverlay = false
         }
     }

@@ -254,7 +254,7 @@ final class ExportRoundTripTests: XCTestCase {
         XCTAssertEqual(archive.sessions.count, 1)
         XCTAssertEqual(archive.sessions.first?.segments.count, 2)
         let text = try XCTUnwrap(String(data: data, encoding: .utf8))
-        XCTAssertTrue(text.contains("\"formatVersion\" : 1"), "pretty-printed, sorted keys")
+        XCTAssertTrue(text.contains("\"formatVersion\" : 2"), "pretty-printed, sorted keys")
     }
 
     // MARK: - Guards & errors
@@ -310,7 +310,7 @@ final class ExportRoundTripTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: url) }
         try exporter.exportSessionsCSV(to: url)
         let text = try String(contentsOf: url, encoding: .utf8)
-        let header = "id,title,label,tags,startedAt,endedAt,activeMinutes,pausedMinutes,segmentCount,noteCount,learningPointCount,learningText"
+        let header = "id,title,label,tags,startedAt,endedAt,activeMinutes,pausedMinutes,segmentCount,noteCount,learningPointCount,learningText,profile"
         XCTAssertTrue(text.hasPrefix(header + "\r\n"))
         XCTAssertTrue(text.contains("\"Overlay, \"\"polish\"\"\nday\""), "RFC 4180 quoting")
         XCTAssertTrue(text.contains(",70.00,5.00,2,1,1,"), "active/paused minutes and counts")
@@ -319,7 +319,7 @@ final class ExportRoundTripTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: segmentsURL) }
         try exporter.exportSegmentsCSV(to: segmentsURL)
         let segmentsText = try String(contentsOf: segmentsURL, encoding: .utf8)
-        XCTAssertTrue(segmentsText.hasPrefix("sessionID,sessionTitle,segmentID,index,startedAt,endedAt,activeMinutes,label,tags,focus\r\n"))
+        XCTAssertTrue(segmentsText.hasPrefix("sessionID,sessionTitle,segmentID,index,startedAt,endedAt,activeMinutes,label,tags,focus,profile\r\n"))
         XCTAssertEqual(segmentsText.components(separatedBy: "\r\n").filter { !$0.isEmpty }.count, 3)
     }
 
@@ -378,5 +378,154 @@ final class ExportRoundTripTests: XCTestCase {
         XCTAssertTrue(longSnippet.text.contains("needle"))
         XCTAssertTrue(longSnippet.text.hasPrefix("…"))
         XCTAssertTrue(longSnippet.text.hasSuffix("…"))
+    }
+}
+
+// MARK: - Profiles (format v2)
+
+extension ExportRoundTripTests {
+    /// A hand-written format-1 archive (no profile keys anywhere).
+    private static let v1JSON = """
+    {
+      "formatVersion": 1,
+      "exportedAt": "2026-06-10T12:00:00Z",
+      "appVersion": "1.0",
+      "includesAttachments": false,
+      "labels": [
+        { "id": "11111111-0000-4000-8000-000000000001", "name": "Deep work", "colorHex": "#5B8DEF",
+          "symbolName": "brain.head.profile", "sortIndex": 0, "isArchived": false, "createdAt": "2026-06-01T08:00:00Z" }
+      ],
+      "tags": [
+        { "id": "11111111-0000-4000-8000-000000000002", "name": "coding", "colorHex": "#8E8E93",
+          "isArchived": false, "createdAt": "2026-06-01T08:00:00Z" }
+      ],
+      "sessions": [
+        { "id": "11111111-0000-4000-8000-000000000003", "title": "Old session",
+          "startedAt": "2026-06-10T09:00:00Z", "endedAt": "2026-06-10T10:00:00Z", "pauseIntervals": [],
+          "labelID": "11111111-0000-4000-8000-000000000001", "tagIDs": ["11111111-0000-4000-8000-000000000002"],
+          "learningText": "", "overlaySummary": "", "showInOverlay": false,
+          "createdAt": "2026-06-10T09:00:00Z", "modifiedAt": "2026-06-10T10:00:00Z",
+          "segments": [
+            { "id": "11111111-0000-4000-8000-000000000004", "startedAt": "2026-06-10T09:00:00Z",
+              "endedAt": "2026-06-10T10:00:00Z", "sortIndex": 0, "focus": "",
+              "labelID": "11111111-0000-4000-8000-000000000001", "tagIDs": [] }
+          ],
+          "notes": [], "attachments": [], "learningPoints": [] }
+      ]
+    }
+    """
+
+    @MainActor
+    func testV2RoundTripKeepsProfilesAndScopes() throws {
+        let sourceContext = try TestSupport.makeContext()
+        let source = try populate(sourceContext)
+        let personal = WorkProfile(name: "Personal", colorHex: "#27AE60", symbolName: "house.fill", sortIndex: 1)
+        sourceContext.insert(personal)
+        personal.defaultLabelUUID = source.label?.uuid
+        let local = WorkLabel(name: "Errands", sortIndex: 5)
+        sourceContext.insert(local)
+        local.profile = personal
+        let localTag = WorkTag(name: "family")
+        sourceContext.insert(localTag)
+        localTag.profile = personal
+        source.profile = personal
+        try sourceContext.save()
+
+        let archive = try ExportService(container: sourceContext.container).makeArchive(includeAttachments: false)
+        XCTAssertEqual(archive.formatVersion, 2)
+        XCTAssertEqual(archive.profiles?.map(\.id), [personal.uuid])
+        let data = try ExportArchive.makeEncoder().encode(archive)
+
+        let destinationContext = try TestSupport.makeContext()
+        let summary = try ExportService(container: destinationContext.container)
+            .importArchive(try ExportService.decodeArchive(from: data), mode: .replace)
+        XCTAssertEqual(summary.profiles, 1)
+        XCTAssertTrue(summary.description.hasSuffix(", 1 profile."))
+
+        let profiles = ProfileOps.allProfiles(in: destinationContext)
+        XCTAssertEqual(profiles.map(\.uuid), [personal.uuid], "no extra default profile")
+        let copy = try XCTUnwrap(profiles.first)
+        XCTAssertEqual(copy.name, "Personal")
+        XCTAssertEqual(copy.symbolName, "house.fill")
+        XCTAssertEqual(copy.defaultLabelUUID, source.label?.uuid)
+        let labels = try destinationContext.fetch(FetchDescriptor<WorkLabel>())
+        XCTAssertTrue(labels.first { $0.name == "Errands" }?.profile === copy, "local scope kept")
+        XCTAssertNil(labels.first { $0.name == "Deep work" }?.profile, "global scope kept")
+        let tags = try destinationContext.fetch(FetchDescriptor<WorkTag>())
+        XCTAssertTrue(tags.first { $0.name == "family" }?.profile === copy)
+        let session = try XCTUnwrap(try destinationContext.fetch(FetchDescriptor<WorkSession>()).first)
+        XCTAssertTrue(session.profile === copy)
+    }
+
+    @MainActor
+    func testV1ArchiveImportsIntoHomeProfile() throws {
+        let archive = try ExportService.decodeArchive(from: Data(Self.v1JSON.utf8))
+        XCTAssertEqual(archive.formatVersion, 1)
+        XCTAssertNil(archive.profiles)
+        XCTAssertNil(archive.sessions.first?.profileID)
+
+        let context = try TestSupport.makeContext()
+        let work = try XCTUnwrap(ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: nil, in: context))
+        try context.save()
+        let summary = try ExportService(container: context.container).importArchive(archive, mode: .merge)
+        XCTAssertEqual(summary.profiles, 0)
+        XCTAssertEqual(summary.description, "Imported 1 session (0 updated), 1 label, 1 tag.")
+
+        let session = try XCTUnwrap(try context.fetch(FetchDescriptor<WorkSession>()).first)
+        XCTAssertTrue(session.profile === work, "v1 sessions land in the home profile")
+        XCTAssertNil(try context.fetch(FetchDescriptor<WorkLabel>()).first?.profile, "labels become global")
+        XCTAssertNil(try context.fetch(FetchDescriptor<WorkTag>()).first?.profile, "tags become global")
+    }
+
+    @MainActor
+    func testReplaceWithV1ArchiveRecreatesDefaultProfile() throws {
+        let context = try TestSupport.makeContext()
+        let personal = WorkProfile(name: "Personal")
+        context.insert(personal)
+        try context.save()
+
+        let archive = try ExportService.decodeArchive(from: Data(Self.v1JSON.utf8))
+        _ = try ExportService(container: context.container).importArchive(archive, mode: .replace)
+        let profiles = ProfileOps.allProfiles(in: context)
+        XCTAssertEqual(profiles.map(\.uuid), [ProfileOps.defaultProfileUUID])
+        let session = try XCTUnwrap(try context.fetch(FetchDescriptor<WorkSession>()).first)
+        XCTAssertTrue(session.profile === profiles.first)
+    }
+
+    @MainActor
+    func testDeleteAllRecreatesDefaultProfile() throws {
+        let context = try TestSupport.makeContext()
+        _ = try populate(context)
+        context.insert(WorkProfile(name: "Personal"))
+        try context.save()
+        try ExportService(container: context.container).deleteAllData()
+        XCTAssertEqual(ProfileOps.allProfiles(in: context).map(\.uuid), [ProfileOps.defaultProfileUUID])
+    }
+
+    @MainActor
+    func testFormatVersion3IsRejected() throws {
+        let json = #"{"formatVersion": 3, "exportedAt": "2026-10-07T10:00:00Z"}"#
+        XCTAssertThrowsError(try ExportService.decodeArchive(from: Data(json.utf8))) { error in
+            guard case DataTransferError.unsupportedVersion(let version) = error else {
+                return XCTFail("unexpected \(error)")
+            }
+            XCTAssertEqual(version, 3)
+        }
+    }
+
+    @MainActor
+    func testCSVProfileColumn() throws {
+        let context = try TestSupport.makeContext()
+        let session = try populate(context)
+        let personal = WorkProfile(name: "Personal")
+        context.insert(personal)
+        session.profile = personal
+        try context.save()
+        let url = temporaryURL("csv")
+        defer { try? FileManager.default.removeItem(at: url) }
+        try ExportService(container: context.container).exportSessionsCSV(to: url)
+        let rows = try String(contentsOf: url, encoding: .utf8).components(separatedBy: "\r\n")
+        XCTAssertTrue(rows.first?.hasSuffix(",learningText,profile") ?? false)
+        XCTAssertTrue(try String(contentsOf: url, encoding: .utf8).contains(",Personal\r\n"))
     }
 }

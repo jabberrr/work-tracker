@@ -313,6 +313,11 @@ private struct DetailSegmentEditor: View {
         }
     }
 
+    /// Labels and tags offered here are the session's profile's.
+    private var profileID: UUID? {
+        ModelLiveness.live(ModelLiveness.live(segment.session)?.profile)?.uuid
+    }
+
     private var editor: some View {
         VStack(alignment: .leading, spacing: theme.spacingM) {
             Text("Edit segment")
@@ -331,7 +336,7 @@ private struct DetailSegmentEditor: View {
             }
 
             VStack(alignment: .leading, spacing: theme.spacingXS) {
-                LabelPicker(selection: $segment.label, includeNone: true, title: "Label")
+                LabelPicker(selection: $segment.label, includeNone: true, title: "Label", profileID: profileID)
                 Text("None uses the session’s label.")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textTertiary)
@@ -341,7 +346,7 @@ private struct DetailSegmentEditor: View {
                 Text("Tags")
                     .font(theme.calloutFont)
                     .foregroundStyle(theme.textSecondary)
-                TagPicker(selection: $segment.tagList, scopeLabel: segment.effectiveLabel)
+                TagPicker(selection: $segment.tagList, scopeLabel: segment.effectiveLabel, profileID: profileID)
             }
 
             HStack {
@@ -613,13 +618,13 @@ private struct DetailSplitSheet: View {
                 }
                 GridRow {
                     fieldLabel("Label")
-                    LabelPicker(selection: $label, includeNone: true, title: "Label")
+                    LabelPicker(selection: $label, includeNone: true, title: "Label", profileID: profileID)
                         .labelsHidden()
                         .fixedSize()
                 }
                 GridRow {
                     fieldLabel("Tags")
-                    TagPicker(selection: $tags, scopeLabel: label ?? session.label)
+                    TagPicker(selection: $tags, scopeLabel: label ?? session.label, profileID: profileID)
                 }
             }
 
@@ -662,6 +667,11 @@ private struct DetailSplitSheet: View {
             error = nil
         }
         .onChange(of: date) { _, _ in error = nil }
+    }
+
+    /// Labels and tags offered here are the session's profile's.
+    private var profileID: UUID? {
+        session.isDeleted || session.modelContext == nil ? nil : ModelLiveness.live(session.profile)?.uuid
     }
 
     /// "Before: 9:02 AM–9:40 AM (38m) · After: 9:40 AM–10:15 AM (35m)"

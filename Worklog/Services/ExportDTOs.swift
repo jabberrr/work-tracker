@@ -1,7 +1,10 @@
 import Foundation
 
+/// Format history: 1 = round 1–2; 2 = round 3 (profiles). Every v2 addition is optional, so v1 archives decode
+/// (synthesized Decodable uses decodeIfPresent for optionals): a v1 import puts sessions in the home profile and
+/// labels/tags become global.
 struct ExportArchive: Codable {
-    static let currentFormatVersion = 1
+    static let currentFormatVersion = 2
     var formatVersion: Int
     var exportedAt: Date
     var appVersion: String          // CFBundleShortVersionString
@@ -13,14 +16,24 @@ struct ExportArchive: Codable {
     /// `<id>.thumb.<ext>`) instead of base64 bytes in the JSON. nil = bytes (if any) are embedded. Older app versions
     /// ignore the key. `ExportService.decodeArchive(from: URL)` rehydrates the bytes from that folder.
     var attachmentStore: String? = nil
+    /// v2+. v2 always writes it (possibly []); nil when decoding a v1 archive.
+    var profiles: [ProfileDTO]? = nil
+}
+struct ProfileDTO: Codable, Hashable {
+    var id: UUID; var name: String; var colorHex: String; var symbolName: String; var sortIndex: Int
+    var isArchived: Bool; var createdAt: Date; var modifiedAt: Date; var defaultLabelID: UUID?
 }
 struct LabelDTO: Codable, Hashable {
     var id: UUID; var name: String; var colorHex: String; var symbolName: String
     var sortIndex: Int; var isArchived: Bool; var createdAt: Date
+    /// v2+: the profile the label is local to; nil = global.
+    var profileID: UUID? = nil
 }
 struct TagDTO: Codable, Hashable {
     var id: UUID; var name: String; var colorHex: String; var labelID: UUID?
     var isArchived: Bool; var createdAt: Date
+    /// v2+: the profile the tag is local to; nil = global.
+    var profileID: UUID? = nil
 }
 struct SessionDTO: Codable {
     var id: UUID; var title: String; var startedAt: Date; var endedAt: Date?
@@ -29,6 +42,8 @@ struct SessionDTO: Codable {
     var createdAt: Date; var modifiedAt: Date
     var segments: [SegmentDTO]; var notes: [NoteDTO]
     var attachments: [AttachmentDTO]; var learningPoints: [LearningPointDTO]
+    /// v2+: the session's profile; nil = unassigned (imported into the home profile).
+    var profileID: UUID? = nil
 }
 struct SegmentDTO: Codable {
     var id: UUID; var startedAt: Date; var endedAt: Date?; var sortIndex: Int

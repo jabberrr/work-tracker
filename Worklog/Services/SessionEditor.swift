@@ -214,6 +214,92 @@ enum SessionEditError: LocalizedError {
 
     // MARK: - Sessions
 
+    /// Moves `session` (ended or running) to `profile`. session.profile = profile; every label/tag referenced by the
+    /// session, its segments and its learning points that `profile` doesn't offer is replaced (no duplicates) by
+    /// TaxonomyOps.equivalentLabel/equivalentTag (a same-name item offered there, else a local copy). touch + save.
+    /// No-op when already there.
+    static func moveSession(_ session: WorkSession, to profile: WorkProfile, in context: ModelContext) {
+        guard ModelLiveness.isLive(session), ModelLiveness.isLive(profile) else { return }
+        guard ModelLiveness.live(session.profile) !== profile else { return }
+        session.profile = profile
+        let scope = ProfileScope(profileID: profile.uuid)
+
+        var labelMap: [PersistentIdentifier: WorkLabel] = [:]
+        var tagMap: [PersistentIdentifier: WorkTag] = [:]
+        func mappedLabel(_ label: WorkLabel) -> WorkLabel {
+            if scope.offers(label) { return label }
+            if let known = labelMap[label.persistentModelID] { return known }
+            let equivalent = TaxonomyOps.equivalentLabel(for: label, in: profile, in: context)
+            labelMap[label.persistentModelID] = equivalent
+            return equivalent
+        }
+        func mappedTags(_ tags: [WorkTag]) -> [WorkTag] {
+            var result: [WorkTag] = []
+            for tag in ModelLiveness.live(tags) {
+                let target: WorkTag
+                if scope.offers(tag) {
+                    target = tag
+                } else if let known = tagMap[tag.persistentModelID] {
+                    target = known
+                } else {
+                    target = TaxonomyOps.equivalentTag(for: tag, in: profile, in: context)
+                    tagMap[tag.persistentModelID] = target
+                }
+                if !result.contains(where: { $0 === target }) { result.append(target) }
+            }
+            return result
+        }
+        func needsMapping(_ tags: [WorkTag]) -> Bool {
+            ModelLiveness.live(tags).contains { !scope.offers($0) }
+        }
+
+        if let label = ModelLiveness.live(session.label), !scope.offers(label) {
+            session.label = mappedLabel(label)
+        }
+        if needsMapping(session.tagList) { session.tagList = mappedTags(session.tagList) }
+        for segment in liveSegments(of: session) {
+            if let label = ModelLiveness.live(segment.label), !scope.offers(label) {
+                segment.label = mappedLabel(label)
+            }
+            if needsMapping(segment.tagList) { segment.tagList = mappedTags(segment.tagList) }
+        }
+        for point in ModelLiveness.live(session.learningPoints ?? []) where needsMapping(point.tagList) {
+            point.tagList = mappedTags(point.tagList)
+        }
+        finish(session, in: context)
+    }
+
+    /// Display names of labels/tags moveSession would COPY (no same-name equivalent offered in `profile`), sorted, unique.
+    static func taxonomyCopiedByMove(of session: WorkSession, to profile: WorkProfile) -> [String] {
+        guard ModelLiveness.isLive(session), ModelLiveness.isLive(profile),
+              ModelLiveness.live(session.profile) !== profile,
+              let context = session.modelContext else { return [] }
+        let scope = ProfileScope(profileID: profile.uuid)
+        let segments = liveSegments(of: session)
+
+        var labels: [WorkLabel] = []
+        for candidate in [session.label] + segments.map(\.label) {
+            guard let label = ModelLiveness.live(candidate), !scope.offers(label),
+                  !labels.contains(where: { $0 === label }) else { continue }
+            labels.append(label)
+        }
+        var tags: [WorkTag] = []
+        let points = ModelLiveness.live(session.learningPoints ?? [])
+        for tag in session.tagList + segments.flatMap(\.tagList) + points.flatMap(\.tagList) {
+            guard ModelLiveness.isLive(tag), !scope.offers(tag), !tags.contains(where: { $0 === tag }) else { continue }
+            tags.append(tag)
+        }
+
+        var names = Set<String>()
+        for label in labels where TaxonomyOps.existingEquivalentLabel(for: label, in: profile, in: context) == nil {
+            names.insert(label.name.trimmed)
+        }
+        for tag in tags where TaxonomyOps.existingEquivalentTag(for: tag, in: profile, in: context) == nil {
+            names.insert(tag.name.trimmed)
+        }
+        return names.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+    }
+
     /// Throws .sessionIsActive for the active session (use engine.discard()).
     static func deleteSession(_ session: WorkSession, in context: ModelContext) throws {
         guard session.endedAt != nil else { throw SessionEditError.sessionIsActive }
