@@ -5,11 +5,12 @@ import SwiftUI
 /// Settings ▸ Overlay ▸ Layout: a real-size preview of the overlay (current theme, compact setting and opacity)
 /// with an edit mode in the spirit of iPhone Control Center, on the overlay's 6-column grid
 /// (`OverlayGridLayout`):
-/// - elements wiggle (a dashed outline under Reduce Motion) and carry a small top-trailing (−) badge
+/// - elements show their cell's extent, wiggle (a dashed outline under Reduce Motion) and carry a small
+///   top-trailing (−) badge, always the topmost (clickable) layer
 /// - drag an element anywhere: a floating copy follows the pointer, a dashed ghost shows the cell it snaps to and
 ///   the elements it would push down are dimmed. Dropping on occupied columns pushes those elements into a new
 ///   row below; dropping under the last row creates a row; releasing far outside the panel cancels
-/// - drag the trailing-edge handle to resize in column steps (clamped to `minSpan` and the right neighbour)
+/// - drag the bottom-trailing handle to resize in column steps (clamped to `minSpan` and the right neighbour)
 /// - (+) adds a hidden element to the first free cell
 /// - keyboard (focused element): arrows move, ⇧← / ⇧→ narrower / wider, ⌫ / ⌦ remove
 /// - context menu and accessibility actions: Move Left / Right / Up / Down, Wider, Narrower, Remove
@@ -460,8 +461,8 @@ private struct OverlayGridDragPreview {
 
 // MARK: - Editable element
 
-/// Edit-mode chrome around one element: wiggle, (−) badge, move drag, resize handle, keyboard, context menu and
-/// accessibility actions. Outside edit mode it is inert (the element ignores hits and there is no hit area).
+/// Edit-mode chrome around one element: cell extent, wiggle, move drag, resize handle, (−) badge (topmost),
+/// keyboard, context menu and accessibility actions. Outside edit mode it is inert (the element ignores hits and there is no hit area).
 @MainActor
 private struct OverlayEditableElement: View {
     @Environment(\.theme) private var theme
@@ -517,79 +518,105 @@ private struct OverlayEditableElement: View {
     private var isFocused: Bool { focus.wrappedValue == element }
 
     var body: some View {
-        content
-            .accessibilityElement(children: .ignore)
-            .accessibilityLabel(element.title)
-            .accessibilityValue(OverlayGridCopy.position(placement))
-            .accessibilityActions {
-                if isEditing {
-                    ForEach(directions, id: \.self) { direction in
-                        Button(direction.title) { onNudge(direction) }
-                    }
-                    if canWiden {
-                        Button("Wider") { onResize(1) }
-                    }
-                    if canNarrow {
-                        Button("Narrower") { onResize(-1) }
-                    }
-                    Button("Remove", action: onRemove)
-                }
-            }
-            // The element itself ignores hits; this transparent layer is what the drag and the context menu hit
-            // in edit mode. The focus ring wiggles with the element.
-            .overlay {
-                if isEditing {
-                    Color.clear
-                        .contentShape(Rectangle())
-                        .accessibilityHidden(true)
-                    if isFocused {
-                        RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
-                            .strokeBorder(theme.accent, lineWidth: 2)
-                            .padding(-3)
-                            .allowsHitTesting(false)
-                            .accessibilityHidden(true)
-                    }
-                }
-            }
-            .wiggle(isEditing && !isDragged, seed: seed)
-            .opacity(isDragged ? 0.35 : (isDimmed ? 0.5 : 1))
-            .contentShape(Rectangle())
-            .gesture(moveGesture, including: isEditing ? .all : .none)
-            .editRemoveBadge(isEditing, accessibilityLabel: "Remove \(element.title)", action: onRemove)
-            .overlay(alignment: .trailing) {
-                if isEditing {
-                    EditResizeHandle()
-                        .offset(x: EditResizeHandle.edgeOffset)
-                        .gesture(resizeGesture)
-                }
-            }
+        editChrome
             .focusable(isEditing)
             .focusEffectDisabled()
             .focused(focus, equals: element)
             .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .delete, .deleteForward]) { press in
                 handleKey(press)
             }
-            .contextMenu {
-                if isEditing {
-                    ForEach(OverlayGridDirection.allCases, id: \.self) { direction in
-                        Button(direction.title) { onNudge(direction) }
-                            .disabled(!directions.contains(direction))
-                    }
-                    Divider()
-                    Button("Wider") { onResize(1) }
-                        .disabled(!canWiden)
-                    Button("Narrower") { onResize(-1) }
-                        .disabled(!canNarrow)
-                    Divider()
-                    Button("Remove", role: .destructive, action: onRemove)
-                }
-            }
+            .contextMenu { contextMenuItems }
             .onChange(of: isMoving) { _, active in
                 if !active { dragWasCancelled(.move) }
             }
             .onChange(of: isResizing) { _, active in
                 if !active { dragWasCancelled(.resize) }
             }
+    }
+
+    /// The element with its cell extent, hit layer, focus ring and wiggle, then the move gesture, the resize
+    /// handle and, last (the topmost layer, so it is always clickable), the (−) badge.
+    private var editChrome: some View {
+        let dim: Double = isDragged ? 0.35 : (isDimmed ? 0.5 : 1)
+        return content
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(element.title)
+            .accessibilityValue(OverlayGridCopy.position(placement))
+            .accessibilityActions { accessibilityActionItems }
+            .background { cellExtent }
+            .overlay { hitLayer }
+            .wiggle(isEditing && !isDragged, seed: seed)
+            .opacity(dim)
+            .contentShape(Rectangle())
+            .gesture(moveGesture, including: isEditing ? .all : .none)
+            .editResizeHandle(isEditing, gesture: resizeGesture)
+            .editRemoveBadge(isEditing, accessibilityLabel: "Remove \(element.title)", action: onRemove)
+    }
+
+    /// Edit mode: the cell's extent (faint fill + separator stroke, 2 pt outside the element), so the badge and the
+    /// handle sit on visible cell corners. It wiggles with the element.
+    @ViewBuilder
+    private var cellExtent: some View {
+        if isEditing {
+            let shape = RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
+            shape
+                .fill(theme.textPrimary.opacity(0.05))
+                .overlay(shape.strokeBorder(theme.separator, lineWidth: 1))
+                .padding(-2)
+                .allowsHitTesting(false)
+                .accessibilityHidden(true)
+        }
+    }
+
+    /// The element itself ignores hits; this transparent layer is what the drag and the context menu hit in edit
+    /// mode. The focus ring wiggles with the element.
+    @ViewBuilder
+    private var hitLayer: some View {
+        if isEditing {
+            Color.clear
+                .contentShape(Rectangle())
+                .accessibilityHidden(true)
+            if isFocused {
+                RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
+                    .strokeBorder(theme.accent, lineWidth: 2)
+                    .padding(-3)
+                    .allowsHitTesting(false)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var accessibilityActionItems: some View {
+        if isEditing {
+            ForEach(directions, id: \.self) { direction in
+                Button(direction.title) { onNudge(direction) }
+            }
+            if canWiden {
+                Button("Wider") { onResize(1) }
+            }
+            if canNarrow {
+                Button("Narrower") { onResize(-1) }
+            }
+            Button("Remove", action: onRemove)
+        }
+    }
+
+    @ViewBuilder
+    private var contextMenuItems: some View {
+        if isEditing {
+            ForEach(OverlayGridDirection.allCases, id: \.self) { direction in
+                Button(direction.title) { onNudge(direction) }
+                    .disabled(!directions.contains(direction))
+            }
+            Divider()
+            Button("Wider") { onResize(1) }
+                .disabled(!canWiden)
+            Button("Narrower") { onResize(-1) }
+                .disabled(!canNarrow)
+            Divider()
+            Button("Remove", role: .destructive, action: onRemove)
+        }
     }
 
     // MARK: Gestures (in the "overlayGrid" space, like the row frames and the drag layer)

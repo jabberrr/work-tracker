@@ -73,6 +73,47 @@ final class OverlayPanelController {
     func hide() { settings.overlayEnabled = false }    // settings.overlayEnabled = false
     func toggle() { settings.overlayEnabled.toggle() }
 
+    // MARK: - Keyboard focus
+
+    // Clicking the overlay's note field (or opening Split) makes the non-activating panel key, so typing goes there
+    // without activating Worklog. Once the user is done (Esc, Return, a split committed or cancelled) the panel
+    // must give the keyboard back, or keystrokes meant for the frontmost app land in the overlay (and beep).
+
+    /// Makes the panel key so a field in it takes typing right away. Does not activate Worklog.
+    func makePanelKey() {
+        guard let panel, panel.isVisible else { return }
+        panel.makeKey()
+    }
+
+    /// Ends editing in the panel and gives up key status: to a Worklog window when Worklog is active and has one
+    /// that can take the keyboard; otherwise back to the frontmost app (deactivating Worklog first when it is
+    /// active with nothing else to type into). Runs on the next main-actor turn (callers are inside a key event).
+    func releaseKeyFocus() {
+        Task { @MainActor [weak self] in
+            guard let panel = self?.panel, panel.isKeyWindow else { return }
+            panel.makeFirstResponder(nil)
+            if NSApp.isActive {
+                let window = NSApp.windows.first { candidate in
+                    candidate !== panel && !(candidate is NSPanel) && candidate.isVisible && candidate.canBecomeKey
+                }
+                if let window {
+                    window.makeKey()
+                    return
+                }
+                // Active, but no Worklog window should take the keyboard: hand it back to the previous app.
+                NSApp.deactivate()
+            }
+            guard panel.isVisible else { return }
+            // Another app is frontmost: the window server keeps routing keys to this panel until it leaves the
+            // window list, so take it out and straight back in (no animation; it never becomes key on its own).
+            let animation = panel.animationBehavior
+            panel.animationBehavior = .none
+            panel.orderOut(nil)
+            panel.orderFrontRegardless()
+            panel.animationBehavior = animation
+        }
+    }
+
     // MARK: - Private
 
     private func observe() {

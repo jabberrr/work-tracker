@@ -298,7 +298,7 @@ struct LiveActivePane: View {
             } message: {
                 Text("Its notes, images and time will be deleted.")
             }
-            .liveChildSheet(isPresented: confirmDiscard)
+            .countsAsChildSheet(isPresented: confirmDiscard)
         }
     }
 
@@ -416,20 +416,26 @@ struct LiveActivePane: View {
         }
     }
 
+    /// Drops and pastes import like the open panel: downscaling and encoding run off the main thread and the
+    /// importer re-checks the session before inserting.
     private func dropImages(_ providers: [NSItemProvider]) {
         let target = session
         let context = modelContext
         Task { @MainActor in
             let images = await AttachmentImporter.loadImages(from: providers)
             guard !images.isEmpty, ModelLiveness.isLive(target) else { return }
-            AttachmentImporter.add(images, to: target, in: context)
+            _ = await AttachmentImporter.addInBackground(images, to: target, in: context)
         }
     }
 
     private func pasteImages() {
         let images = AttachmentImporter.imagesFromPasteboard()
         guard !images.isEmpty, ModelLiveness.isLive(session) else { return }
-        AttachmentImporter.add(images, to: session, in: modelContext)
+        let target = session
+        let context = modelContext
+        Task { @MainActor in
+            _ = await AttachmentImporter.addInBackground(images, to: target, in: context)
+        }
     }
 
     // MARK: Router requests

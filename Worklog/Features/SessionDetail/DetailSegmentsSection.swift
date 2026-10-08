@@ -85,6 +85,7 @@ struct DetailSegmentsSection: View {
                 .onAppear { router?.childSheetDidAppear() }
                 .onDisappear { router?.childSheetDidDisappear() }
         }
+        .countsAsChildSheet(isPresented: deleteCandidate != nil)
         .confirmationDialog("Delete this segment?",
                             isPresented: Binding(get: { deleteCandidate != nil },
                                                  set: { if !$0 { deleteCandidate = nil } }),
@@ -95,6 +96,7 @@ struct DetailSegmentsSection: View {
         } message: { _ in
             Text("Its time and notes go to the neighbouring segment.")
         }
+        .countsAsChildSheet(isPresented: errorMessage != nil)
         .alert("Couldn’t change the segments",
                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }

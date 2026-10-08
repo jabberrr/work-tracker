@@ -10,7 +10,7 @@ import SwiftUI
 /// Focus: the panel is borderless + `.nonactivatingPanel`, `canBecomeKey == true` and
 /// `becomesKeyOnlyIfNeeded == true`, so clicking a text field makes it key (typing works) without
 /// activating Worklog; buttons work without taking key status. Esc / Return in the note field and closing the
-/// split form give key status back (`OverlayKeyFocus.release()`).
+/// split form give key status back (`OverlayPanelController.releaseKeyFocus()`).
 ///
 /// Profiles: like the menu bar, everything follows the *panel profile*: the running session's profile while
 /// active, else the quick start profile. Start, the takeaway and today's total use it; the header names it when
@@ -100,7 +100,7 @@ struct OverlayView: View {
             stop: { stop() },
             start: { start() },
             review: { router.requestReview() },
-            releaseKey: { OverlayKeyFocus.release() },
+            releaseKey: { overlay.releaseKeyFocus() },
             keepGoing: { keepGoing() }
         )
     }
@@ -116,62 +116,27 @@ struct OverlayView: View {
         if isSplitting {
             // Make the (non-activating) panel key so the split form's focus field takes typing right away.
             // This does not activate Worklog.
-            OverlayKeyFocus.panel?.makeKey()
+            overlay.makePanelKey()
         } else {
-            OverlayKeyFocus.release()
+            overlay.releaseKeyFocus()
         }
     }
 
     /// Split committed or cancelled: close the form and hand the keyboard back.
     private func endSplit() {
         isSplitting = false
-        OverlayKeyFocus.release()
+        overlay.releaseKeyFocus()
     }
 
     /// The single stop path (brings the main window forward when a review is pending).
     private func stop() {
         isSplitting = false
-        OverlayKeyFocus.release()
+        overlay.releaseKeyFocus()
         router.stopSession(engine)
     }
 
     private func keepGoing() {
         guard let session = ModelLiveness.live(engine.activeSession) else { return }
         engine.dismissLongSessionWarning(for: session)
-    }
-}
-
-/// Keyboard focus of the floating overlay panel. Clicking its note field (or opening Split) makes the
-/// non-activating panel key, so typing goes there without activating Worklog. Once the user is done (Esc, Return,
-/// a split committed or cancelled) the panel must give the keyboard back, or keystrokes meant for the frontmost
-/// app land in the overlay (and beep).
-@MainActor
-enum OverlayKeyFocus {
-    static var panel: OverlayPanel? {
-        NSApp.windows.lazy.compactMap { $0 as? OverlayPanel }.first
-    }
-
-    /// Ends editing in the panel and gives up key status: to Worklog's main window when Worklog is the active app,
-    /// else back to the frontmost app. Runs on the next main-actor turn (callers are inside a key event).
-    static func release() {
-        Task { @MainActor in
-            guard let panel = Self.panel, panel.isKeyWindow else { return }
-            panel.makeFirstResponder(nil)
-            if NSApp.isActive,
-               let window = NSApp.windows.first(where: { $0 !== panel && !($0 is NSPanel) && $0.isVisible
-                                                         && $0.canBecomeKey }) {
-                window.makeKey()
-                return
-            }
-            panel.resignKey()
-            guard !NSApp.isActive, panel.isVisible else { return }
-            // Another app is frontmost: the window server keeps routing keys to this panel until it leaves the
-            // window list, so take it out and straight back in (no animation; it never becomes key on its own).
-            let animation = panel.animationBehavior
-            panel.animationBehavior = .none
-            panel.orderOut(nil)
-            panel.orderFrontRegardless()
-            panel.animationBehavior = animation
-        }
     }
 }

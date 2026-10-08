@@ -31,6 +31,15 @@ struct SettingsLabelEditor: View {
     /// The safety backup before a merge or scope change failed (nothing was changed).
     @State private var safetyError: String?
 
+    init(label: WorkLabel, allLabels: [WorkLabel], offeredLabels: [WorkLabel],
+         onDeleted: @escaping () -> Void, onMerged: @escaping (WorkLabel) -> Void) {
+        self._label = Bindable(wrappedValue: label)
+        self.allLabels = allLabels
+        self.offeredLabels = offeredLabels
+        self.onDeleted = onDeleted
+        self.onMerged = onMerged
+    }
+
     /// Merge and delete targets that keep every session's labels offered in its profile.
     private var otherLabels: [WorkLabel] {
         TaxonomyOps.reassignmentTargets(for: label, among: ModelLiveness.live(allLabels))

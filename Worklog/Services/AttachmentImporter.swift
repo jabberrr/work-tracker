@@ -209,7 +209,8 @@ enum AttachmentImportError: LocalizedError {
         return results
     }
 
-    /// make + insert + link to session + touch + save. Skips failures, sets no error UI (returns successes).
+    /// make + insert + link to session + touch + save, synchronously on the main thread. Skips failures, sets no
+    /// error UI (returns successes). UI drops and pastes use `addInBackground(_:to:in:)` instead.
     @discardableResult
     static func add(_ images: [ImportedImage], to session: WorkSession, in context: ModelContext) -> [Attachment] {
         var created: [Attachment] = []
@@ -226,28 +227,23 @@ enum AttachmentImportError: LocalizedError {
         return created
     }
 
-    /// Open panel, then downscale/encode synchronously ON THE MAIN THREAD (the UI waits). Prefer the async overload
-    /// (`await addFromOpenPanel(to:in:)` from a Task), which does that work in the background.
+    /// Drop / paste: the images are downscaled and encoded off the main thread; the attachments are inserted, linked
+    /// and saved back on the main actor — only if `session` still exists by then (it may have been discarded or
+    /// deleted meanwhile). Failures are skipped and logged. Returns the created attachments.
+    /// (Named apart from the synchronous `add(_:to:in:)` so an `await` call can't resolve to the wrong one.)
     @discardableResult
-    static func addFromOpenPanel(to session: WorkSession, in context: ModelContext) -> [Attachment] {
-        var created: [Attachment] = []
-        for url in chooseImageFiles() {
-            do {
-                let attachment = try makeAttachment(fromFileAt: url)
-                insert(attachment, into: session, context: context)
-                created.append(attachment)
-            } catch {
-                Log.ui.error("Skipping file \(url.lastPathComponent, privacy: .private): \(error.localizedDescription, privacy: .public)")
-            }
-        }
-        finish(session, created: created, context: context)
-        return created
+    static func addInBackground(_ images: [ImportedImage], to session: WorkSession,
+                                in context: ModelContext) async -> [Attachment] {
+        guard !images.isEmpty else { return [] }
+        let prepared = await Task.detached(priority: .userInitiated) {
+            AttachmentImporter.prepareImages(images)
+        }.value
+        return insertPrepared(prepared, into: session, context: context)
     }
 
     /// Open panel (modal), then the images are downscaled and encoded off the main thread; the attachments are
     /// inserted, linked and saved back on the main actor — only if `session` still exists by then (it may have been
     /// discarded or deleted meanwhile). Failures are skipped and logged. Returns the created attachments.
-    /// (Overloads the synchronous version: called with `await`, from a Task.)
     @discardableResult
     static func addFromOpenPanel(to session: WorkSession, in context: ModelContext) async -> [Attachment] {
         let urls = chooseImageFiles()
@@ -255,15 +251,20 @@ enum AttachmentImportError: LocalizedError {
         let prepared = await Task.detached(priority: .userInitiated) {
             AttachmentImporter.prepareFiles(urls)
         }.value
-        guard !prepared.isEmpty, ModelLiveness.isLive(session) else { return [] }
-        var created: [Attachment] = []
-        for image in prepared {
-            let attachment = makeAttachment(image)
-            insert(attachment, into: session, context: context)
-            created.append(attachment)
+        return insertPrepared(prepared, into: session, context: context)
+    }
+
+    /// `prepare(imageData:filename:)` for each image, skipping (and logging) failures. Runs off the main thread.
+    nonisolated static func prepareImages(_ images: [ImportedImage]) -> [PreparedImage] {
+        var prepared: [PreparedImage] = []
+        for image in images {
+            do {
+                prepared.append(try prepare(imageData: image.data, filename: image.filename))
+            } catch {
+                Log.ui.error("Skipping image \(image.filename, privacy: .private): \(error.localizedDescription, privacy: .public)")
+            }
         }
-        finish(session, created: created, context: context)
-        return created
+        return prepared
     }
 
     /// `prepare(fileAt:)` for each URL, skipping (and logging) failures. Runs off the main thread.
@@ -300,6 +301,20 @@ enum AttachmentImportError: LocalizedError {
     }
 
     // MARK: - Private
+
+    /// Back on the main actor after preparing: insert + link + save, unless the session is gone by now.
+    private static func insertPrepared(_ prepared: [PreparedImage], into session: WorkSession,
+                                       context: ModelContext) -> [Attachment] {
+        guard !prepared.isEmpty, ModelLiveness.isLive(session) else { return [] }
+        var created: [Attachment] = []
+        for image in prepared {
+            let attachment = makeAttachment(image)
+            insert(attachment, into: session, context: context)
+            created.append(attachment)
+        }
+        finish(session, created: created, context: context)
+        return created
+    }
 
     private static func insert(_ attachment: Attachment, into session: WorkSession, context: ModelContext) {
         context.insert(attachment)

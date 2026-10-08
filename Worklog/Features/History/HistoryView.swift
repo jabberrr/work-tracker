@@ -95,6 +95,7 @@ struct HistoryView: View {
         .onChange(of: router.historyFilterResetRequest) { _, _ in
             clearFilters()
         }
+        .countsAsChildSheet(isPresented: pendingDelete != nil)
         .confirmationDialog("Delete this session?",
                             isPresented: Binding(get: { pendingDelete != nil },
                                                  set: { if !$0 { pendingDelete = nil } }),
@@ -105,6 +106,7 @@ struct HistoryView: View {
         } message: { _ in
             Text("This can’t be undone.")
         }
+        .countsAsChildSheet(isPresented: errorMessage != nil)
         .alert("Couldn’t delete the session",
                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }

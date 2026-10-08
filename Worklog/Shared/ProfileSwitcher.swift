@@ -197,8 +197,8 @@ private struct ProfileSwitcherList: View {
         entries.map { ProfileSwitcherRow.profile($0.id) } + [.create, .manage]
     }
 
-    /// One row: an 18 pt (× textScale) line + 2 × 4 pt padding + 1 pt spacing.
-    private var rowHeight: CGFloat { 18 * theme.textScale + 9 }
+    /// One row: its line (`profileMenuRowLineHeight`) + 2 × 4 pt padding + 1 pt spacing.
+    private var rowHeight: CGFloat { profileMenuRowLineHeight(theme.textScale) + 9 }
 
     /// The two actions, the divider (1 pt + its padding) and the container padding.
     private var actionsBlock: CGFloat {
@@ -247,25 +247,8 @@ private struct ProfileSwitcherList: View {
         .focusable()
         .focusEffectDisabled()
         .focused($listFocused)
-        .onKeyPress(.upArrow) {
-            move(by: -1)
-            return .handled
-        }
-        .onKeyPress(.downArrow) {
-            move(by: 1)
-            return .handled
-        }
-        .onKeyPress(.return) {
-            pickHighlighted()
-            return .handled
-        }
-        .onKeyPress(.space) {
-            pickHighlighted()
-            return .handled
-        }
-        .onKeyPress(.escape) {
-            onDismiss()
-            return .handled
+        .onKeyPress(keys: [.upArrow, .downArrow, .return, .space, .escape]) { press in
+            handleKey(press)
         }
         .onChange(of: entries) { _, _ in clampHighlight() }
         .onAppear {
@@ -340,6 +323,23 @@ private struct ProfileSwitcherList: View {
             .accessibilityHidden(true)
     }
 
+    /// ↑/↓ move the highlight, Return/Space pick it, Esc closes the list.
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        let key = press.key
+        if key == .upArrow {
+            move(by: -1)
+        } else if key == .downArrow {
+            move(by: 1)
+        } else if key == .return || key == .space {
+            pickHighlighted()
+        } else if key == .escape {
+            onDismiss()
+        } else {
+            return .ignored
+        }
+        return .handled
+    }
+
     private func move(by delta: Int) {
         let count = rows.count
         guard count > 0 else { return }
@@ -404,8 +404,14 @@ private struct ProfileSwitcherButtonBody: View {
     }
 }
 
-/// List row: highlight fill (hover or keyboard), pressed accent fill. The label is at least 18 pt (× textScale)
-/// tall, so every row is exactly `18 * textScale + 8` and the list's height math holds.
+/// A list row's line height: 18 pt × textScale, never below the 18 pt `ProfileSymbolTile` (which doesn't scale),
+/// so rows at small text sizes are as tall as the list's height math assumes.
+private func profileMenuRowLineHeight(_ textScale: CGFloat) -> CGFloat {
+    max(18, 18 * textScale)
+}
+
+/// List row: highlight fill (hover or keyboard), pressed accent fill. The label is at least
+/// `profileMenuRowLineHeight` tall, so every row is exactly that + 8 and the list's height math holds.
 private struct ProfileMenuRowStyle: ButtonStyle {
     let isHighlighted: Bool
 
@@ -422,7 +428,7 @@ private struct ProfileMenuRowBody: View {
     var body: some View {
         configuration.label
             .font(theme.bodyFont)
-            .frame(minHeight: 18 * theme.textScale)
+            .frame(minHeight: profileMenuRowLineHeight(theme.textScale))
             .padding(.horizontal, theme.spacingS)
             .padding(.vertical, 4)
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -433,5 +439,49 @@ private struct ProfileMenuRowBody: View {
                           : (isHighlighted ? theme.textPrimary.opacity(0.07) : Color.clear))
             )
             .contentShape(Rectangle())
+    }
+}
+
+// MARK: - Child sheet tracking (app-wide)
+
+// Lives here, next to the switcher's own child sheet (New Profile…), because a new source file would need the
+// Xcode project regenerated.
+
+extension View {
+    /// For a confirmation dialog or alert in the main window (a sheet on macOS, and a window shows one sheet at a
+    /// time): counts it in `router.childSheetDidAppear/Disappear` while it is up, so RootView holds the review sheet
+    /// back until it closes (or this view goes away, e.g. the session was stopped from the menu bar or deleted
+    /// elsewhere). A no-op without a `WindowRouter` in the environment (previews). Never use it inside the review
+    /// sheet itself.
+    func countsAsChildSheet(isPresented: Bool) -> some View {
+        modifier(ChildSheetCounter(isPresented: isPresented))
+    }
+}
+
+private struct ChildSheetCounter: ViewModifier {
+    @Environment(WindowRouter.self) private var router: WindowRouter?
+    private let isPresented: Bool
+    /// This view's share of `router.presentedChildSheets` (0 or 1), so appear/disappear always balance.
+    @State private var isCounted = false
+
+    init(isPresented: Bool) {
+        self.isPresented = isPresented
+    }
+
+    func body(content: Content) -> some View {
+        content
+            .onChange(of: isPresented, initial: true) { _, presented in update(presented) }
+            .onDisappear { update(false) }
+    }
+
+    private func update(_ presented: Bool) {
+        guard let router else { return }
+        if presented && !isCounted {
+            isCounted = true
+            router.childSheetDidAppear()
+        } else if !presented && isCounted {
+            isCounted = false
+            router.childSheetDidDisappear()
+        }
     }
 }

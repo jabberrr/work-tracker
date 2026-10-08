@@ -80,6 +80,7 @@ struct DetailAttachmentsSection: View {
                 .onAppear { router?.childSheetDidAppear() }
                 .onDisappear { router?.childSheetDidDisappear() }
         }
+        .countsAsChildSheet(isPresented: deleteCandidate != nil)
         .confirmationDialog("Delete this image?",
                             isPresented: Binding(get: { deleteCandidate != nil },
                                                  set: { if !$0 { deleteCandidate = nil } }),
@@ -178,7 +179,11 @@ struct DetailAttachmentsSection: View {
             importMessage = "The clipboard doesn’t contain an image."
             return
         }
-        add(images)
+        guard isAlive else { return }
+        isImporting = true
+        Task { @MainActor in
+            await add(images)
+        }
     }
 
     private func handleDrop(_ providers: [NSItemProvider]) -> Bool {
@@ -186,19 +191,24 @@ struct DetailAttachmentsSection: View {
         isImporting = true
         Task { @MainActor in
             let images = await AttachmentImporter.loadImages(from: providers)
-            isImporting = false
             if images.isEmpty {
+                isImporting = false
                 importMessage = "Only images can be attached."
             } else {
-                add(images)
+                await add(images)
             }
         }
         return true
     }
 
-    private func add(_ images: [ImportedImage]) {
+    /// Downscaling and encoding run off the main thread (`AttachmentImporter.addInBackground`), which re-checks the
+    /// session before inserting. Ends the importing state and reports unreadable images.
+    private func add(_ images: [ImportedImage]) async {
+        defer { isImporting = false }
         guard isAlive else { return }
-        let added = AttachmentImporter.add(images, to: session, in: context)
+        let target = session
+        let added = await AttachmentImporter.addInBackground(images, to: target, in: context)
+        guard ModelLiveness.isLive(target) else { return }
         let failed = images.count - added.count
         if failed > 0 {
             importMessage = failed == 1

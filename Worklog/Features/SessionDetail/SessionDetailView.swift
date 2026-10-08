@@ -87,6 +87,7 @@ struct SessionDetailView: View {
             save()
         }
         .onDisappear { save() }
+        .countsAsChildSheet(isPresented: confirmDelete)
         .confirmationDialog("Delete this session?",
                             isPresented: $confirmDelete,
                             titleVisibility: .visible) {
@@ -95,6 +96,7 @@ struct SessionDetailView: View {
         } message: {
             Text("This can’t be undone.")
         }
+        .countsAsChildSheet(isPresented: pendingMove != nil)
         .confirmationDialog(pendingMove?.title ?? "",
                             isPresented: Binding(get: { pendingMove != nil },
                                                  set: { if !$0 { pendingMove = nil } }),
@@ -105,6 +107,7 @@ struct SessionDetailView: View {
         } message: { request in
             Text(request.message)
         }
+        .countsAsChildSheet(isPresented: errorMessage != nil)
         .alert("Couldn’t change the session",
                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }

@@ -71,7 +71,7 @@ struct LiveSessionProfileMenu: View {
         } message: { request in
             Text(request.message)
         }
-        .liveChildSheet(isPresented: pendingMove != nil)
+        .countsAsChildSheet(isPresented: pendingMove != nil)
     }
 
     private func requestMove(to target: WorkProfile) {
@@ -204,7 +204,7 @@ struct LiveNotesList: View {
         } message: { _ in
             Text("This can’t be undone.")
         }
-        .liveChildSheet(isPresented: deleteCandidate != nil)
+        .countsAsChildSheet(isPresented: deleteCandidate != nil)
     }
 
     @ViewBuilder

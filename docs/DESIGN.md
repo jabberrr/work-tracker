@@ -297,8 +297,9 @@ need no Reduce Transparency handling (no materials). Signatures are final (ARCHI
 | `ShortcutRecorder` | `ShortcutRecorder(shortcut: StoredShortcut?, accessibilityName: String, onRecord: (StoredShortcut) -> Void, onClear: () -> Void)` | Key-cap field; see §11.1. It never validates: pass the result to `ShortcutStore.set(_:for:)` and show its message under the row. |
 | `ResetToDefaultButton` | `ResetToDefaultButton(isDefault: Bool, accessibilityLabel: String, action: () -> Void)` | `arrow.counterclockwise` in `IconButtonStyle(size: 22)`, disabled at the default, help "Reset". |
 | `RemoveBadgeButton` | `RemoveBadgeButton(accessibilityLabel: String, action: () -> Void)`; statics `diameter` 14, `hitSize` 22, `cornerOffset` (8, −8) | Edit-mode (−): 14 pt `danger` circle, white `minus` (7 pt bold), 1.5 pt `elevatedSurface` ring (17 pt), 22 × 22 pt hit area, 20 pt accent focus ring, help "Remove". Don't place it by hand: use `editRemoveBadge`. |
-| `View.editRemoveBadge(_:accessibilityLabel:action:)` | `func editRemoveBadge(_ isShown: Bool, accessibilityLabel: String, action: @escaping () -> Void) -> some View` | The (−) badge on the item's **top-trailing** corner: `overlay(alignment: .topTrailing)` + `cornerOffset`, so the badge centre sits 3 pt inside the corner and the circle overhangs 4 pt. Apply it after `.wiggle` so the badge doesn't rotate. |
-| `EditResizeHandle` | `EditResizeHandle()`; statics `hitSize` 20 × 24, `edgeOffset` 8 | Edit-mode resize handle on the item's trailing edge (`overlay(alignment: .trailing)` + `.offset(x: edgeOffset)`: capsule centre 2 pt inside the edge). 4 × 14 pt accent capsule, 1.5 pt `elevatedSurface` ring, hover 0.88, `NSCursor.resizeLeftRight` while hovered (push/pop balanced), help "Resize", hidden from VoiceOver (the item's "Wider"/"Narrower" actions replace it). Visual only: the feature attaches the drag gesture. |
+| `View.editRemoveBadge(_:accessibilityLabel:action:)` | `func editRemoveBadge(_ isShown: Bool, accessibilityLabel: String, action: @escaping () -> Void) -> some View` | The (−) badge on the item's **top-trailing** corner: `overlay(alignment: .topTrailing)` + `cornerOffset`, so the badge centre sits 3 pt inside the corner and the circle overhangs 4 pt; its hit area spans 14 pt down from the item's top. Apply it after `.wiggle` so the badge doesn't rotate, and **last** of the chrome (after `editResizeHandle`) so it is the topmost layer and always clickable. |
+| `EditResizeHandle` | `EditResizeHandle()`; statics `hitSize` 20 × 18, `edgeOffset` 8, `bottomOffset` 6, `clearHeight` 26, `center(in:)` | Edit-mode resize handle on the item's **bottom-trailing** corner: hit frame offset (`edgeOffset`, `bottomOffset`) from the corner, capsule centre 2 pt inside the trailing edge. On items shorter than `clearHeight` (26 pt) `center(in:)` moves it down just enough that its hit frame starts where the badge's ends (an 18 pt item: 8 pt lower), so the two hit areas never overlap at any height. 4 × 14 pt accent capsule, 1.5 pt `elevatedSurface` ring, hover 0.88, `NSCursor.resizeLeftRight` while hovered (push/pop balanced), help "Resize", hidden from VoiceOver (the item's "Wider"/"Narrower" actions replace it). Don't place it by hand: use `editResizeHandle`. |
+| `View.editResizeHandle(_:gesture:)` | `func editResizeHandle<G: Gesture>(_ isShown: Bool, gesture: G) -> some View` | Places `EditResizeHandle` at `center(in:)` of the item's size (an edit-mode-only `GeometryReader` overlay) with the feature's drag gesture. Apply it after `.wiggle` and the item's own gesture, before `editRemoveBadge`. |
 | `AddBadgeButton` | `AddBadgeButton(accessibilityLabel: String, action: () -> Void)` | Edit-mode (+): 24 pt accent circle, `onAccent` `plus` (11 pt bold), 28 pt hit area, help "Add" (dropped while disabled so the caller's reason shows, e.g. "All elements shown"). Standalone, under the preview. |
 | `View.wiggle(_:seed:)` | `func wiggle(_ isActive: Bool, seed: Int = 0) -> some View` | Edit-mode wiggle (§7). The view keeps its identity when edit mode toggles. |
 
@@ -603,7 +604,7 @@ Direct manipulation, in the spirit of iPhone Control Center: what you see is the
   Mid-drag: Controls dragged onto the Timer's row, columns 1–2
   ╭─────────────────────────────────────╮
   │ ● [◉ Deep work         ]⊖         ✕ │   ⊖  (−) badge, top-trailing
-  │ ┌╌╌╌╌╌╌╌┐▒▒▒ 1:12:40 ▒▒▒▒▒▒▒▒▒▒▒▒▒▒┃ │   ┃  resize handle, trailing edge
+  │ ┌╌╌╌╌╌╌╌┐▒▒▒ 1:12:40 ▒▒▒▒▒▒▒▒▒▒▒▒▒▒┃ │   ┃  resize handle, bottom-trailing
   │ └╌╌╌╌╌╌╌┘                           │   ┌╌┐ snap ghost (dashed accent, fill 0.08)
   │ [Refactor parser · seg 24:10     ]⊖┃│   ▒  dimmed 0.5: the Timer will move to a new row below
   │ ⋯⋯⋯⋯⋯⋯⋯⋯[✂]⊖┃                       │   ⋯  the dragged Controls, left in place at 0.35
@@ -616,9 +617,11 @@ Direct manipulation, in the spirit of iPhone Control Center: what you see is the
 - **Edit** → the preview always shows the running sample with every grid element; the header row shows
   "Reset Layout" (Quiet, disabled at the default) and "Done" (`PrimaryButtonStyle`) instead. The footnote
   "Drag to move; drag the right edge to resize." sits under the stage.
-  - Each element **wiggles** (`.wiggle(true, seed: index)`; dashed outline under Reduce Motion), then gets the
-    **(−)** badge on its top-trailing corner (`editRemoveBadge`, a11y "Remove *Element*") and the
-    `EditResizeHandle` on its trailing edge. The header chrome doesn't wiggle and can't be removed or moved.
+  - Each element shows its **cell extent** (`radiusS`, `textPrimary` 0.05 fill, 1 pt `separator` stroke, 2 pt
+    outside the element) and **wiggles** with it (`.wiggle(true, seed: index)`; dashed outline under Reduce
+    Motion), then gets the `EditResizeHandle` on its bottom-trailing corner (`editResizeHandle`) and, on top, the
+    **(−)** badge on its top-trailing corner (`editRemoveBadge`, a11y "Remove *Element*"). The header chrome
+    doesn't wiggle and can't be removed or moved.
   - **Drag to move** (anywhere on the element, 2 pt minimum distance so clicks and right-clicks still work):
     the element stays in place at 0.35 opacity; a **floating copy** (0.9 opacity, 1 pt accent border, `radiusS`,
     unrotated, no shadow) follows the pointer; a **snap ghost** (dashed 1 pt accent `radiusS` stroke, accent fill
@@ -627,7 +630,7 @@ Direct manipulation, in the spirit of iPhone Control Center: what you see is the
   - **Drop:** the element snaps into the cell (150 ms ease-out, none under Reduce Motion). Elements it overlaps
     move together into a new row directly below, keeping their columns; a row left empty disappears. Releasing
     more than 40 pt outside the panel cancels and snaps back.
-  - **Resize:** drag the trailing handle; the span changes in column steps, clamped to the element's minimum
+  - **Resize:** drag the bottom-trailing handle; the span changes in column steps, clamped to the element's minimum
     and to its right-hand neighbour (resizing never pushes). Height can't be resized.
   - **(+)** `AddBadgeButton` (a11y "Add element") under the preview opens a popover listing the hidden
     elements (icon + title); clicking one puts it in the first free body cell (Today’s total prefers the
@@ -1261,6 +1264,8 @@ above itself, inside the same bottom inset.
 ```
 Opened from the sidebar switcher it is a sheet in the main window, so `ProfileSwitcher` reports it with
 `router.childSheetDidAppear()` / `childSheetDidDisappear()`: an end-of-session review waits until it closes.
+Confirmation dialogs and alerts in the main window (Today, History, Session detail) are sheets too: they carry
+`.countsAsChildSheet(isPresented:)` (Shared) so the review waits for them the same way.
 
 **Today** (F1): idle, with 2+ profiles, `ProfileBadge(profile: profiles.activeProfile, size: .small)` sits next to
 the date in the header. If the profile offers no labels, the start card shows "No labels yet." (caption,
@@ -1371,16 +1376,20 @@ Summary (details in the sections named; where they and an earlier rule disagree,
   by `ProfileSwitcher.menuHeightLimit(sidebarHeight:)`; only profile rows scroll, the actions always show.
   "New Profile…" opens the sheet right away.
 - **Edit badges** (§8.1): (−) is 14 pt with a 22 pt hit area on the **top-trailing** corner, placed only via
-  `editRemoveBadge(_:accessibilityLabel:action:)`; the new `EditResizeHandle` (4 × 14 capsule, 20 × 24 hit
-  area) sits on the trailing edge; (+) is 24 pt.
+  `editRemoveBadge(_:accessibilityLabel:action:)`; the new `EditResizeHandle` (4 × 14 capsule, 20 × 18 hit
+  area) sits on the bottom-trailing corner, placed via `editResizeHandle(_:gesture:)`; (+) is 24 pt.
 - **Overlay grid** (§10.6, §10.6.1): 6 columns, rows of intrinsic height, row 0 = the header row. Elements are
   placed freely and snap to cells; dropping on occupied columns pushes those elements into a new row below;
   widths resize in column steps (never pushing). Compact uses the same placements.
 
 ### 17.1 Do / Don't
 
-- Do apply `.wiggle` first, then `editRemoveBadge`, then the resize handle overlay, then the gesture, so the
-  chrome doesn't rotate and stays above the hit layer.
+- Do apply the cell extent and `.wiggle` first, then the element's move gesture, then `editResizeHandle`, then
+  `editRemoveBadge` **last**: the chrome doesn't rotate, stays above the hit layer, and the (−) badge is the
+  topmost layer, so it is always clickable.
+- Don't let the badge and the handle hit areas meet: the badge's spans the top 14 pt, the handle's starts at
+  `max(height − 12, 14)` (`EditResizeHandle.center(in:)`), so short elements (18–22 pt) get the handle lower,
+  never on the badge.
 - Do draw the drag's floating copy and ghost in an overlay on the whole grid; don't offset the original element.
 - Don't put gestures, `GeometryReader`s or preferences on the live overlay; editing only.
 - Don't clip grid cells (badges overhang them by 4 pt); let elements truncate instead (no `fixedSize()`).

@@ -387,45 +387,6 @@ private struct LiveHoverRowBody: View {
     }
 }
 
-// MARK: - Child sheet tracking
-
-extension View {
-    /// For a confirmation dialog on the Today page (a sheet on macOS): counts it in
-    /// `router.childSheetDidAppear/Disappear` while it is up, so RootView holds the review sheet back until it
-    /// closes (or this view goes away, e.g. the session was stopped from the menu bar). Never use it inside the
-    /// review sheet itself.
-    func liveChildSheet(isPresented: Bool) -> some View {
-        modifier(LiveChildSheetCounter(isPresented: isPresented))
-    }
-}
-
-private struct LiveChildSheetCounter: ViewModifier {
-    @Environment(WindowRouter.self) private var router
-    private let isPresented: Bool
-    /// This view's share of `router.presentedChildSheets` (0 or 1), so appear/disappear always balance.
-    @State private var isCounted = false
-
-    init(isPresented: Bool) {
-        self.isPresented = isPresented
-    }
-
-    func body(content: Content) -> some View {
-        content
-            .onChange(of: isPresented, initial: true) { _, presented in update(presented) }
-            .onDisappear { update(false) }
-    }
-
-    private func update(_ presented: Bool) {
-        if presented && !isCounted {
-            isCounted = true
-            router.childSheetDidAppear()
-        } else if !presented && isCounted {
-            isCounted = false
-            router.childSheetDidDisappear()
-        }
-    }
-}
-
 // MARK: - Request ledger
 
 /// `WindowRouter.noteFocusRequest` / `splitRequest` / `discardRequest` are counters. LiveSessionView may be created *after* the

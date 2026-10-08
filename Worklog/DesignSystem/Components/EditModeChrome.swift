@@ -3,18 +3,17 @@ import AppKit
 
 // Edit-mode chrome for rearrangeable layouts (Settings ▸ Overlay layout editor), in the spirit of iPhone
 // Control Center: items wiggle gently, a small red (−) badge sits on each item's top-trailing corner, a slim
-// handle on the trailing edge resizes it, and a round (+) button adds items.
+// handle on the bottom-trailing corner resizes it, and a round (+) button adds items.
 //
 //     element
-//         .wiggle(isEditing, seed: index)                       // first: the badges must not rotate
-//         .editRemoveBadge(isEditing, accessibilityLabel: "Remove \(element.title)") { remove(element) }
-//         .overlay(alignment: .trailing) {
-//             if isEditing {
-//                 EditResizeHandle()
-//                     .offset(x: EditResizeHandle.edgeOffset)
-//                     .gesture(resizeDrag)                       // the feature owns the gesture
-//             }
-//         }
+//         .wiggle(isEditing, seed: index)                       // first: the chrome must not rotate
+//         .gesture(moveDrag)                                    // the item's own hit layer
+//         .editResizeHandle(isEditing, gesture: resizeDrag)     // the feature owns the gesture
+//         .editRemoveBadge(isEditing, accessibilityLabel: "Remove \(element.title)") { remove(element) }  // last
+//
+// The badge goes on LAST so it is the topmost layer: it stays clickable whatever it overlaps. On top of that the
+// two hit areas never overlap: the handle sits on the bottom-trailing corner and moves down on items shorter
+// than `EditResizeHandle.clearHeight` (see `EditResizeHandle.center(in:)`).
 //
 // The wiggle is the app's only looping motion (DESIGN §7): edit mode only, and none under Reduce Motion.
 
@@ -22,11 +21,11 @@ import AppKit
 /// .help("Remove"). Place it with `View.editRemoveBadge(_:accessibilityLabel:action:)`.
 struct RemoveBadgeButton: View {
     /// Visual circle.
-    static let diameter: CGFloat = 14
+    nonisolated static let diameter: CGFloat = 14
     /// Square hit area (≥ 20 pt).
-    static let hitSize: CGFloat = 22
+    nonisolated static let hitSize: CGFloat = 22
     /// With .overlay(alignment: .topTrailing): badge centre sits 3 pt inside the corner, circle overhangs 4 pt.
-    static let cornerOffset = CGSize(width: 8, height: -8)
+    nonisolated static let cornerOffset = CGSize(width: 8, height: -8)
 
     private let accessibilityLabel: String
     private let action: () -> Void
@@ -77,15 +76,31 @@ struct AddBadgeButton: View {
     }
 }
 
-/// Edit-mode resize handle, the trailing-edge companion of the (−) badge at the same scale: a 4 × 14 pt accent
-/// capsule with a 1.5 pt elevatedSurface ring in a 20 × 24 pt hit frame, `NSCursor.resizeLeftRight` while
+/// Edit-mode resize handle, the bottom-trailing companion of the (−) badge at the same scale: a 4 × 14 pt accent
+/// capsule with a 1.5 pt elevatedSurface ring in a 20 × 18 pt hit frame, `NSCursor.resizeLeftRight` while
 /// hovered, .help("Resize"). Hidden from VoiceOver: the element's "Wider"/"Narrower" actions replace it.
-/// Purely visual: the caller attaches the drag gesture.
+/// Purely visual: place it with `View.editResizeHandle(_:gesture:)`, which attaches the caller's drag gesture.
 struct EditResizeHandle: View {
     /// Hit frame (the capsule is centred in it).
-    static let hitSize = CGSize(width: 20, height: 24)
-    /// With .overlay(alignment: .trailing): capsule centre 2 pt inside the trailing edge.
-    static let edgeOffset: CGFloat = 8
+    nonisolated static let hitSize = CGSize(width: 20, height: 18)
+    /// Horizontal offset from the trailing edge: capsule centre 2 pt inside it.
+    nonisolated static let edgeOffset: CGFloat = 8
+    /// Vertical offset from the bottom edge on items at least `clearHeight` tall: the hit frame overhangs 6 pt.
+    nonisolated static let bottomOffset: CGFloat = 6
+    /// Where the badge's hit area ends, measured down from the item's top edge (22 − 8 = 14 pt).
+    nonisolated static var badgeClearance: CGFloat { RemoveBadgeButton.hitSize + RemoveBadgeButton.cornerOffset.height }
+    /// The smallest item height at which the handle keeps its plain bottom-trailing place (18 − 6 + 14 = 26 pt)
+    /// without touching the badge's hit area. Shorter items push the handle down instead.
+    nonisolated static var clearHeight: CGFloat { hitSize.height - bottomOffset + badgeClearance }
+
+    /// The handle's centre in an item of `size` (top-leading origin): bottom-trailing corner offset by
+    /// (`edgeOffset`, `bottomOffset`), moved down just enough on short items that its hit frame starts where the
+    /// (−) badge's ends. So the two hit areas never overlap, for any item height (an 18 pt item gets its handle
+    /// 8 pt lower; at 26 pt and up the offset is the plain one).
+    nonisolated static func center(in size: CGSize) -> CGPoint {
+        let top = max(size.height - hitSize.height + bottomOffset, badgeClearance)
+        return CGPoint(x: size.width - hitSize.width / 2 + edgeOffset, y: top + hitSize.height / 2)
+    }
 
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
@@ -132,12 +147,29 @@ struct EditResizeHandle: View {
 
 extension View {
     /// Top-trailing (−) badge for edit mode; the only way feature code places `RemoveBadgeButton`.
-    /// Apply it after `.wiggle` so the badge doesn't rotate.
+    /// Apply it after `.wiggle` so the badge doesn't rotate, and last of the chrome (after `editResizeHandle`)
+    /// so it is the topmost layer and always clickable.
     func editRemoveBadge(_ isShown: Bool, accessibilityLabel: String, action: @escaping () -> Void) -> some View {
         overlay(alignment: .topTrailing) {
             if isShown {
                 RemoveBadgeButton(accessibilityLabel: accessibilityLabel, action: action)
                     .offset(RemoveBadgeButton.cornerOffset)
+            }
+        }
+    }
+
+    /// Bottom-trailing resize handle for edit mode, carrying `gesture`; the only way feature code places
+    /// `EditResizeHandle`. Apply it after `.wiggle` and the item's own gesture, and before `editRemoveBadge`.
+    /// Placed at `EditResizeHandle.center(in:)` of the item's size, so its hit area never meets the badge's.
+    func editResizeHandle<G: Gesture>(_ isShown: Bool, gesture: G) -> some View {
+        overlay {
+            if isShown {
+                // Edit mode only (never on the live overlay). The reader itself takes no hits.
+                GeometryReader { proxy in
+                    EditResizeHandle()
+                        .gesture(gesture)
+                        .position(EditResizeHandle.center(in: proxy.size))
+                }
             }
         }
     }
@@ -272,13 +304,10 @@ private struct WiggleModifier: ViewModifier {
             ForEach(0..<3) { index in
                 RoundedRectangle(cornerRadius: 8)
                     .fill(Color.gray.opacity(0.2))
-                    .frame(width: 80, height: 44)
+                    .frame(width: 80, height: index == 0 ? 18 : 44)
                     .wiggle(true, seed: index)
+                    .editResizeHandle(true, gesture: DragGesture())
                     .editRemoveBadge(true, accessibilityLabel: "Remove item \(index + 1)") {}
-                    .overlay(alignment: .trailing) {
-                        EditResizeHandle()
-                            .offset(x: EditResizeHandle.edgeOffset)
-                    }
             }
         }
         AddBadgeButton(accessibilityLabel: "Add element") {}

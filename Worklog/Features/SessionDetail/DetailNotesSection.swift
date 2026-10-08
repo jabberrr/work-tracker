@@ -71,6 +71,7 @@ struct DetailNotesSection: View {
                 }
             }
         }
+        .countsAsChildSheet(isPresented: deleteCandidate != nil)
         .confirmationDialog("Delete this note?",
                             isPresented: Binding(get: { deleteCandidate != nil },
                                                  set: { if !$0 { deleteCandidate = nil } }),
