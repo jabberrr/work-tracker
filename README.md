@@ -56,7 +56,7 @@ Sign in with Apple). The two build configurations are deliberately different app
 | Configuration | Bundle id | Entitlements | CloudKit environment | Used by |
 |---|---|---|---|---|
 | Debug | `app.dabora.worktracker.debug` | `Worklog/Resources/Worklog.entitlements` | Development | Run (⌘R), tests |
-| Release | `app.dabora.worktracker` | `Worklog/Resources/WorklogRelease.entitlements` | Production (`com.apple.developer.icloud-container-environment`), production push | Archive |
+| Release | `app.dabora.worktracker` | `Worklog/Resources/WorklogRelease.entitlements` | Production (`com.apple.developer.icloud-container-environment`); production push is set by the Developer ID export | Archive |
 
 Both use the iCloud container `iCloud.app.dabora.worktracker`. Because the bundle ids differ, a Debug run never opens
 the store, backups, settings or keychain items of the app you use every day; it starts with its own empty store
@@ -109,57 +109,80 @@ macOS from the build settings (`$(MARKETING_VERSION)`, `$(CURRENT_PROJECT_VERSIO
    2. In the CloudKit Console, check that `CD_WorkProfile` exists and that `CD_WorkSession`, `CD_WorkLabel` and `CD_WorkTag` have a `CD_profile` field.
    3. Deploy the schema to **Production**, then ship the release.
 
-5. **Developer ID distribution** (outside the Mac App Store): the Release configuration already signs with
-   `WorklogRelease.entitlements` (`com.apple.developer.icloud-container-environment` = `Production`,
-   `com.apple.developer.aps-environment` = `production`), so an archived build talks to the Production database. Don't
-   edit the entitlements by hand. (If the archive build ever fails with "provisioning profile doesn't match the
-   entitlements file's value for aps-environment", Xcode's automatic signing picked a development profile for the
-   Release build; select the Developer ID profile / let Xcode manage it, rather than changing the file.)
+5. **Developer ID distribution** (outside the Mac App Store): the Release configuration signs with
+   `WorklogRelease.entitlements` (`com.apple.developer.icloud-container-environment` = `Production`), so an archived
+   build talks to the Production database. Signing is automatic. The file's `com.apple.developer.aps-environment` is
+   `development` on purpose: the Archive build is signed with Xcode's development profile, which only allows that
+   value. Organizer ▸ **Distribute App** ▸ **Direct Distribution** then re-signs the app with your Developer ID
+   certificate and profile and sets `aps-environment` to `production`. Check the exported app with
+   `codesign -d --entitlements - Worklog.app` (step 7 of the checklist below).
+
+   *Fallback* if the exported app still shows `aps-environment` = `development`: sign Release manually. In
+   `scripts/generate_xcodeproj.py` (and Xcode ▸ Signing & Capabilities for Release) use *Manual* signing with the
+   *Developer ID Application* certificate and a Developer ID provisioning profile for `app.dabora.worktracker`
+   (iCloud, Push Notifications, Sign in with Apple), set `aps-environment` to `production` in
+   `WorklogRelease.entitlements`, then archive and export again. Without production push, CloudKit can't announce
+   changes from your other Macs; they arrive late.
 
    **Environment guard.** Worklog records which CloudKit environment its store syncs with
    (`persistence.cloudKitEnvironment` in the app's defaults; a store from before this release counts as Development).
    A build whose environment differs never switches silently: it opens the store *local-only*, shows "Saving to this
    Mac only — this data belongs to iCloud Development, not Production", and Settings ▸ Data offers:
-   - **Move to iCloud Production…** — makes a pinned backup with every image (read back and checked), writes a
-     marker and relaunches. Before opening anything, the next launch moves the old store files to
+   - **Move to iCloud Production…** — for the **first** Mac: makes a pinned backup with every image (read back and
+     checked), writes a marker and relaunches. Before opening anything, the next launch moves the old store files to
      `Recovered/Env-Development-<UTC date>/` (never deleted), opens a fresh CloudKit store in Production, restores the
      backup (Replace into the empty store, before any default labels or profiles are created) and shows how many
-     sessions came back. Blocked while a session is running.
-   - **Keep Local Only** — turns iCloud sync off; the data stays on this Mac. Turning sync on later offers the move again.
+     sessions came back (and offers **Restore…** if sessions or images are missing). Blocked while a session is running.
+   - **Use iCloud Production Data…** — for **every other** Mac, once the first Mac has moved: the same pinned backup,
+     then the store is moved to `Recovered/Env-Development-…` and a fresh CloudKit store downloads what Production
+     already holds. Nothing from this Mac is uploaded or restored; default labels wait for the download. If this Mac
+     holds sessions the first Mac doesn't have, use **Move to iCloud Production…** here too: sessions both Macs have
+     are merged automatically (same IDs).
+   - **Keep Local Only** — turns iCloud sync off; the data stays on this Mac. Turning sync on later offers the options again.
 
 ### Safe first archive (checklist)
 
 Your real data lives in the store of bundle id `app.dabora.worktracker` (the Release app), which so far synced with
-CloudKit **Development**. Do these in order. Do steps 1–2 in the Worklog you use today, *before* running a build of
-this version: a Debug build is now a different app (`….debug`) and doesn't see that data.
+CloudKit **Development**. Do these in order, on the Mac with your most complete data first. Steps 1–3 use the
+Worklog you use today, *before* any build of this version runs (a Debug build is now a different app, `….debug`, and
+doesn't see that data).
 
 1. **Export a copy you control.** Settings ▸ Data ▸ turn on *Include images in JSON* ▸ **Export JSON…** ▸ save to
    `~/Documents`.
 2. **Back up and pin.** Settings ▸ Data ▸ **Back Up Now**, then the backup's ••• menu ▸ **Pin**. Note the session count.
-3. **Initialize the schema.** Run the **Debug** configuration once with the launch argument `-initializeCloudKitSchema`
-   (Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments). Debug now has its own bundle id, so it starts with an empty store
-   of its own — that's expected and fine for schema initialization; your real store isn't touched. Remove the argument
-   afterwards.
-4. **Deploy the schema.** CloudKit Console ▸ `iCloud.app.dabora.worktracker` ▸ check `CD_WorkProfile` and the
+   If the old build can't run any more, do steps 1–2 in the new build right after its first launch (step 8, before
+   choosing anything): it opens your store local-only and changes nothing.
+3. **Quit the old Worklog completely**: Worklog ▸ Quit Worklog (⌘Q). Its menu bar icon must be gone too.
+4. **Initialize the schema.** Run the **Debug** configuration once with the launch argument `-initializeCloudKitSchema`
+   (Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments). It starts with an empty store of its own — expected; your real
+   store isn't touched. Quit it and remove the argument afterwards.
+5. **Deploy the schema.** CloudKit Console ▸ `iCloud.app.dabora.worktracker` ▸ check `CD_WorkProfile` and the
    `CD_profile` fields exist ▸ **Deploy Schema Changes…** to Production. (Never reset Development.)
-5. **Archive.** Select *Any Mac*, Product ▸ **Archive** (Release), then Organizer ▸ **Distribute App** ▸
-   **Direct Distribution** (Developer ID + notarization) ▸ export.
-6. **Verify the signature.** Quit every running Worklog (a second copy with the same bundle id would only bring the
-   first to the front), put the exported app in `/Applications`, then:
+6. **Archive and export.** Select *Any Mac*, Product ▸ **Archive** (Release, automatic signing), then Organizer ▸
+   **Distribute App** ▸ **Direct Distribution** (Developer ID + notarization) ▸ export.
+7. **Verify the signature.** Put the exported app in `/Applications` (replacing the old one), then:
    ```sh
    codesign --verify --deep --strict --verbose=2 /Applications/Worklog.app
-   codesign -d --entitlements - /Applications/Worklog.app   # icloud-container-environment = Production
+   codesign -d --entitlements - /Applications/Worklog.app   # icloud-container-environment Production, aps-environment production
    spctl --assess --type execute --verbose /Applications/Worklog.app   # "accepted, source=Notarized Developer ID"
    ```
-7. **First launch.** Open it. (macOS may ask once whether Worklog may access its own data from the earlier build —
-   allow it.) The banner says the data belongs to iCloud Development. Go to Settings ▸ Data ▸
-   **Move to iCloud Production…** ▸ **Back Up and Relaunch**. After the relaunch the banner reports
-   "Moved to iCloud Production: N sessions restored."
-8. **Verify.** Compare the session count with step 2, open a few sessions with images, and check Settings ▸ Account
-   shows "Syncing with iCloud … (Production)". The old store stays in `Recovered/Env-Development-…` and the pinned
-   backup stays in the list; delete neither for a while.
+   `aps-environment` still `development`? Don't use this build; see the *Fallback* in step 5 of *Signing* above.
+8. **First launch.** Open it. (macOS may ask once whether Worklog may access its own data from the earlier build —
+   allow it.) The banner says "Saving to this Mac only — this data belongs to iCloud Development, not Production."
+   Settings ▸ Data ▸ **Move to iCloud Production…** ▸ **Back Up and Relaunch**. After the relaunch the banner says
+   "Moved to iCloud Production: N sessions restored. Your previous copy is in the Recovered folder."
+9. **Verify.** Compare N with step 2, open a few sessions with images, and check Settings ▸ Account says
+   "Syncing with iCloud" (Production). Keep `Recovered/Env-Development-…` and the pinned backup for a while.
+10. **Remove old copies.** List every copy of the app and delete all but `/Applications/Worklog.app` (archives in
+    Xcode's Organizer may stay). Never run a build from before this version again.
+    ```sh
+    mdfind "kMDItemCFBundleIdentifier == 'app.dabora.worktracker'"
+    ```
 
-On every other Mac, install the same archive and do step 7 there too (or Keep Local Only).
+**Every other Mac** (after step 9 on the first one): back up (steps 1–2), quit the old Worklog (step 3), install
+the same exported app, then Settings ▸ Data ▸ **Use iCloud Production Data…** ▸ **Back Up and Relaunch**. The banner
+says "Now using iCloud Production; downloading your data. Your previous copy is in the Recovered folder." Then do
+step 10. Only if that Mac has sessions the first Mac lacks, choose **Move to iCloud Production…** instead (step 8).
 
 ### Tests
 
@@ -179,8 +202,8 @@ The unit tests run in in-memory SwiftData containers. Under XCTest, `AppServices
 - the overlay layout migration from the old per-element toggles, and resetting it
 - profiles: the migration of existing data, profile dedupe and repair, `ProfileScope`, scoped tag creation, making labels/tags local (copies for other profiles), moving sessions between profiles, deleting/archiving profiles, the persisted selection, the profile-aware engine (start, default label, today total, per-profile takeaways), scoped search and export format 2 (including importing format-1 files)
 - shortcut defaults, display strings, validation (conflicts, reserved combos, missing ⌘/⌃, ⇧ without a letter), clearing, reset (and the action it clears) and persistence (including de-duplicating stored overrides)
-- data safety: the CloudKit environment guard's decision table, the PreOpen snapshot key and model hash, newer-store detection, the restore marker format and restore mode, session dedupe keeping notes/images/learning points, imported running sessions (ended unless this Mac owned them), Replace keeping the store's own images, merge updating re-seeded defaults and newer profiles, reconcile leaving another Mac's just-started session alone, the engine forgetting a deleted active session, and per-kind backup retention
-- recovery paths on disk, run in a temporary folder: the restore marker, PreOpen snapshot pruning, moving a damaged store aside, and a skipped environment move
+- data safety: the CloudKit environment guard's decision table, the interrupted-restore breadcrumb decision and notice, "Use iCloud Production Data" (a move without a restore), the verified backup only failing for images the store has bytes for, the PreOpen snapshot key and model hash, newer-store detection, the restore marker format and restore mode, session dedupe keeping notes/images/learning points, imported running sessions (ended unless this Mac owned them), Replace keeping the store's own images, merge updating re-seeded defaults and newer profiles, reconcile leaving another Mac's just-started session alone, the engine forgetting a deleted active session, and per-kind backup retention
+- recovery paths on disk, run in a temporary folder: the restore marker and the restore breadcrumb, PreOpen snapshot pruning, moving a damaged store aside (which clears the recorded CloudKit environment), and a skipped environment move
 
 ## Architecture
 
@@ -274,7 +297,7 @@ Changing the iCloud sync toggle takes effect at the next launch.
 - Backups are taken on a schedule (default hourly, only when data changed locally or via iCloud), on quit (only when something changed), manually, and automatically before every restore or import (merge or replace).
 - Images are stored once in `Backups/Attachments` and referenced from the JSON, so hourly backups stay small and are written off the main thread. Older backups with embedded images still restore. Copy the `Attachments` folder along with a backup file if you move it elsewhere.
 - Before deleting, merging or re-scoping a label or tag (Settings ▸ Labels & Tags), and before deleting a profile's sessions, a safety backup is written first; if it fails, nothing changes.
-- Retention: the newest *N* automatic backups (configurable, default 10), plus the newest per day for 14 days and per week for 8 weeks; the newest 20 of *each* kept kind (manual, before restore, before change); pinned backups are never removed, and neither is the newest backup that contains sessions. The backup made by *Move to iCloud Production* is pinned.
+- Retention: the newest *N* automatic backups (configurable, default 10), plus the newest per day for 14 days and per week for 8 weeks; the newest 20 of *each* kept kind (manual, before restore, before change); pinned backups are never removed, and neither is the newest backup that contains sessions. The backups made by *Move to iCloud Production* and *Use iCloud Production Data* are pinned.
 - Shrinkage guard: if a new backup has under half the sessions of the previous one (or none at all), the previous backup is pinned. Automatic backups of an empty store are skipped when the previous backup had sessions. When the Mac's iCloud account changes, the newest backup with sessions is pinned, and if the store then holds under half of its sessions, a banner says so and points to it.
 - Automatic backups are skipped while the app runs on the in-memory fallback, so a bad launch can't rotate good backups out.
 - You can restore from Settings ▸ Data:
@@ -282,7 +305,7 @@ Changing the iCloud sync toggle takes effect at the next launch.
   - **Replace** wipes first and is blocked while a session is running. Images the file lacks (exported without images, or missing backup image files — the sheet shows how many) are kept from the store when it still has them.
   - A session that was running in the file is ended at the export time (never adopted as running), unless this Mac was running it.
 
-**Recovery.** If the store can't be opened, **Recover…** moves the damaged store files aside to `Application Support/Worklog/Recovered/Store-<date>/` (nothing is ever deleted), then relaunches Worklog with a fresh store and either restores the backup you chose or, with iCloud sync on, downloads your data again. A backup picked from outside Worklog is copied in with its images embedded (Worklog asks once for access to the folder holding the backup's `Attachments`). The restore runs once, before anything is seeded: Replace when the new store is still empty, otherwise Merge after a safety backup; if it fails, a banner says so and the backup stays in the list. Whenever the app version, build, configuration, CloudKit environment or data model differs from the previous launch, Worklog first copies the store to `Recovered/PreOpen-<date>/` (the last two are kept), so a failed upgrade can be undone by hand.
+**Recovery.** If the store can't be opened, **Recover…** moves the damaged store files aside to `Application Support/Worklog/Recovered/Store-<date>/` (nothing is ever deleted), then relaunches Worklog with a fresh store and either restores the backup you chose or, with iCloud sync on, downloads your data again. A backup picked from outside Worklog is copied in with its images embedded (Worklog asks once for access to the folder holding the backup's `Attachments`). The restore runs once, before anything is seeded: Replace when the new store is still empty, otherwise Merge after a safety backup; if it fails, a banner says so and the backup stays in the list. If Worklog quits or crashes during that restore, the next launch says “The last restore didn’t finish.” with **Restore…** (nothing is retried automatically). Whenever the app version, build, configuration, CloudKit environment or data model differs from the previous launch, Worklog first copies the store to `Recovered/PreOpen-<date>/` (the last two are kept), so a failed upgrade can be undone by hand.
 
 **Export and import.**
 - **JSON:** versioned (`formatVersion`, currently 2: profiles and each label's, tag's and session's profile), ISO-8601 dates, images optional as base64. Format-1 files from earlier versions still import: their sessions go to the home profile and their labels and tags become available in all profiles. Delete All Data and Replace with a file without profiles recreate the "Work" profile. Imported images are checked to be JPEG/PNG/HEIC of sane size.
@@ -305,5 +328,5 @@ These can't be checked in CI and should be tried on real Macs before a release:
 - **Encrypted fields** appear as encrypted in the CloudKit Console and sync between Macs signed in to the same account.
 - **Recovery**: corrupt a copy of the store (e.g. truncate `Worklog.store` while the app is quit) and walk through Recover… with a backup and with a fresh store.
 - **Keychain**: with a team-signed build, sign in with Apple, quit, relaunch: the account should persist (items migrate from the legacy keychain on first read).
-- **Move to iCloud Production**: on a copy of real data, walk through the checklist above; check the session and image counts, that `Recovered/Env-Development-…` holds the old store, and that a second Mac sees the data after its own move.
+- **Move to iCloud Production**: on a copy of real data, walk through the checklist above; check the session and image counts, that `Recovered/Env-Development-…` holds the old store, and that a second Mac sees the data after **Use iCloud Production Data…**.
 - **Single instance**: launch a second copy of the same build (e.g. from another folder): the first one comes to the front and the second quits.

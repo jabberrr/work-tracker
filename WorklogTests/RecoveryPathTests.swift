@@ -145,4 +145,87 @@ final class RecoveryPathTests: XCTestCase {
         controller.launchNotice = "Restored “x”."
         XCTAssertFalse(controller.launchNoticeOffersRestore)
     }
+    // MARK: - Restore breadcrumb (M1)
+
+    @MainActor
+    func testRestoreBreadcrumbIsWrittenReadAndSupersededByANewRecovery() throws {
+        XCTAssertFalse(PersistenceController.hasRestoreBreadcrumb)
+        XCTAssertTrue(AppConstants.restoreInProgressURL.path(percentEncoded: false)
+            .hasPrefix(root.path(percentEncoded: false)), "the override is used")
+
+        PersistenceController.beginRestoreBreadcrumb(backupPath: "/tmp/b.json", environmentMove: "Production")
+        XCTAssertTrue(PersistenceController.hasRestoreBreadcrumb)
+        let breadcrumb = try XCTUnwrap(PersistenceController.restoreBreadcrumb())
+        XCTAssertEqual(breadcrumb.backupPath, "/tmp/b.json")
+        XCTAssertEqual(breadcrumb.environmentMove, "Production")
+
+        try PersistenceController.scheduleRecovery(backupURL: nil)
+        XCTAssertFalse(PersistenceController.hasRestoreBreadcrumb, "a new recovery supersedes an old breadcrumb")
+
+        try Data("{ broken".utf8).write(to: AppConstants.restoreInProgressURL)
+        XCTAssertTrue(PersistenceController.hasRestoreBreadcrumb, "an unreadable breadcrumb still counts")
+        XCTAssertNil(PersistenceController.restoreBreadcrumb())
+        PersistenceController.clearRestoreBreadcrumb()
+        XCTAssertFalse(PersistenceController.hasRestoreBreadcrumb)
+        PersistenceController.clearRestoreBreadcrumb()     // none: no-op
+    }
+
+    @MainActor
+    func testAnInterruptedRestoreNeverMovesTheStoreAgain() throws {
+        let other: CloudKitEnvironment = Entitlements.cloudKitEnvironment == .production ? .development : .production
+        try PersistenceController.scheduleRecovery(backupURL: root.appending(path: "b.json"), environmentMove: other)
+        PersistenceController.beginRestoreBreadcrumb(backupPath: root.appending(path: "b.json").path(percentEncoded: false),
+                                                     environmentMove: other.rawValue)
+
+        let controller = PersistenceController(cloudSyncEnabled: false, defaults: makeDefaults())
+        XCTAssertNil(controller.environmentMove)
+        XCTAssertNil(controller.launchNotice, "AppServices reports the interruption, not the store opening")
+        XCTAssertNotNil(PersistenceController.pendingRecovery(), "left for AppServices to remove")
+        let recoveredItems = (try? FileManager.default.contentsOfDirectory(
+            atPath: AppConstants.recoveredURL.path(percentEncoded: false))) ?? []
+        XCTAssertFalse(recoveredItems.contains { $0.hasPrefix("Env-") }, "nothing was moved aside")
+    }
+
+    // MARK: - "Use iCloud <env> Data" marker (M3)
+
+    @MainActor
+    func testUseICloudDataWritesAMoveMarkerWithoutABackup() throws {
+        try PersistenceController.scheduleRecovery(backupURL: nil, environmentMove: .production)
+        let marker = try XCTUnwrap(PersistenceController.pendingRecovery())
+        XCTAssertNil(marker.backupPath)
+        XCTAssertEqual(marker.environmentMove, "Production")
+        XCTAssertTrue(marker.adoptsCloudData)
+    }
+
+    // MARK: - Quarantine clears the recorded environment (L6)
+
+    @MainActor
+    func testMovingADamagedStoreAsideForgetsItsCloudKitEnvironment() throws {
+        let garbage = Data(repeating: 0x42, count: 4096)
+        try garbage.write(to: AppConstants.storeURL)
+        let defaults = makeDefaults()
+        defaults.set("Development", forKey: PersistenceController.cloudKitEnvironmentKey)
+
+        let controller = PersistenceController(cloudSyncEnabled: false, defaults: defaults)
+        XCTAssertTrue(controller.isRecoveryMode)
+        XCTAssertEqual(defaults.string(forKey: PersistenceController.cloudKitEnvironmentKey), "Development",
+                       "opening never changes it")
+        _ = try controller.quarantineStore()
+        XCTAssertNil(defaults.string(forKey: PersistenceController.cloudKitEnvironmentKey),
+                     "the fresh store adopts the build's environment")
+    }
+    // MARK: - Reused backup images are touched (L2)
+
+    func testReusedBackupImagesGetAFreshModificationDate() throws {
+        let fileManager = FileManager.default
+        let image = root.appending(path: "x.jpg")
+        try Data([1, 2, 3]).write(to: image)
+        let old = Date(timeIntervalSinceNow: -7200)
+        try fileManager.setAttributes([.modificationDate: old], ofItemAtPath: image.path(percentEncoded: false))
+
+        BackupService.touchImageFiles(["x.jpg", "missing.jpg"], in: root)
+        let modified = try XCTUnwrap(try fileManager.attributesOfItem(atPath: image.path(percentEncoded: false))[.modificationDate] as? Date)
+        XCTAssertGreaterThan(modified, Date(timeIntervalSinceNow: -60), "inside the image GC's grace period again")
+        XCTAssertFalse(exists(root.appending(path: "missing.jpg")), "missing files are not created")
+    }
 }

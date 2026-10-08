@@ -49,6 +49,12 @@ enum AppConstants {
         applicationSupportURL.appending(path: "pending-restore.json", directoryHint: .notDirectory)
     }
 
+    /// applicationSupportURL/restore-in-progress.json — written by `AppServices` while a launch restore imports a
+    /// backup (M1); found at the next launch → that restore was interrupted.
+    static var restoreInProgressURL: URL {
+        applicationSupportURL.appending(path: "restore-in-progress.json", directoryHint: .notDirectory)
+    }
+
     /// The store file plus SQLite/SwiftData companions (-wal, -shm and the external-storage folder `.Worklog_SUPPORT`).
     static var storeFileURLs: [URL] {
         let store = storeURL

@@ -33,7 +33,7 @@ struct SettingsAccountTab: View {
                 storageStatusRow
                 if let mismatch = persistence.environmentMismatch, !persistence.isInMemory {
                     HStack(spacing: theme.spacingS) {
-                        SettingsFootnote("Move it to iCloud \(mismatch.build.rawValue) or keep it on this Mac.")
+                        SettingsFootnote("Move it to iCloud \(mismatch.build.rawValue), use the data already there, or keep it on this Mac.")
                         Spacer()
                         Button("Move to iCloud \(mismatch.build.rawValue)\u{2026}") {
                             router.showSettings(tab: SettingsTab.data.rawValue)

@@ -24,6 +24,9 @@ final class AppServices {
     let backups: BackupService
     let overlay: OverlayPanelController
     var container: ModelContainer { persistence.container }
+    /// This launch completed "Use iCloud <env> Data" (fresh store, no restore): seeding waits up to 10 minutes for the
+    /// first iCloud import instead of 60 s, so a slow first download doesn't get default labels seeded beside it.
+    private var adoptsCloudData = false
 
     /// Order: settings → shortcuts(defaults:) → persistence(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory:) → sync → themeManager →
     /// auth → router → profiles(context:settings:) → engine(context:settings:profiles:) → exporter → backups →
@@ -31,10 +34,11 @@ final class AppServices {
     /// - previews/tests (`inMemory`): PreviewData.populate;
     /// - store failed to open (in-memory fallback): default labels so the session is usable; on quit, changed data is
     ///   written to Recovered/Unsaved-<stamp>.json;
-    /// - normal: a pending recovery (pending-restore.json, also written by "Move to iCloud <env>") is processed first,
-    ///   before anything is seeded or created: the chosen backup is imported — Replace into an empty store, else Merge
-    ///   after a safety backup — and seeding is skipped. The marker is removed before the attempt (one attempt only;
-    ///   a failure leaves a notice and the backup in the list). Otherwise SeedData.seedIfNeeded (deferred in CloudKit
+    /// - normal: a pending recovery (pending-restore.json, also written by "Move to iCloud <env>" and, without a
+    ///   backup, "Use iCloud <env> Data") is processed first, before anything is seeded or created: the chosen backup
+    ///   is imported — Replace into an empty store, else Merge after a safety backup — and seeding is skipped. The
+    ///   marker is removed before the attempt (one attempt only; a failure leaves a notice and the backup in the
+    ///   list); a breadcrumb left by an interrupted restore is reported instead (`processPendingRestore`). Otherwise SeedData.seedIfNeeded (deferred in CloudKit
     ///   mode until the first iCloud import, max 60 s, so a new Mac doesn't resurrect deleted defaults).
     /// Every branch then runs SeedData.ensureProfiles (default profile + repair of unassigned sessions — local-only
     /// stores; with CloudKit `SeedData.isSessionProfileRepairDisplayOnly` makes it display-only; *provisional* when
@@ -176,15 +180,31 @@ final class AppServices {
         return defaults
     }
 
-    /// Handles `pending-restore.json` written by the Recover… flow or "Move to iCloud <env>". Returns true when a
-    /// backup was imported (then the defaults must not be seeded on top of it).
+    /// Handles `pending-restore.json` written by the Recover… flow, "Move to iCloud <env>" or "Use iCloud <env> Data".
+    /// Returns true when a backup was imported (then the defaults must not be seeded on top of it).
     ///
     /// M6: the marker is removed BEFORE the attempt, so a failing or crashing restore can't repeat at every launch
     /// (the notice says so and the backup stays in the list). Replace only into an empty store (nothing is deleted,
     /// and labels/profiles that CloudKit already brought are never wiped); otherwise Merge, after a safety backup.
+    /// M1: a breadcrumb (`restore-in-progress.json`) is written before the marker is removed and deleted once the
+    /// restore finished or failed cleanly; found at launch, the last restore was interrupted: a notice with
+    /// "Restore…" says so (any marker left is removed, never retried).
     private func processPendingRestore() -> Bool {
         let move = persistence.environmentMove
-        guard let marker = PersistenceController.pendingRecovery() else {
+        let breadcrumbExists = PersistenceController.hasRestoreBreadcrumb
+        let marker = PersistenceController.pendingRecovery()
+        switch Self.launchRestoreStep(breadcrumbExists: breadcrumbExists, markerExists: marker != nil) {
+        case .reportInterrupted:
+            let breadcrumb = PersistenceController.restoreBreadcrumb()
+            PersistenceController.clearPendingRecovery()
+            PersistenceController.clearRestoreBreadcrumb()
+            let name = breadcrumb.map { URL(filePath: $0.backupPath).lastPathComponent }
+            let logName = name ?? "unknown backup"
+            Log.persistence.error("The last launch restore didn't finish (\(logName, privacy: .public))")
+            persistence.launchNotice = Self.interruptedRestoreNotice(backupFileName: name)
+            persistence.launchNoticeOffersRestore = true
+            return false
+        case .nothing:
             if FileManager.default.fileExists(atPath: AppConstants.pendingRestoreURL.path(percentEncoded: false)) {
                 Log.persistence.error("Unreadable recovery marker removed")
                 PersistenceController.clearPendingRecovery()
@@ -192,20 +212,31 @@ final class AppServices {
             if let move {
                 persistence.launchNotice = "Moved to iCloud \(move.to.rawValue), but no backup was found to "
                     + "restore. Your previous data is in the Recovered folder."
+                persistence.launchNoticeOffersRestore = true
             }
             return false
+        case .restore:
+            break
         }
-        PersistenceController.clearPendingRecovery()
+        guard let marker else { return false }
         guard let path = marker.backupPath else {
+            PersistenceController.clearPendingRecovery()
             // The fresh store has no labels: allow seeding again (deferred until the first iCloud import when syncing,
             // and skipped if labels arrive from iCloud).
             UserDefaults.standard.set(false, forKey: SeedData.didSeedDefaultsKey)
-            persistence.launchNotice = persistence.isSyncingWithICloud
-                ? "Started fresh; downloading your data from iCloud."
-                : "Started with an empty data store."
-            Log.persistence.info("Recovery: started with a fresh store")
+            persistence.launchNotice = Self.freshStoreNotice(moveTarget: move?.to,
+                                                            isSyncing: persistence.isSyncingWithICloud)
+            // Moved without iCloud: the pinned backup made before the move is the way back.
+            persistence.launchNoticeOffersRestore = move != nil && !persistence.isSyncingWithICloud
+            // "Use iCloud <env> Data": seeding waits longer for the first download (see `seedDefaults`).
+            adoptsCloudData = move != nil
+            Log.persistence.info("Recovery: started with a fresh store (environment move: \(move != nil, privacy: .public))")
             return false
         }
+        // Breadcrumb first, then the marker: a crash at any point after this is reported at the next launch.
+        PersistenceController.beginRestoreBreadcrumb(backupPath: path, environmentMove: marker.environmentMove)
+        PersistenceController.clearPendingRecovery()
+        defer { PersistenceController.clearRestoreBreadcrumb() }
         let url = URL(filePath: path)
         do {
             let archive = try exporter.decodeArchive(from: url)
@@ -220,11 +251,17 @@ final class AppServices {
                 let expected = archive.sessions.count
                 let count = restored >= expected ? "\(expected)" : "\(restored) of \(expected)"
                 var text = "\(lead): \(count) \(expected == 1 ? "session" : "sessions") restored."
+                let imagesMissing = summary.imagesMissing
                 if restored < expected {
                     text += " Some are missing; the backup is pinned in Settings \u{25B8} Data."
                 }
+                if imagesMissing > 0 {
+                    // L1
+                    text += " \(imagesMissing) \(imagesMissing == 1 ? "image wasn\u{2019}t" : "images weren\u{2019}t") restored."
+                }
                 text += " Your previous copy is in the Recovered folder."
                 persistence.launchNotice = text
+                persistence.launchNoticeOffersRestore = restored < expected || imagesMissing > 0
             } else {
                 persistence.launchNotice = "Restored \u{201C}\(url.lastPathComponent)\u{201D}. \(summary.description)"
             }
@@ -239,6 +276,39 @@ final class AppServices {
             persistence.launchNoticeOffersRestore = true
             return false
         }
+    }
+
+    /// M1 (pure): what the launch does about a pending restore.
+    enum LaunchRestoreStep: Equatable {
+        /// No marker, no breadcrumb.
+        case nothing
+        /// A marker to process (restore its backup, or start fresh).
+        case restore
+        /// The last launch restore didn't finish (a breadcrumb is left): report it, never retry.
+        case reportInterrupted
+    }
+
+    /// M1 (pure): a breadcrumb always wins (a marker next to it is from the same, interrupted attempt).
+    nonisolated static func launchRestoreStep(breadcrumbExists: Bool, markerExists: Bool) -> LaunchRestoreStep {
+        if breadcrumbExists { return .reportInterrupted }
+        return markerExists ? .restore : .nothing
+    }
+
+    /// M1 (pure): the notice after an interrupted launch restore.
+    nonisolated static func interruptedRestoreNotice(backupFileName: String?) -> String {
+        let backup = backupFileName.map { "\u{201C}\($0)\u{201D}" } ?? "the backup"
+        return "The last restore didn\u{2019}t finish. Restore \(backup) from Settings \u{25B8} Data."
+    }
+
+    /// M3 (pure): the notice after a recovery without a backup (`moveTarget` set: "Use iCloud <env> Data").
+    nonisolated static func freshStoreNotice(moveTarget: CloudKitEnvironment?, isSyncing: Bool) -> String {
+        guard let target = moveTarget else {
+            return isSyncing ? "Started fresh; downloading your data from iCloud." : "Started with an empty data store."
+        }
+        return isSyncing
+            ? "Now using iCloud \(target.rawValue); downloading your data. Your previous copy is in the Recovered folder."
+            : "iCloud \(target.rawValue) isn\u{2019}t available yet, so this Mac starts empty. "
+                + "Your previous copy is in the Recovered folder."
     }
 
     /// M6 (pure): a pending restore replaces only an empty store (nothing is deleted); otherwise it merges.
@@ -274,8 +344,9 @@ final class AppServices {
     }
 
     /// Seeds the default labels/tags. With CloudKit on and nothing seeded yet (a new Mac, or a fresh store) it waits for
-    /// the first iCloud import (max 60 s) so labels deleted on another Mac aren't recreated; `seedIfNeeded` then only
-    /// seeds when there are still no labels.
+    /// the first iCloud import (max 60 s; 10 min after "Use iCloud <env> Data", `adoptsCloudData`) so labels deleted on
+    /// another Mac aren't recreated; `seedIfNeeded` then only seeds when there are still no labels (defaults have
+    /// fixed UUIDs, so any seeded before a late download are merged by `deduplicate`).
     private func seedDefaults(in context: ModelContext) {
         let alreadySeeded = UserDefaults.standard.bool(forKey: SeedData.didSeedDefaultsKey)
         guard persistence.isSyncingWithICloud, !alreadySeeded else {
@@ -284,8 +355,9 @@ final class AppServices {
         }
         let sync = sync
         let profiles = profiles
+        let maxWait: TimeInterval = adoptsCloudData ? 600 : 60
         Task { @MainActor in
-            let deadline = Date.now.addingTimeInterval(60)
+            let deadline = Date.now.addingTimeInterval(maxWait)
             while !sync.hasCompletedFirstImport && Date.now < deadline {
                 try? await Task.sleep(for: .seconds(1))
             }

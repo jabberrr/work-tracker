@@ -12,7 +12,9 @@ import UniformTypeIdentifiers
 ///
 /// When the store synced with another CloudKit environment than this build (`persistence.environmentMismatch`), the
 /// tab leads with "Move to iCloud <env>…" (verified pinned backup incl. images → marker → relaunch; the next launch
-/// moves the old store to Recovered/Env-…, opens a fresh CloudKit store and restores) or "Keep Local Only".
+/// moves the old store to Recovered/Env-…, opens a fresh CloudKit store and restores), "Use iCloud <env> Data…"
+/// (same, but nothing is restored: the fresh store downloads what that environment already holds — for a second Mac
+/// whose data the first Mac already moved) or "Keep Local Only".
 @MainActor
 struct SettingsDataTab: View {
     @Environment(ExportService.self) private var exporter
@@ -31,6 +33,7 @@ struct SettingsDataTab: View {
     @State private var confirmsDeleteAllAgain = false
     @State private var recoveryRequest: SettingsRecoveryRequest?
     @State private var confirmsMove = false
+    @State private var confirmsAdopt = false
     @State private var isMoving = false
 
     /// Recover… is offered (the store failed to open and isn't from a newer Worklog).
@@ -107,12 +110,27 @@ struct SettingsDataTab: View {
             Text("Worklog backs up everything, images included, relaunches and uploads your data. "
                  + "The current copy stays in the Recovered folder.")
         }
+        .confirmationDialog(adoptTitle, isPresented: $confirmsAdopt, titleVisibility: .visible) {
+            Button("Back Up and Relaunch") { moveToBuildEnvironment(adoptingCloudData: true) }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Worklog backs up this Mac\u{2019}s data, relaunches and downloads what\u{2019}s already in iCloud. "
+                 + "Nothing from this Mac is uploaded; its copy stays in the Recovered folder.")
+        }
     }
 
     // MARK: - iCloud environment (C1b)
 
+    private var targetEnvironmentName: String {
+        (persistence.environmentMismatch?.build ?? persistence.buildEnvironment).rawValue
+    }
+
     private var moveTitle: String {
-        "Move your data to iCloud \(persistence.environmentMismatch?.build.rawValue ?? persistence.buildEnvironment.rawValue)?"
+        "Move your data to iCloud \(targetEnvironmentName)?"
+    }
+
+    private var adoptTitle: String {
+        "Use the data in iCloud \(targetEnvironmentName)?"
     }
 
     private func environmentSection(_ mismatch: EnvironmentMismatch) -> some View {
@@ -120,28 +138,76 @@ struct SettingsDataTab: View {
             InlineBanner("This data syncs with iCloud \(mismatch.store.rawValue), but this build uses "
                          + "\(mismatch.build.rawValue). It\u{2019}s saved on this Mac only for now.",
                          systemImage: "icloud.slash", style: .warning)
-            HStack(spacing: theme.spacingS) {
-                Button("Move to iCloud \(mismatch.build.rawValue)\u{2026}") { confirmsMove = true }
-                    .buttonStyle(PrimaryButtonStyle())
-                    .disabled(isMoving || backups.isWorking)
-                Button("Keep Local Only", action: keepLocalOnly)
-                    .buttonStyle(QuietButtonStyle())
-                    .disabled(isMoving || !settings.iCloudSyncEnabled)
-                Spacer()
-                if isMoving {
-                    ProgressView()
-                        .controlSize(.small)
-                        .accessibilityLabel("Backing up")
+            // Two rows when the three buttons don't fit side by side.
+            ViewThatFits(in: .horizontal) {
+                HStack(spacing: theme.spacingS) {
+                    environmentButtons(mismatch)
+                    Spacer(minLength: 0)
+                    movingIndicator
+                }
+                VStack(alignment: .leading, spacing: theme.spacingS) {
+                    HStack(spacing: theme.spacingS) {
+                        moveButton(mismatch)
+                        adoptButton(mismatch)
+                    }
+                    HStack(spacing: theme.spacingS) {
+                        keepLocalButton
+                        Spacer(minLength: 0)
+                        movingIndicator
+                    }
                 }
             }
-            SettingsFootnote(settings.iCloudSyncEnabled
-                             ? "Moving makes a pinned backup first; nothing is deleted."
-                             : "Kept on this Mac. You can still move it later.")
+            SettingsFootnote(environmentFootnote(mismatch))
+        }
+    }
+
+    private func environmentFootnote(_ mismatch: EnvironmentMismatch) -> String {
+        guard settings.iCloudSyncEnabled else { return "Kept on this Mac. You can still move it later." }
+        return "First Mac: Move uploads this Mac\u{2019}s data. Other Macs: Use iCloud \(mismatch.build.rawValue) "
+            + "Data downloads what\u{2019}s there. Both back up first; nothing is deleted."
+    }
+
+    @ViewBuilder
+    private func environmentButtons(_ mismatch: EnvironmentMismatch) -> some View {
+        moveButton(mismatch)
+        adoptButton(mismatch)
+        keepLocalButton
+    }
+
+    private func moveButton(_ mismatch: EnvironmentMismatch) -> some View {
+        Button("Move to iCloud \(mismatch.build.rawValue)\u{2026}") { confirmsMove = true }
+            .buttonStyle(PrimaryButtonStyle())
+            .disabled(isMoving || backups.isWorking)
+            .fixedSize()
+    }
+
+    private func adoptButton(_ mismatch: EnvironmentMismatch) -> some View {
+        Button("Use iCloud \(mismatch.build.rawValue) Data\u{2026}") { confirmsAdopt = true }
+            .buttonStyle(QuietButtonStyle())
+            .disabled(isMoving || backups.isWorking)
+            .fixedSize()
+    }
+
+    private var keepLocalButton: some View {
+        Button("Keep Local Only", action: keepLocalOnly)
+            .buttonStyle(QuietButtonStyle())
+            .disabled(isMoving || !settings.iCloudSyncEnabled)
+            .fixedSize()
+    }
+
+    @ViewBuilder
+    private var movingIndicator: some View {
+        if isMoving {
+            ProgressView()
+                .controlSize(.small)
+                .accessibilityLabel("Backing up")
         }
     }
 
     /// Verified, pinned full backup → marker (`environmentMove`) → relaunch. Nothing changes if any step fails.
-    private func moveToBuildEnvironment() {
+    /// `adoptingCloudData` ("Use iCloud <env> Data"): the marker has no backup, so the next launch moves the store
+    /// aside and opens a fresh CloudKit store that downloads the environment's data; the backup is only the way back.
+    private func moveToBuildEnvironment(adoptingCloudData: Bool = false) {
         guard let mismatch = persistence.environmentMismatch else { return }
         if exporter.hasActiveSession() {
             message = SettingsDataMessage(title: "Session running",
@@ -159,7 +225,8 @@ struct SettingsDataTab: View {
             return
         }
         do {
-            try PersistenceController.scheduleRecovery(backupURL: backup.url, environmentMove: mismatch.build)
+            try PersistenceController.scheduleRecovery(backupURL: adoptingCloudData ? nil : backup.url,
+                                                       environmentMove: mismatch.build)
         } catch {
             Log.ui.error("Move: scheduling failed: \(error.localizedDescription, privacy: .public)")
             message = SettingsDataMessage(title: "Nothing was moved", text: error.localizedDescription)
@@ -167,7 +234,8 @@ struct SettingsDataTab: View {
         }
         // The move needs sync at the next launch (it is skipped otherwise).
         settings.iCloudSyncEnabled = true
-        Log.ui.info("Move to iCloud \(mismatch.build.rawValue, privacy: .public) scheduled; relaunching")
+        let action = adoptingCloudData ? "Use iCloud data" : "Move"
+        Log.ui.info("\(action, privacy: .public) (\(mismatch.build.rawValue, privacy: .public)) scheduled; relaunching")
         PersistenceController.relaunchApp()
     }
 

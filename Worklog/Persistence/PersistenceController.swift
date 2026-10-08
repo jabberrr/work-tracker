@@ -84,6 +84,20 @@ struct PendingRestore: Codable, Equatable {
     /// `Recovered/Env-<old>-<stamp>/` BEFORE opening, then opens a fresh CloudKit store and restores `backupPath`.
     /// nil for a plain recovery. (Optional, so markers written by older builds still decode.)
     var environmentMove: String? = nil
+
+    /// "Use iCloud <env> Data": an environment move without a backup to restore — the next launch moves the store
+    /// aside and opens a fresh CloudKit store that downloads what that environment already holds.
+    var adoptsCloudData: Bool { environmentMove != nil && backupPath == nil }
+}
+
+/// Contents of `AppConstants.restoreInProgressURL` (M1): written right before a launch restore imports a backup and
+/// removed once it finished or failed cleanly. Still there at the next launch → that restore was interrupted (crash,
+/// force quit), and `AppServices` says so instead of leaving an empty app without a word.
+struct RestoreBreadcrumb: Codable, Equatable {
+    var backupPath: String
+    var startedAt: Date
+    /// The environment of the move this restore belonged to (raw value), if any.
+    var environmentMove: String? = nil
 }
 
 @MainActor @Observable
@@ -129,6 +143,8 @@ final class PersistenceController {
     var recoveredFolderURL: URL { AppConstants.recoveredURL }
 
     private let isPreview: Bool
+    /// The defaults this controller records the CloudKit environment in (`cloudKitEnvironmentKey`).
+    private let defaults: UserDefaults
 
     /// UserDefaults: the CloudKit environment the store syncs with ("Development"/"Production"), or
     /// `neverSyncedValue` for a store created local-only that never synced. Missing + store exists → Development
@@ -164,6 +180,7 @@ final class PersistenceController {
         cloudKitContainerIdentifier = containerID
         buildEnvironment = environment
         isPreview = inMemory
+        self.defaults = defaults
 
         if inMemory {
             container = PersistenceController.makeInMemoryContainer(schema: schema)
@@ -209,7 +226,9 @@ final class PersistenceController {
         let cloudKitWanted = cloudSyncEnabled && Entitlements.hasCloudKit
         var notice: String?
         var move: EnvironmentMove?
-        if let marker = pendingRecovery(), let raw = marker.environmentMove {
+        // A restore interrupted right after its move (the marker wasn't removed yet) must not move the new store
+        // aside again: AppServices reports the interruption and removes the marker.
+        if !hasRestoreBreadcrumb, let marker = pendingRecovery(), let raw = marker.environmentMove {
             let target = CloudKitEnvironment(rawValue: raw)
             if target == environment && cloudKitWanted {
                 let from = CloudKitEnvironment(rawValue: defaults.string(forKey: cloudKitEnvironmentKey) ?? "")
@@ -318,12 +337,15 @@ final class PersistenceController {
     /// Moves Worklog.store, -wal, -shm and .Worklog_SUPPORT/ (whichever exist) to `Recovered/Store-<UTC stamp>/` and
     /// returns that folder. Never deletes anything. Only allowed while running on the in-memory fallback (the on-disk
     /// store is then not open); throws `.storeIsOpen` otherwise, and `.storeIsNewer` for a store a newer Worklog made.
+    /// L6: the recorded CloudKit environment belonged to the moved store, so it is cleared: the fresh store adopts
+    /// this build's environment instead of being reported as a mismatch.
     func quarantineStore() throws -> URL {
         guard isRecoveryMode else { throw StoreRecoveryError.storeIsOpen }
         guard !isStoreFromNewerVersion else { throw StoreRecoveryError.storeIsNewer }
         guard let folder = try Self.moveStoreFilesAside(prefix: "Store") else {
             throw StoreRecoveryError.nothingToMove
         }
+        defaults.removeObject(forKey: Self.cloudKitEnvironmentKey)
         Log.persistence.info("Moved damaged store aside to \(folder.lastPathComponent, privacy: .public)")
         return folder
     }
@@ -331,6 +353,8 @@ final class PersistenceController {
     /// Writes `<AppSupport>/Worklog/pending-restore.json`. At the next launch `AppServices` imports `backupURL`
     /// (replace into an empty store, else merge) before seeding; nil = start fresh (CloudKit re-downloads data).
     /// `environmentMove`: "Move to iCloud <env>" — the next launch first moves the store aside (see `PendingRestore`).
+    /// `backupURL` nil with `environmentMove` = "Use iCloud <env> Data" (`PendingRestore.adoptsCloudData`).
+    /// A leftover restore breadcrumb is superseded by the new recovery and removed.
     static func scheduleRecovery(backupURL: URL?, environmentMove: CloudKitEnvironment? = nil) throws {
         let marker = PendingRestore(backupPath: backupURL?.path(percentEncoded: false), createdAt: .now,
                                     environmentMove: environmentMove?.rawValue)
@@ -340,6 +364,7 @@ final class PersistenceController {
         } catch {
             throw StoreRecoveryError.markerWriteFailed(error.localizedDescription)
         }
+        clearRestoreBreadcrumb()
     }
 
     /// The pending recovery marker, if any (nil when missing or unreadable).
@@ -356,6 +381,42 @@ final class PersistenceController {
             try FileManager.default.removeItem(at: url)
         } catch {
             Log.persistence.error("Couldn't remove recovery marker: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    // MARK: - Restore breadcrumb (M1)
+
+    /// True when `AppConstants.restoreInProgressURL` exists (readable or not).
+    static var hasRestoreBreadcrumb: Bool {
+        FileManager.default.fileExists(atPath: AppConstants.restoreInProgressURL.path(percentEncoded: false))
+    }
+
+    /// The breadcrumb's contents (nil when missing or unreadable; see `hasRestoreBreadcrumb`).
+    static func restoreBreadcrumb() -> RestoreBreadcrumb? {
+        guard let data = try? Data(contentsOf: AppConstants.restoreInProgressURL) else { return nil }
+        return try? ExportArchive.makeDecoder().decode(RestoreBreadcrumb.self, from: data)
+    }
+
+    /// Writes the breadcrumb right before a launch restore imports `backupPath`. A failure is only logged (the
+    /// restore still runs; only the interruption notice would be missing).
+    static func beginRestoreBreadcrumb(backupPath: String, environmentMove: String?) {
+        let breadcrumb = RestoreBreadcrumb(backupPath: backupPath, startedAt: .now, environmentMove: environmentMove)
+        do {
+            let data = try ExportArchive.makeEncoder(pretty: true).encode(breadcrumb)
+            try data.write(to: AppConstants.restoreInProgressURL, options: .atomic)
+        } catch {
+            Log.persistence.error("Couldn't write the restore breadcrumb: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// Removes the breadcrumb (no-op when there is none).
+    static func clearRestoreBreadcrumb() {
+        let url = AppConstants.restoreInProgressURL
+        guard FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) else { return }
+        do {
+            try FileManager.default.removeItem(at: url)
+        } catch {
+            Log.persistence.error("Couldn't remove the restore breadcrumb: \(error.localizedDescription, privacy: .public)")
         }
     }
 

@@ -30,6 +30,29 @@ struct ExportArchive: Codable {
     var attachmentsWithoutImageCount: Int {
         sessions.reduce(0) { total, session in total + session.attachments.filter { $0.data == nil }.count }
     }
+
+    /// Backup image file names (`attachmentFileName`, image and thumbnail) of every attachment in the archive.
+    var imageFileNames: Set<String> {
+        var names = Set<String>()
+        for session in sessions {
+            for attachment in session.attachments {
+                names.insert(Self.attachmentFileName(id: attachment.id, uti: attachment.uti, thumbnail: false))
+                names.insert(Self.attachmentFileName(id: attachment.id, uti: attachment.uti, thumbnail: true))
+            }
+        }
+        return names
+    }
+
+    /// Image file names (`attachmentFileName`, thumbnail: false) of the attachments that carry no image bytes.
+    var imageFileNamesWithoutBytes: Set<String> {
+        var names = Set<String>()
+        for session in sessions {
+            for attachment in session.attachments where attachment.data == nil {
+                names.insert(Self.attachmentFileName(id: attachment.id, uti: attachment.uti, thumbnail: false))
+            }
+        }
+        return names
+    }
 }
 struct ProfileDTO: Codable, Hashable {
     var id: UUID; var name: String; var colorHex: String; var symbolName: String; var sortIndex: Int

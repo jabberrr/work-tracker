@@ -188,17 +188,11 @@ struct RootView: View {
             }
         }
         .listStyle(.sidebar)
-        // Dismiss layer while the inline profile list is open: a click anywhere in the List area only collapses it
-        // (like a menu). Applied BEFORE safeAreaInset, so it covers the List region above the inset, never the
-        // switcher, the mini status row or the footer.
-        .overlay {
-            if isProfileListExpanded {
-                Color.clear
-                    .contentShape(Rectangle())
-                    .onTapGesture { collapseProfileList() }
-                    .accessibilityHidden(true)
-            }
-        }
+        // A click in the List area also collapses the inline profile list, without swallowing the click: the
+        // gesture is simultaneous, so row selection still happens (and `onChange(of: router.selection)` collapses
+        // too). Applied BEFORE safeAreaInset, so clicks in the switcher, the mini status row or the footer don't
+        // reach it.
+        .simultaneousGesture(TapGesture().onEnded { collapseProfileList() })
         // Pinned to the bottom of the sidebar column (not a VStack sibling), so it can't be pushed off-screen.
         // Order: mini status row (while active) → profile switcher (always: it's where profiles are created; its
         // inline list grows the inset upward) → footer (never moves).
@@ -476,7 +470,8 @@ struct RootView: View {
                 style: .info,
                 help: reason,
                 actionTitle: "Details\u{2026}",
-                // An environment mismatch is resolved in Settings ▸ Data ("Move to iCloud …" / "Keep Local Only").
+                // An environment mismatch is resolved in Settings ▸ Data ("Move to iCloud …", "Use iCloud … Data" or
+                // "Keep Local Only").
                 action: { router.showSettings(tab: persistence.environmentMismatch != nil ? "data" : "account") },
                 onDismiss: { settings.dismissedLocalOnlyBannerReason = reason }
             ))

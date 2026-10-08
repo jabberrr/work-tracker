@@ -202,6 +202,17 @@ final class ExportService {
         return payloads
     }
 
+    /// L3: image file names (`ExportArchive.attachmentFileName`, thumbnail: false) of the attachments whose image
+    /// bytes are on this Mac (an image CloudKit hasn't downloaded has none). Loads each attachment's bytes.
+    func imageFileNamesWithBytes() -> Set<String> {
+        var names = Set<String>()
+        for attachment in (try? context.fetch(FetchDescriptor<Attachment>())) ?? [] where !attachment.isDeleted {
+            guard attachment.data != nil else { continue }
+            names.insert(ExportArchive.attachmentFileName(id: attachment.uuid, uti: attachment.uti, thumbnail: false))
+        }
+        return names
+    }
+
     /// Number of (non-deleted) sessions in the store.
     func sessionCount() -> Int {
         (try? context.fetchCount(FetchDescriptor<WorkSession>())) ?? 0

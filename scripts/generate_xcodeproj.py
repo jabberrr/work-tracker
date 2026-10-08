@@ -298,7 +298,7 @@ def main():
     project_configs = config_list("project", [("Debug", project_debug), ("Release", project_release)])
     # Hardened runtime is for distribution; Debug leaves it off so the test bundle always loads into the host app.
     # Debug: its own bundle id (never opens the real store) and Worklog.entitlements (CloudKit Development).
-    # Release: WorklogRelease.entitlements (CloudKit Production, production push) for Developer ID distribution.
+    # Release: WorklogRelease.entitlements (CloudKit Production; aps-environment is set to production by the Developer ID export) for Developer ID distribution.
     app_debug = dict(app_settings, ENABLE_HARDENED_RUNTIME="NO", PRODUCT_BUNDLE_IDENTIFIER=DEBUG_BUNDLE_ID)
     app_release = dict(app_settings, ENABLE_HARDENED_RUNTIME="YES",
                        CODE_SIGN_ENTITLEMENTS=f"{APP_DIR}/Resources/WorklogRelease.entitlements")

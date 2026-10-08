@@ -634,6 +634,7 @@ enum AppConstants {
     static var storeURL: URL                 // applicationSupportURL/Worklog.store
     static var recoveredURL: URL             // applicationSupportURL/Recovered (damaged stores, PreOpen snapshots, unsaved data)
     static var pendingRestoreURL: URL        // applicationSupportURL/pending-restore.json
+    static var restoreInProgressURL: URL     // applicationSupportURL/restore-in-progress.json (M1 breadcrumb)
     static var storeFileURLs: [URL]          // store, -wal, -shm, .Worklog_SUPPORT
     static func fileTimestamp(_ date: Date = .now) -> String   // "2026-10-07T14-03-22Z" (UTC)
     static var appVersion: String; static var buildNumber: String; static var buildConfiguration: String
@@ -1185,13 +1186,18 @@ enum AttachmentImportError: LocalizedError { case unreadableImage, encodingFaile
     /// make + insert + link to session + touch + save. Skips failures, sets no error UI (returns successes).
     @discardableResult
     static func add(_ images: [ImportedImage], to session: WorkSession, in context: ModelContext) -> [Attachment]
-    /// Synchronous: processes the chosen files on the main thread (the UI waits). Prefer the async overload.
+    /// Drop / paste (round 4 final): `prepareImages` off the main thread, then insert/link/save on the main actor
+    /// only if `session` is still live. Named apart from `add` so an `await` call can't resolve to the sync one.
     @discardableResult
-    static func addFromOpenPanel(to session: WorkSession, in context: ModelContext) -> [Attachment]
-    /// Round 4b: open panel, then `prepare(fileAt:)` off the main thread; inserts/saves on the main actor only if
-    /// `session` is still live. Call with `await` from a Task.
+    static func addInBackground(_ images: [ImportedImage], to session: WorkSession,
+                                in context: ModelContext) async -> [Attachment]
+    /// Open panel, then `prepareFiles` off the main thread; inserts/saves on the main actor only if `session` is
+    /// still live. Call with `await` from a Task. (The synchronous overload was removed in round 4 final.)
     @discardableResult
     static func addFromOpenPanel(to session: WorkSession, in context: ModelContext) async -> [Attachment]
+    /// `prepare(imageData:filename:)` / `prepare(fileAt:)` for each item, skipping (and logging) failures.
+    nonisolated static func prepareImages(_ images: [ImportedImage]) -> [PreparedImage]
+    nonisolated static func prepareFiles(_ urls: [URL]) -> [PreparedImage]
     /// Downscale + encode without creating a model (Sendable `PreparedImage`); safe off the main thread.
     nonisolated static func prepare(imageData data: Data, filename: String) throws -> PreparedImage
     nonisolated static func prepare(fileAt url: URL) throws -> PreparedImage
@@ -1228,6 +1234,8 @@ final class WindowRouter {
 
     /// Round 4b: sheets in the main window other than the review (Split, image viewer, New Profile…) call
     /// childSheetDidAppear()/childSheetDidDisappear() (never below 0). RootView holds the review back while > 0.
+    /// Confirmation dialogs and alerts use `View.countsAsChildSheet(isPresented:)` (Shared/ProfileSwitcher.swift;
+    /// replaces LiveSession's `liveChildSheet`): History, segment, image and note dialogs as well as the live ones.
     private(set) var presentedChildSheets: Int = 0
     /// Bumped by requestReview(); RootView re-presents a pending review (nil → session toggle).
     private(set) var reviewRequest: Int = 0
@@ -1317,6 +1325,13 @@ final class OverlayPanelController {
     func show()      // settings.overlayEnabled = true
     func hide()      // settings.overlayEnabled = false
     func toggle()
+    /// Round 4 final (replaces OverlayView's `OverlayKeyFocus`): makes the panel key so a field in it takes typing
+    /// right away, without activating Worklog.
+    func makePanelKey()
+    /// Ends editing and gives up key status: to a Worklog window when Worklog is active and has one that can take
+    /// the keyboard, else back to the frontmost app (deactivating Worklog when it has nothing else to type into).
+    /// Runs on the next main-actor turn. Never call `panel.resignKey()` directly.
+    func releaseKeyFocus()
 }
 ```
 
@@ -1662,7 +1677,7 @@ Round 2 changed several of these views (in-app Settings, the overlay layout edit
   - Pause/Resume, Split (popover: label, tags, focus), Stop, Discard (with confirm)
   - segment strip
   - note composer (Return adds; FocusState driven by `router.noteFocusRequest`) and live notes list (NoteRow)
-  - optional "Attach image" via `AttachmentImporter.addFromOpenPanel`
+  - optional "Attach image" via `await AttachmentImporter.addFromOpenPanel`; drop/paste via `await AttachmentImporter.addInBackground`
   - banners for `autoPauseReason` and long-running sessions ("Stop at last activity", which calls `engine.stop(at: session.lastActivityDate)`)
   - `splitRequest` opens the split popover
 - **`EndSessionSheet`:**
@@ -1869,7 +1884,7 @@ Within views:
 </dict>
 </plist>
 ```
-`WorklogRelease.entitlements` adds `com.apple.developer.icloud-container-environment` = Production (and a production push environment). `WorklogLocal.entitlements` contains only the first three keys. With it, the app runs with "Sign to Run Locally". CloudKit then falls back to the local store, and Sign in with Apple shows its hint.
+`WorklogRelease.entitlements` adds `com.apple.developer.icloud-container-environment` = Production; its `aps-environment` stays `development` so the Archive build matches Xcode's automatic-signing development profile, and Organizer's Developer ID export rewrites it to `production` from the distribution profile (README *Safe first archive*, step 6 checks it). `WorklogLocal.entitlements` contains only the first three keys. With it, the app runs with "Sign to Run Locally". CloudKit then falls back to the local store, and Sign in with Apple shows its hint.
 
 ### 8.3 README (CORE) must explain
 1. Open `Worklog.xcodeproj` (or regenerate it with `scripts/generate_xcodeproj.py`; mirror any project-setting change there).
@@ -2307,7 +2322,7 @@ Round 4 replaces the profile switcher's popover with an inline list in the sideb
 | Agent | Owns |
 |---|---|
 | ENG | `Services/OverlayLayout.swift` (grid model), `Services/AppSettings.swift`, `App/RootView.swift`, `WorklogTests/OverlayLayoutTests.swift`, `WorklogTests/OverlayGridLayoutTests.swift`, this document |
-| DES | `DesignSystem/**` (`EditModeChrome`: `RemoveBadgeButton`, `editRemoveBadge`, `EditResizeHandle`, `AddBadgeButton`), `Shared/**` (`ProfileSwitcher` inline list), `docs/DESIGN.md` |
+| DES | `DesignSystem/**` (`EditModeChrome`: `RemoveBadgeButton`, `editRemoveBadge`, `EditResizeHandle` + `EditResizeHandle.center(in:)` + `View.editResizeHandle(_:gesture:)` — the only way to place the handle, applied before `editRemoveBadge` so their hit areas never overlap —, `AddBadgeButton`), `Shared/**` (`ProfileSwitcher` inline list), `docs/DESIGN.md` |
 | F-OVERLAY | `Features/Overlay/**` (`OverlayContent`, `OverlayLayoutEditor`, `OverlayView`, `OverlayGridViews`), `Features/Settings/SettingsOverlayTab.swift` |
 
 New files (`OverlayGridLayoutTests.swift`, `OverlayGridViews.swift`) are added to `Worklog.xcodeproj` by running `python3 scripts/generate_xcodeproj.py`.
@@ -2422,14 +2437,14 @@ func resetOverlayDefaults()                       // overlayGrid = .defaultLayou
 
 - State: `@State isProfileListExpanded` (the sidebar owns it so a click elsewhere in the sidebar can collapse it) and `@State sidebarHeight`.
 - `ProfileSwitcher(isExpanded: $isProfileListExpanded, maxMenuHeight: ProfileSwitcher.menuHeightLimit(sidebarHeight: sidebarHeight))` sits in the bottom `safeAreaInset`, between the mini status row and the footer. The list expands upward inside the inset, so the footer never moves.
-- **Dismiss layer:** while expanded, a clear `.overlay` on the `List` collapses the list on a click (and swallows it, like a menu). It is applied **before** `.safeAreaInset`, so it never covers the switcher, the mini status row or the footer. Clicks in the detail pane don't collapse the list.
+- **Click to collapse:** the `List` carries `.simultaneousGesture(TapGesture().onEnded { collapseProfileList() })`. It never swallows the click (row selection still happens; there is no overlay layer). It is applied **before** `.safeAreaInset`, so clicks in the switcher, the mini status row or the footer don't reach it. Clicks in the detail pane don't collapse the list.
 - **Sidebar height:** a `.background { GeometryReader }` (measurement only, never affects layout) feeds `sidebarHeight` through `onAppear`/`onChange(of: proxy.size.height)`. `onGeometryChange` needs macOS 15. The limit `min(360, max(120, h · 0.5))` keeps the inset bounded by the measured sidebar, never by data, so the window's 900×600 minimum can't grow.
 - **Collapse** (`collapseProfileList()`: no-op when collapsed; `.easeOut(0.18)`, none under Reduce Motion) on: the mini status row, the account button and the gear (before their action), any `router.selection` change, and any `auth.needsWelcome` change.
 
 ### 13.5 Pitfalls
 
 - macOS 14: no `onGeometryChange`/`onScrollGeometryChange`, no `@Entry`.
-- Keep the dismiss layer before `safeAreaInset`, and the sidebar `GeometryReader` in a background.
+- Keep the List's collapse gesture before `safeAreaInset` (and simultaneous, never an overlay that eats clicks), and the sidebar `GeometryReader` in a background.
 - Never build placements in views; `placements` is `private(set)` and every path normalizes.
 - Don't re-encode the stored grid at launch unless it was migrated; always write the mirror; never touch the legacy keys.
 - Drag math (`OverlayGridGeometry`), row frames and the drag gesture must share the `"overlayGrid"` coordinate space.
@@ -2448,15 +2463,16 @@ Round 4a made the app safe to use daily with real data; round 4b fixed functiona
 
 ### 14.1 Build and identity
 
-- Release: bundle id `app.dabora.worktracker`, `WorklogRelease.entitlements` (CloudKit **Production**), hardened runtime, Developer ID + notarization. Debug: `app.dabora.worktracker.debug`, `Worklog.entitlements` (CloudKit Development), its own sandbox container, store, defaults and keychain items.
+- Release: bundle id `app.dabora.worktracker`, `WorklogRelease.entitlements` (CloudKit **Production**; `aps-environment` `development` in the file, `production` after the Developer ID export), hardened runtime, Developer ID + notarization. Debug: `app.dabora.worktracker.debug`, `Worklog.entitlements` (CloudKit Development), its own sandbox container, store, defaults and keychain items.
 - `Entitlements.cloudKitEnvironment` reads the signed `com.apple.developer.icloud-container-environment` (absent → Development); `Entitlements.cloudKitContainerIdentifier` reads the container from the entitlements.
 
 ### 14.2 Data safety (round 4a; never weaken these)
 
-- **Opening the store** (`PersistenceController.init`, in order): PreOpen snapshot (APFS copy of the store files into `Recovered/PreOpen-<UTC stamp>/` whenever version, build, configuration, CloudKit environment or model hash changed; the newest two are kept) → a pending "Move to iCloud <env>" marker (moves the old store files aside to `Recovered/Env-<env>-<stamp>/` first) → **environment guard** (`environmentDecision`: CloudKit only when the store's recorded environment matches this build, or the store is new / never synced; otherwise local-only with `environmentMismatch`, never a silent switch) → CloudKit → local-only → in-memory. An incompatible store that looks newer (`storeLooksNewer`) sets `isStoreFromNewerVersion`: Recover is not offered and the store is never moved.
-- **Recovery:** the on-disk store is never deleted. Recover… moves it to `Recovered/Store-<stamp>/` (`quarantineStore()`, only in recovery mode) and writes `pending-restore.json` (`scheduleRecovery`); the next launch removes the marker **before** the attempt (one attempt only), then imports the chosen backup (Replace only into an empty store, else Merge after a safety backup). In recovery mode, changed data is written to `Recovered/Unsaved-<stamp>.json` on quit.
+- **Opening the store** (`PersistenceController.init`, in order): PreOpen snapshot (APFS copy of the store files into `Recovered/PreOpen-<UTC stamp>/` whenever version, build, configuration, CloudKit environment or model hash changed; the newest two are kept) → a pending "Move to iCloud <env>" / "Use iCloud <env> Data" marker (moves the old store files aside to `Recovered/Env-<env>-<stamp>/` first; skipped while a restore breadcrumb exists) → **environment guard** (`environmentDecision`: CloudKit only when the store's recorded environment matches this build, or the store is new / never synced; otherwise local-only with `environmentMismatch`, never a silent switch) → CloudKit → local-only → in-memory. An incompatible store that looks newer (`storeLooksNewer`) sets `isStoreFromNewerVersion`: Recover is not offered and the store is never moved.
+- **Recovery:** the on-disk store is never deleted. Recover… moves it to `Recovered/Store-<stamp>/` (`quarantineStore()`, only in recovery mode; it also clears the recorded CloudKit environment, so the fresh store adopts the build's) and writes `pending-restore.json` (`scheduleRecovery`); the next launch writes `restore-in-progress.json` (`RestoreBreadcrumb`), removes the marker **before** the attempt (one attempt only), then imports the chosen backup (Replace only into an empty store, else Merge after a safety backup) and removes the breadcrumb. A breadcrumb found at launch means that restore was interrupted (`AppServices.launchRestoreStep` → `.reportInterrupted`): "The last restore didn’t finish. Restore “<file>” from Settings ▸ Data." with "Restore…"; nothing is retried. In recovery mode, changed data is written to `Recovered/Unsaved-<stamp>.json` on quit.
+- **Environment mismatch** (Settings ▸ Data): **Move to iCloud <env>…** (verified pinned full backup → marker with the backup → relaunch → store moved aside, fresh CloudKit store, backup restored; the notice reports sessions and images not restored and then offers "Restore…"), **Use iCloud <env> Data…** (same verified pinned backup, but the marker has no backup — `PendingRestore.adoptsCloudData` — so the fresh CloudKit store only downloads; `seedDefaults` then waits up to 10 min for the first import; for a second Mac whose data the first Mac already moved), **Keep Local Only**. The verified backup fails only for images the store has bytes for (`BackupService.imagesFailingVerification`); images CloudKit never downloaded to this Mac can't be backed up.
 - **Saving:** static edit helpers save through `SafeSave.save(_:source:)` (rollback + `.worklogSaveFailed` → `engine.lastError` alert).
-- **Backups:** verified full backups; `BackupReason.beforeChange` safety backups before destructive operations; the newest backup with sessions is never pruned; after an iCloud account change the newest backup with sessions is pinned and `AppServices.checkDataShrinkage()` warns (once per count, for 7 days) when the store has under half its sessions. That notice offers "Restore…" (`persistence.launchNoticeOffersRestore`).
+- **Backups:** verified full backups; image files a backup reuses get a fresh modification date when it is captured (`touchImageFiles`), so the image GC's 1 h grace period covers them until the JSON exists; `BackupReason.beforeChange` safety backups before destructive operations; the newest backup with sessions is never pruned; after an iCloud account change the newest backup with sessions is pinned and `AppServices.checkDataShrinkage()` warns (once per count, for 7 days) when the store has under half its sessions. That notice offers "Restore…" (`persistence.launchNoticeOffersRestore`).
 - **Dedupe** (`SeedData.deduplicate`): survivors chosen only by synced values (`createdAt`/`modifiedAt` + `instanceID`); an undecidable tie deletes nothing.
 - **One instance** (`SingleInstanceGuard`): a second process exits before opening the store; a relaunch waits for the old one to quit.
 - Tests: `PersistenceGuardTests`, `DataSafetyTests`, `BackupRetentionTests`, `RecoveryPathTests` (the latter runs against a temporary folder through `AppConstants.rootDirectoryOverride`).
@@ -2469,7 +2485,8 @@ Round 4a made the app safe to use daily with real data; round 4b fixed functiona
 - **`WorkSession.pauseIntervals`** decodes through `PauseIntervalsCache` (NSCache keyed by the JSON bytes, so any change — local, import or sync — is a new key).
 - **`ProfileStore.showsProfileScope`**: profiles + archived profiles > 1 (badges, scope pickers, per-profile usage).
 - **`TaxonomyOps`** (§3.6): creating an archived tag's/label's name unarchives it; `archivedTag(named:profile:in:)`, `archivedLabel(named:profile:in:)`, `unarchive(_:)`, `clearDefaultLabel(_:in:)`.
-- **`AttachmentImporter`** (§3.11): `await addFromOpenPanel(to:in:)` downscales off the main thread (`PreparedImage`).
+- **`AttachmentImporter`** (§3.11): `await addFromOpenPanel(to:in:)` downscales off the main thread (`PreparedImage`). Round 4 final: drop/paste use `await addInBackground(_:to:in:)` (`prepareImages` off-main); the synchronous `addFromOpenPanel` is gone.
+- **Round 4 final:** `OverlayPanelController.makePanelKey()` / `releaseKeyFocus()` replace `OverlayKeyFocus`; `View.countsAsChildSheet(isPresented:)` replaces `liveChildSheet`; `View.editResizeHandle(_:gesture:)` and `EditResizeHandle.center(in:)` place the overlay editor's resize handle.
 - **`LiveTicker`** (`Features/LiveSession/LiveTicker.swift`): the one "tick every second while running" view (`.periodic(from:by: 1)`, stable identity, no updates while paused); RootView's mini timer uses it.
 - **`PersistenceController.launchNoticeOffersRestore`**: the launch notice gets "Restore…" (Settings ▸ Data).
 - Tests added: `StatsCalculatorTests`, `LiveRulesTests`, `EngineStateTests`, `RecoveryPathTests`.

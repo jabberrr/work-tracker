@@ -177,4 +177,73 @@ final class PersistenceGuardTests: XCTestCase {
         XCTAssertEqual(exporter.sessionCount(), 0)
         XCTAssertFalse(exporter.isStoreEmpty())
     }
+    // MARK: - Interrupted restore (M1)
+
+    @MainActor
+    func testABreadcrumbIsReportedAndNeverRetried() {
+        XCTAssertEqual(AppServices.launchRestoreStep(breadcrumbExists: false, markerExists: false), .nothing)
+        XCTAssertEqual(AppServices.launchRestoreStep(breadcrumbExists: false, markerExists: true), .restore)
+        XCTAssertEqual(AppServices.launchRestoreStep(breadcrumbExists: true, markerExists: false), .reportInterrupted)
+        XCTAssertEqual(AppServices.launchRestoreStep(breadcrumbExists: true, markerExists: true), .reportInterrupted,
+                       "a marker next to a breadcrumb belongs to the interrupted attempt")
+    }
+
+    @MainActor
+    func testInterruptedRestoreNotice() {
+        XCTAssertEqual(AppServices.interruptedRestoreNotice(backupFileName: "Worklog-Backup-x.json"),
+                       "The last restore didn\u{2019}t finish. Restore \u{201C}Worklog-Backup-x.json\u{201D} from Settings \u{25B8} Data.")
+        XCTAssertEqual(AppServices.interruptedRestoreNotice(backupFileName: nil),
+                       "The last restore didn\u{2019}t finish. Restore the backup from Settings \u{25B8} Data.")
+    }
+
+    func testRestoreBreadcrumbRoundTrips() throws {
+        let breadcrumb = RestoreBreadcrumb(backupPath: "/tmp/b.json", startedAt: Date(timeIntervalSince1970: 1_800_000_000),
+                                           environmentMove: CloudKitEnvironment.production.rawValue)
+        let data = try ExportArchive.makeEncoder().encode(breadcrumb)
+        XCTAssertEqual(try ExportArchive.makeDecoder().decode(RestoreBreadcrumb.self, from: data), breadcrumb)
+    }
+
+    // MARK: - "Use iCloud <env> Data" (M3)
+
+    func testAMoveWithoutABackupAdoptsTheCloudData() {
+        let created = Date(timeIntervalSince1970: 1_800_000_000)
+        XCTAssertTrue(PendingRestore(backupPath: nil, createdAt: created, environmentMove: "Production").adoptsCloudData)
+        XCTAssertFalse(PendingRestore(backupPath: "/tmp/b.json", createdAt: created, environmentMove: "Production")
+            .adoptsCloudData, "Move to iCloud restores its backup")
+        XCTAssertFalse(PendingRestore(backupPath: nil, createdAt: created).adoptsCloudData,
+                       "a plain fresh-store recovery isn't a move")
+    }
+
+    @MainActor
+    func testFreshStoreNotices() {
+        XCTAssertEqual(AppServices.freshStoreNotice(moveTarget: .production, isSyncing: true),
+                       "Now using iCloud Production; downloading your data. Your previous copy is in the Recovered folder.")
+        XCTAssertEqual(AppServices.freshStoreNotice(moveTarget: .production, isSyncing: false),
+                       "iCloud Production isn\u{2019}t available yet, so this Mac starts empty. "
+                       + "Your previous copy is in the Recovered folder.")
+        XCTAssertEqual(AppServices.freshStoreNotice(moveTarget: nil, isSyncing: true),
+                       "Started fresh; downloading your data from iCloud.")
+        XCTAssertEqual(AppServices.freshStoreNotice(moveTarget: nil, isSyncing: false), "Started with an empty data store.")
+    }
+
+    func testAfterAnAdoptingMoveTheFreshStoreOpensWithCloudKit() {
+        // The move removed the recorded environment and the store files: the build's environment is adopted.
+        XCTAssertEqual(PersistenceController.environmentDecision(recorded: nil, storeExists: false, build: .production,
+                                                                 cloudKitWanted: true),
+                       .openCloudKit(.production))
+    }
+
+    // MARK: - Verified backup images (L3)
+
+    func testVerificationFailsOnlyForImagesTheStoreHasBytesFor() {
+        let missing: Set<String> = ["a.jpg", "b.png"]
+        XCTAssertEqual(BackupService.imagesFailingVerification(missingFromBackup: missing,
+                                                               storeImagesWithBytes: ["b.png", "c.jpg"]),
+                       ["b.png"])
+        XCTAssertTrue(BackupService.imagesFailingVerification(missingFromBackup: missing,
+                                                              storeImagesWithBytes: []).isEmpty,
+                      "images that never reached this Mac can't be backed up and don't block a move")
+        XCTAssertTrue(BackupService.imagesFailingVerification(missingFromBackup: [],
+                                                              storeImagesWithBytes: ["c.jpg"]).isEmpty)
+    }
 }

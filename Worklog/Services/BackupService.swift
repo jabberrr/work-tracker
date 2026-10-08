@@ -104,8 +104,10 @@ final class BackupService {
     }
 
     /// A pinned manual backup that always includes images (whatever "Include images" says), read back and checked:
-    /// same session count as the store, every image file present. Used before "Move to iCloud <env>". Throws when
-    /// the store is in memory only, the write fails or the check fails (the file is then left for inspection).
+    /// same session count as the store, and an image file for every image this store has bytes for (L3: an image
+    /// whose bytes never reached this Mac can't be backed up and doesn't fail the check). Used before
+    /// "Move to iCloud <env>" and "Use iCloud <env> Data". Throws when the store is in memory only, the write fails or
+    /// the check fails (the file is then left for inspection).
     func makeVerifiedFullBackup(reason: BackupReason = .manual) throws -> BackupFile {
         guard !exporter.isEphemeralStore else {
             throw DataTransferError.writeFailed("your data isn\u{2019}t on disk")
@@ -118,8 +120,15 @@ final class BackupService {
         guard archive.sessions.count == expectedSessions else {
             throw DataTransferError.writeFailed("the backup has \(archive.sessions.count) of \(expectedSessions) sessions")
         }
-        guard archive.missingImageCount == 0 else {
-            throw DataTransferError.writeFailed("\(archive.missingImageCount) images are missing from the backup")
+        let missingFromBackup = archive.imageFileNamesWithoutBytes
+        if !missingFromBackup.isEmpty {
+            let failing = Self.imagesFailingVerification(missingFromBackup: missingFromBackup,
+                                                         storeImagesWithBytes: exporter.imageFileNamesWithBytes())
+            guard failing.isEmpty else {
+                throw DataTransferError.writeFailed("\(failing.count) \(failing.count == 1 ? "image is" : "images are") "
+                                                    + "missing from the backup")
+            }
+            Log.backup.info("Verified backup: \(missingFromBackup.count) images have no bytes on this Mac (not checked)")
         }
         refreshList()
         if let file = backups.first(where: { $0.url == url }) { return file }
@@ -328,6 +337,9 @@ final class BackupService {
         }
         let folder = backupsDirectory.appending(path: ExportArchive.backupAttachmentFolder, directoryHint: .isDirectory)
         let existing = Set((try? FileManager.default.contentsOfDirectory(atPath: folder.path(percentEncoded: false))) ?? [])
+        // L2: image files this backup reuses get a fresh modification date now, before the JSON referencing them
+        // exists, so a concurrent image GC (grace period) can't delete them in between.
+        Self.touchImageFiles(archive.imageFileNames.intersection(existing), in: folder)
         let images = try exporter.backupImagePayloads(skipping: existing)
         archive.includesAttachments = true
         archive.attachmentStore = ExportArchive.backupAttachmentFolder
@@ -457,6 +469,26 @@ final class BackupService {
             keep.insert(newestWithData.url)
         }
         return sorted.filter { !keep.contains($0.url) }
+    }
+
+    /// L3 (pure): the images a verified backup must not lack — those it has no bytes for although the store has.
+    nonisolated static func imagesFailingVerification(missingFromBackup: Set<String>,
+                                                      storeImagesWithBytes: Set<String>) -> Set<String> {
+        missingFromBackup.intersection(storeImagesWithBytes)
+    }
+
+    /// L2: sets the modification date of existing `names` in `folder` to now (missing files are ignored).
+    nonisolated static func touchImageFiles(_ names: Set<String>, in folder: URL) {
+        let fileManager = FileManager.default
+        let now = Date.now
+        for name in names {
+            let url = folder.appending(path: name, directoryHint: .notDirectory)
+            do {
+                try fileManager.setAttributes([.modificationDate: now], ofItemAtPath: url.path(percentEncoded: false))
+            } catch {
+                Log.backup.error("Couldn't touch backup image \(name, privacy: .public): \(error.localizedDescription, privacy: .public)")
+            }
+        }
     }
 
     /// Pin the previous backup when the new one lost more than half of its sessions (or all of them).
