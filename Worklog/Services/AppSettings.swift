@@ -69,9 +69,15 @@ final class AppSettings {
     // MARK: Overlay
     /// Source of truth for overlay visibility.
     var overlayEnabled: Bool { didSet { write(overlayEnabled, "overlayEnabled") } }
-    /// Ordered elements the overlay shows. Persisted as [String] (raw values) under "settings.overlayLayout".
-    /// Replaces the round-1 `overlayShow…` booleans (migrated once in `init`; the legacy keys are left untouched).
-    var overlayLayout: [OverlayElement] { didSet { write(overlayLayout.map(\.rawValue), "overlayLayout") } }
+    /// The overlay layout. Persisted as JSON Data under "settings.overlayGrid" and mirrored as the reading order
+    /// ([String] raw values) under "settings.overlayLayout" (downgrade-safe: round-3 builds read the mirror).
+    /// Replaces the round-3 list and the round-1 `overlayShow…` booleans (migrated in `init`; legacy keys untouched).
+    var overlayGrid: OverlayGridLayout { didSet { persistOverlayGrid() } }
+    /// COMPATIBILITY: the grid's reading order. Setting it rebuilds the grid with `OverlayGridLayout.migrated(from:)`.
+    var overlayLayout: [OverlayElement] {
+        get { overlayGrid.readingOrder }
+        set { overlayGrid = OverlayGridLayout.migrated(from: newValue) }
+    }
     var overlayCompact: Bool { didSet { write(overlayCompact, "overlayCompact") } }
     /// Clamped to 0.4…1.0 on every write.
     var overlayOpacity: Double {
@@ -119,7 +125,8 @@ final class AppSettings {
         dismissedLocalOnlyBannerReason = defaults.string(forKey: Self.key("dismissedLocalOnlyBannerReason")) ?? ""
 
         overlayEnabled = Self.bool(defaults, "overlayEnabled", false)
-        overlayLayout = Self.loadOverlayLayout(defaults)
+        let loadedGrid = Self.loadOverlayGrid(defaults)
+        overlayGrid = loadedGrid.grid
         overlayCompact = Self.bool(defaults, "overlayCompact", false)
         storedOverlayOpacity = Self.clampOpacity(Self.double(defaults, "overlayOpacity", 0.95))
         overlayAlwaysOnTop = Self.bool(defaults, "overlayAlwaysOnTop", true)
@@ -132,23 +139,28 @@ final class AppSettings {
         // These have initial values, so they are assigned last (after every other stored property is initialized).
         defaultLabelID = defaults.string(forKey: Self.key("defaultLabelID")).flatMap(UUID.init(uuidString:))
         quickStartProfileID = defaults.string(forKey: Self.key("quickStartProfileID")).flatMap(UUID.init(uuidString:))
-        // Persist the (possibly migrated) layout right away so the legacy booleans are read only once.
-        write(overlayLayout.map(\.rawValue), "overlayLayout")
+        // Persist a migrated grid right away (so the legacy sources are read only once). A stored grid is never
+        // re-encoded at launch (that would drop fields a newer version added); only the mirror is refreshed.
+        if loadedGrid.migrated {
+            persistOverlayGrid()
+        } else {
+            writeOverlayMirror()
+        }
     }
 
-    /// overlayLayout.contains(element)
+    /// overlayGrid.contains(element)
     func overlayShows(_ element: OverlayElement) -> Bool {
-        overlayLayout.contains(element)
+        overlayGrid.contains(element)
     }
 
-    /// overlayLayout = OverlayElement.defaultLayout
+    /// overlayGrid = .defaultLayout
     func resetOverlayLayout() {
-        overlayLayout = OverlayElement.defaultLayout
+        overlayGrid = .defaultLayout
     }
 
     /// Restores every overlay content/appearance option to its default. Visibility (`overlayEnabled`) is unchanged.
     func resetOverlayDefaults() {
-        overlayLayout = OverlayElement.defaultLayout
+        overlayGrid = .defaultLayout
         overlayCompact = false
         overlayOpacity = 0.95
         overlayAlwaysOnTop = true
@@ -160,17 +172,44 @@ final class AppSettings {
 
     private static func key(_ property: String) -> String { "settings." + property }
 
-    /// "settings.overlayLayout" when present (sanitized); otherwise built once from the round-1 booleans, in
-    /// `OverlayElement.migrationOrder`, keeping each element whose legacy key is true (absent = its old default:
-    /// on, except Today’s total). With untouched legacy defaults this is exactly `OverlayElement.defaultLayout`.
-    private static func loadOverlayLayout(_ defaults: UserDefaults) -> [OverlayElement] {
-        if let stored = defaults.array(forKey: key("overlayLayout")) as? [String] {
-            return OverlayElement.sanitized(stored)
+    /// 1. `mirror` = "settings.overlayLayout" ([String], sanitized) or nil.
+    /// 2. "settings.overlayGrid" decodes and `mirror` is nil or equals its reading order → that grid (not migrated).
+    /// 3. Otherwise (no grid, corrupt grid, or a mirror changed by an older build) with a mirror →
+    ///    `migrated(from: mirror)`, so the user's visible elements are never lost.
+    /// 4. Otherwise the round-1 booleans, in `OverlayElement.migrationOrder`, keeping each element whose legacy key
+    ///    is true (absent = its old default: on, except Today’s total), migrated to a grid. With untouched legacy
+    ///    defaults this is exactly `OverlayGridLayout.defaultLayout`.
+    private static func loadOverlayGrid(_ defaults: UserDefaults) -> (grid: OverlayGridLayout, migrated: Bool) {
+        let mirror = (defaults.array(forKey: key("overlayLayout")) as? [String]).map(OverlayElement.sanitized)
+        if let data = defaults.data(forKey: key("overlayGrid")),
+           let grid = try? JSONDecoder().decode(OverlayGridLayout.self, from: data),
+           mirror == nil || mirror == grid.readingOrder {
+            return (grid, false)
         }
-        return OverlayElement.migrationOrder.filter { element in
-            let legacy = legacyOverlayKey(element)
-            return bool(defaults, legacy.property, legacy.fallback)
+        if let mirror {
+            return (OverlayGridLayout.migrated(from: mirror), true)
         }
+        let legacy = OverlayElement.migrationOrder.filter { element in
+            let legacyKey = legacyOverlayKey(element)
+            return bool(defaults, legacyKey.property, legacyKey.fallback)
+        }
+        return (OverlayGridLayout.migrated(from: legacy), true)
+    }
+
+    /// Writes the grid (JSON, sorted keys) to "settings.overlayGrid" and the reading-order mirror. The legacy
+    /// `overlayShow…` keys are never touched.
+    private func persistOverlayGrid() {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        if let data = try? encoder.encode(overlayGrid) {
+            defaults.set(data, forKey: Self.key("overlayGrid"))
+        }
+        writeOverlayMirror()
+    }
+
+    /// "settings.overlayLayout" = the grid's reading order (raw values); round-3 builds read it.
+    private func writeOverlayMirror() {
+        write(overlayGrid.readingOrder.map(\.rawValue), "overlayLayout")
     }
 
     /// The round-1 `overlayShow…` property name for an element and its default value.

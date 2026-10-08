@@ -31,9 +31,11 @@ final class AppServices {
     /// - previews/tests (`inMemory`): PreviewData.populate;
     /// - store failed to open (in-memory fallback): default labels so the session is usable; on quit, changed data is
     ///   written to Recovered/Unsaved-<stamp>.json;
-    /// - normal: a pending recovery (pending-restore.json) is processed first (import the chosen backup — merge when
-    ///   CloudKit is on, replace otherwise — and skip seeding), else SeedData.seedIfNeeded (deferred in CloudKit mode
-    ///   until the first iCloud import, max 60 s, so a new Mac doesn't resurrect deleted defaults).
+    /// - normal: a pending recovery (pending-restore.json, also written by "Move to iCloud <env>") is processed first,
+    ///   before anything is seeded or created: the chosen backup is imported — Replace into an empty store, else Merge
+    ///   after a safety backup — and seeding is skipped. The marker is removed before the attempt (one attempt only;
+    ///   a failure leaves a notice and the backup in the list). Otherwise SeedData.seedIfNeeded (deferred in CloudKit
+    ///   mode until the first iCloud import, max 60 s, so a new Mac doesn't resurrect deleted defaults).
     /// Every branch then runs SeedData.ensureProfiles (default profile + repair of unassigned sessions — local-only
     /// stores; with CloudKit `SeedData.isSessionProfileRepairDisplayOnly` makes it display-only; *provisional* when
     /// CloudKit is on and the first import hasn't completed) and deduplicate.
@@ -46,7 +48,8 @@ final class AppServices {
         let defaults: UserDefaults = inMemory ? Self.makeEphemeralDefaults() : .standard
         settings = AppSettings(defaults: defaults)
         shortcuts = ShortcutStore(defaults: defaults)
-        persistence = PersistenceController(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory: inMemory)
+        persistence = PersistenceController(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory: inMemory,
+                                            defaults: defaults)
         // CloudKit: unassigned sessions are shown in their effective profile and only written on a user edit.
         SeedData.isSessionProfileRepairDisplayOnly = persistence.isSyncingWithICloud
         sync = SyncMonitor(enabled: !inMemory && persistence.isSyncingWithICloud,
@@ -57,6 +60,7 @@ final class AppServices {
         profiles = ProfileStore(context: persistence.mainContext, settings: settings)
         engine = SessionEngine(context: persistence.mainContext, settings: settings, profiles: profiles)
         exporter = ExportService(container: persistence.container)
+        exporter.localDeviceID = engine.deviceID
         backups = BackupService(exporter: exporter, settings: settings)
         overlay = OverlayPanelController(settings: settings)
         backups.writesUnsavedSnapshotOnQuit = !inMemory && persistence.isRecoveryMode
@@ -90,8 +94,69 @@ final class AppServices {
         profiles.startObserving()
         if !inMemory {
             resolveProvisionalProfile(in: context)
+            sync.onAccountChanged = { [weak self] in self?.handleICloudAccountChange() }
             sync.start()
             overlay.install(services: self)
+            scheduleShrinkageCheckAfterFirstImport()
+        }
+    }
+
+    // MARK: - Data shrinkage (M4)
+
+    /// UserDefaults (`settings.defaults`): file name of the backup pinned at the last iCloud account change, when, and
+    /// the "<file>#<count>" a shrink notice was last shown for.
+    static let accountChangeBackupKey = "backup.accountChangeBackup"
+    static let accountChangeDateKey = "backup.accountChangeDate"
+    static let shrinkNoticeShownKey = "backup.shrinkNoticeShown"
+
+    /// CloudKit can empty the local store after an iCloud sign-out or account switch: pin the newest backup with
+    /// sessions and remember it, so `checkDataShrinkage()` can compare against it.
+    func handleICloudAccountChange() {
+        guard let pinned = backups.pinNewestBackupWithSessions() else { return }
+        settings.defaults.set(pinned.url.lastPathComponent, forKey: Self.accountChangeBackupKey)
+        settings.defaults.set(Date.now, forKey: Self.accountChangeDateKey)
+    }
+
+    /// At launch (after the first iCloud import) and on activation: when the store has under half the sessions of
+    /// the backup pinned at the last account change (kept for 7 days), say so once per count, pointing at the
+    /// pinned backup. Never changes data.
+    func checkDataShrinkage() {
+        guard !persistence.isInMemory else { return }
+        if persistence.isSyncingWithICloud && !sync.hasCompletedFirstImport { return }
+        let defaults = settings.defaults
+        guard let name = defaults.string(forKey: Self.accountChangeBackupKey) else { return }
+        let changedAt = defaults.object(forKey: Self.accountChangeDateKey) as? Date ?? .distantPast
+        guard Date.now.timeIntervalSince(changedAt) < 7 * 86_400 else {
+            defaults.removeObject(forKey: Self.accountChangeBackupKey)
+            defaults.removeObject(forKey: Self.accountChangeDateKey)
+            return
+        }
+        backups.refreshList()
+        guard let backup = backups.backups.first(where: { $0.url.lastPathComponent == name }),
+              let previous = backup.sessionCount else { return }
+        let current = exporter.sessionCount()
+        guard BackupService.shouldPinPrevious(previousCount: previous, newCount: current) else { return }
+        let shownFor = "\(name)#\(current)"
+        guard defaults.string(forKey: Self.shrinkNoticeShownKey) != shownFor else { return }
+        defaults.set(shownFor, forKey: Self.shrinkNoticeShownKey)
+        Log.backup.warning("Data shrank from \(previous) to \(current) sessions after an iCloud account change")
+        persistence.launchNotice = "Your data shrank from \(previous) to \(current) sessions after an iCloud account "
+            + "change. A pinned backup from \(backup.date.shortDateTime) is in Settings \u{25B8} Data."
+    }
+
+    /// With CloudKit the store is only comparable once the first import of this launch finished (max 10 min).
+    private func scheduleShrinkageCheckAfterFirstImport() {
+        guard persistence.isSyncingWithICloud else {
+            checkDataShrinkage()
+            return
+        }
+        let sync = sync
+        Task { @MainActor [weak self] in
+            let deadline = Date.now.addingTimeInterval(600)
+            while !sync.hasCompletedFirstImport && Date.now < deadline {
+                try? await Task.sleep(for: .seconds(5))
+            }
+            self?.checkDataShrinkage()
         }
     }
 
@@ -109,19 +174,27 @@ final class AppServices {
         return defaults
     }
 
-    /// Handles `pending-restore.json` written by the Recover… flow. Returns true when a backup was imported (then the
-    /// defaults must not be seeded on top of it). The marker is removed on success, or when the backup can't be read
-    /// at all (retrying would fail forever); other failures keep it so the next launch retries.
+    /// Handles `pending-restore.json` written by the Recover… flow or "Move to iCloud <env>". Returns true when a
+    /// backup was imported (then the defaults must not be seeded on top of it).
+    ///
+    /// M6: the marker is removed BEFORE the attempt, so a failing or crashing restore can't repeat at every launch
+    /// (the notice says so and the backup stays in the list). Replace only into an empty store (nothing is deleted,
+    /// and labels/profiles that CloudKit already brought are never wiped); otherwise Merge, after a safety backup.
     private func processPendingRestore() -> Bool {
+        let move = persistence.environmentMove
         guard let marker = PersistenceController.pendingRecovery() else {
             if FileManager.default.fileExists(atPath: AppConstants.pendingRestoreURL.path(percentEncoded: false)) {
                 Log.persistence.error("Unreadable recovery marker removed")
                 PersistenceController.clearPendingRecovery()
             }
+            if let move {
+                persistence.launchNotice = "Moved to iCloud \(move.to.rawValue), but no backup was found to "
+                    + "restore. Your previous data is in the Recovered folder."
+            }
             return false
         }
+        PersistenceController.clearPendingRecovery()
         guard let path = marker.backupPath else {
-            PersistenceController.clearPendingRecovery()
             // The fresh store has no labels: allow seeding again (deferred until the first iCloud import when syncing,
             // and skipped if labels arrive from iCloud).
             UserDefaults.standard.set(false, forKey: SeedData.didSeedDefaultsKey)
@@ -132,26 +205,42 @@ final class AppServices {
             return false
         }
         let url = URL(filePath: path)
-        let mode: ImportMode = persistence.isSyncingWithICloud ? .merge : .replace
         do {
-            let summary = try exporter.importArchive(from: url, mode: mode)
-            PersistenceController.clearPendingRecovery()
-            persistence.launchNotice = "Restored “\(url.lastPathComponent)”. \(summary.description)"
-            Log.persistence.info("Recovery: restored backup \(url.lastPathComponent, privacy: .public)")
+            let archive = try exporter.decodeArchive(from: url)
+            let mode = Self.pendingRestoreMode(storeIsEmpty: exporter.isStoreEmpty())
+            let summary = try backups.importArchive(archive, mode: mode)
+            Log.persistence.info("Recovery: restored backup \(url.lastPathComponent, privacy: .public) (\(mode == .replace ? "replace" : "merge", privacy: .public))")
+            if let move {
+                let restored = exporter.sessionCount()
+                let lead = persistence.isSyncingWithICloud
+                    ? "Moved to iCloud \(move.to.rawValue)"
+                    : "Restored on this Mac; iCloud \(move.to.rawValue) isn\u{2019}t available yet"
+                let expected = archive.sessions.count
+                let count = restored >= expected ? "\(expected)" : "\(restored) of \(expected)"
+                var text = "\(lead): \(count) \(expected == 1 ? "session" : "sessions") restored."
+                if restored < expected {
+                    text += " Some are missing; the backup is pinned in Settings \u{25B8} Data."
+                }
+                text += " Your previous copy is in the Recovered folder."
+                persistence.launchNotice = text
+            } else {
+                persistence.launchNotice = "Restored \u{201C}\(url.lastPathComponent)\u{201D}. \(summary.description)"
+            }
             return true
         } catch {
-            let unreadable: Bool
-            switch error {
-            case DataTransferError.decodingFailed, DataTransferError.unsupportedVersion: unreadable = true
-            default: unreadable = false
-            }
-            if unreadable { PersistenceController.clearPendingRecovery() }
-            persistence.launchNotice = unreadable
-                ? "Couldn\u{2019}t restore “\(url.lastPathComponent)”. Choose another backup."
-                : "Couldn\u{2019}t restore “\(url.lastPathComponent)”. Retrying at next launch."
             Log.persistence.error("Recovery restore failed: \(error.localizedDescription, privacy: .public)")
+            var reason = error.localizedDescription
+            if !reason.hasSuffix(".") { reason += "." }
+            let failure = "\u{201C}\(url.lastPathComponent)\u{201D} couldn\u{2019}t be restored: \(reason) "
+                + "Restore it from Settings \u{25B8} Data."
+            persistence.launchNotice = move.map { "Moved to iCloud \($0.to.rawValue), but " + failure } ?? failure
             return false
         }
+    }
+
+    /// M6 (pure): a pending restore replaces only an empty store (nothing is deleted); otherwise it merges.
+    nonisolated static func pendingRestoreMode(storeIsEmpty: Bool) -> ImportMode {
+        storeIsEmpty ? .replace : .merge
     }
 
     /// A default profile created before the first iCloud import (now or at an earlier launch) is *provisional*: once the

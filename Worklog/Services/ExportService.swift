@@ -12,6 +12,8 @@ struct ImportSummary: Equatable {
     var sessionsSkipped = 0
     /// Profiles in the archive (inserted or already present). 0 for v1 archives.
     var profiles = 0
+    /// Attachments of the archive that couldn't be imported because neither the file nor this store had the image.
+    var imagesMissing = 0
 
     /// "Imported 12 sessions (3 updated), 5 labels, 9 tags, 2 profiles." (", N profile(s)" only when the archive has
     /// profiles; + " 4 sessions were already up to date." on merge)
@@ -28,6 +30,9 @@ struct ImportSummary: Equatable {
         text += "."
         if sessionsSkipped > 0 {
             text += " \(sessionsSkipped) \(sessionsSkipped == 1 ? "session was" : "sessions were") already up to date."
+        }
+        if imagesMissing > 0 {
+            text += " \(imagesMissing) \(imagesMissing == 1 ? "image wasn\u{2019}t" : "images weren\u{2019}t") in the file."
         }
         return text
     }
@@ -55,6 +60,9 @@ enum DataTransferError: LocalizedError {
 final class ExportService {
     private let container: ModelContainer
     private var context: ModelContext { container.mainContext }
+    /// This Mac's `SessionEngine.deviceID` (set by AppServices): an archived running session owned by this Mac stays
+    /// running on import; any other is ended (M2).
+    @ObservationIgnored var localDeviceID: String = ""
 
     init(container: ModelContainer) {
         self.container = container
@@ -175,6 +183,7 @@ final class ExportService {
         if let store = archive.attachmentStore, !store.isEmpty {
             let folder = url.deletingLastPathComponent().appending(path: store, directoryHint: .isDirectory)
             let missing = archive.rehydrateAttachments(from: folder)
+            archive.missingImageCount = missing
             if missing > 0 {
                 Log.persistence.error("\(missing) backup images are missing from \(store, privacy: .public)")
             }
@@ -205,9 +214,14 @@ final class ExportService {
 
     /// .replace throws .sessionActive if any session has endedAt == nil, then deletes everything and inserts the archive.
     ///
+    /// .replace keeps the store's own image bytes (by attachment uuid) for archived attachments that have none (an
+    /// archive exported without images, or backup image files that are missing).
+    ///
     /// .merge never overwrites newer local data:
-    /// - labels/tags that already exist (by uuid) keep their local name, colour, parent and archived state; only new
-    ///   ones are inserted;
+    /// - labels/tags that already exist (by uuid) keep their local name, colour, parent and archived state — unless
+    ///   the local row was created after the archive was exported (a re-seeded default with the same fixed uuid), then
+    ///   the archived values win; only new ones are inserted;
+    /// - an existing profile is updated only when the archived copy is strictly newer (`modifiedAt`);
     /// - an existing session is updated only when the archived copy is strictly newer (`modifiedAt`); otherwise it is
     ///   skipped (`sessionsSkipped`);
     /// - when updated, its segments follow the archive (they partition the session's time), while notes, images and
@@ -216,7 +230,7 @@ final class ExportService {
     /// Image bytes from the archive are accepted only if they are a JPEG/PNG/HEIC of sane size.
     /// Saves, posts .worklogDataDidImport.
     ///
-    /// Profiles (v2), imported first: merge upserts by uuid and keeps existing profiles untouched (like labels).
+    /// Profiles (v2), imported first: merge upserts by uuid (existing profiles change only when the archive is newer).
     /// New labels/tags get the archived scope (`profileID`, nil = global); in merge mode existing ones keep their
     /// scope, in replace mode the archived scope is set. A session goes to its archived profile, else its local
     /// profile, else the home profile (created when none exists) — so a v1 archive lands in the home profile with
@@ -227,14 +241,17 @@ final class ExportService {
     ///
     /// Merge never touches the locally running session. A still-open session from the archive is ended at its local
     /// end time if it was already stopped here, or at its last activity when a session is running here (so an import
-    /// can neither re-open a stopped session nor stop the live one).
+    /// can neither re-open a stopped session nor stop the live one). Otherwise it keeps running only when this Mac
+    /// owned it (`localDeviceID`); any other is ended at max(last activity, min(exportedAt, now)) (M2).
     func importArchive(_ archive: ExportArchive, mode: ImportMode) throws -> ImportSummary {
         guard archive.formatVersion <= ExportArchive.currentFormatVersion else {
             throw DataTransferError.unsupportedVersion(archive.formatVersion)
         }
         let localActive = try fetchActiveSessions()
+        var preservedImages: [UUID: PreservedImage] = [:]
         if mode == .replace {
             guard localActive.isEmpty else { throw DataTransferError.sessionActive }
+            preservedImages = try imagesToPreserve(for: archive)
             try deleteEverything()
         }
         let hasLocalActive = !localActive.isEmpty
@@ -244,7 +261,19 @@ final class ExportService {
         var profilesByID = Self.index(ProfileOps.allProfiles(in: context), by: \.uuid)
         for dto in archive.profiles ?? [] {
             summary.profiles += 1
-            if profilesByID[dto.id] != nil { continue }   // existing profiles are kept untouched (both modes)
+            if let existing = profilesByID[dto.id] {
+                // Kept unless the archived copy is newer (a fresh default "Work" has the 1970 epoch modifiedAt).
+                if dto.modifiedAt > existing.modifiedAt {
+                    existing.name = dto.name
+                    existing.colorHex = dto.colorHex
+                    existing.symbolName = dto.symbolName
+                    existing.sortIndex = dto.sortIndex
+                    existing.isArchived = dto.isArchived
+                    existing.defaultLabelUUID = dto.defaultLabelID
+                    existing.modifiedAt = dto.modifiedAt
+                }
+                continue
+            }
             let profile = WorkProfile(name: dto.name, colorHex: dto.colorHex, symbolName: dto.symbolName,
                                       sortIndex: dto.sortIndex, uuid: dto.id)
             context.insert(profile)
@@ -268,7 +297,7 @@ final class ExportService {
         for dto in archive.labels {
             let label: WorkLabel
             if let existing = labelsByID[dto.id] {
-                if mode == .merge {
+                if mode == .merge && !Self.isFreshLocalCopy(createdAt: existing.createdAt, archive: archive) {
                     summary.labels += 1
                     continue
                 }
@@ -294,7 +323,7 @@ final class ExportService {
         for dto in archive.tags {
             let tag: WorkTag
             if let existing = tagsByID[dto.id] {
-                if mode == .merge {
+                if mode == .merge && !Self.isFreshLocalCopy(createdAt: existing.createdAt, archive: archive) {
                     summary.tags += 1
                     continue
                 }
@@ -356,6 +385,7 @@ final class ExportService {
             session.label = dto.labelID.flatMap { labelsByID[$0] }
             session.tagList = tags(for: dto.tagIDs)
             session.profile = dto.profileID.flatMap { profilesByID[$0] } ?? ModelLiveness.live(session.profile) ?? home()
+            if let owner = dto.ownerDeviceID { session.ownerDeviceID = owner }
 
             // Segments (upsert by uuid; extras removed)
             var segmentsByID = Self.index((session.segments ?? []).filter { !$0.isDeleted }, by: \.uuid)
@@ -427,6 +457,14 @@ final class ExportService {
                 } else if let thumb = attDTO.thumbnailData, !AttachmentImporter.isAcceptableStoredImage(thumb) {
                     attDTO.thumbnailData = nil
                 }
+                if attDTO.data == nil, let kept = preservedImages[attDTO.id] {
+                    // Replace: the archive has no bytes for this image, the store had them.
+                    attDTO.data = kept.data
+                    attDTO.thumbnailData = kept.thumbnailData
+                    attDTO.uti = kept.uti
+                    attDTO.pixelWidth = kept.pixelWidth
+                    attDTO.pixelHeight = kept.pixelHeight
+                }
                 if let existing = attachmentsByID[attDTO.id] {
                     existing.createdAt = attDTO.createdAt
                     existing.filename = attDTO.filename
@@ -452,6 +490,8 @@ final class ExportService {
                     attachmentsByID[attDTO.id] = attachment
                     keptAttachments.insert(attDTO.id)
                     summary.attachments += 1
+                } else {
+                    summary.imagesMissing += 1
                 }
             }
             if mode == .replace {
@@ -496,6 +536,11 @@ final class ExportService {
                     SessionEditor.endSession(session, at: localEndedAt)
                 } else if hasLocalActive {
                     SessionEditor.endSession(session, at: session.lastActivityDate)
+                } else if !Self.keepsArchivedSessionRunning(ownerDeviceID: dto.ownerDeviceID,
+                                                             localDeviceID: localDeviceID) {
+                    // Not this Mac's session: never adopt it as running here (M2).
+                    SessionEditor.endSession(session, at: Self.archivedRunningSessionEnd(
+                        lastActivity: session.lastActivityDate, exportedAt: archive.exportedAt, now: .now))
                 }
             }
             session.recomputeStoredDuration()
@@ -560,6 +605,33 @@ final class ExportService {
         (try? context.fetchCount(FetchDescriptor<WorkSession>())) ?? 0
     }
 
+    /// True when the store has no session, label, tag or profile (a fresh store: Replace then deletes nothing).
+    func isStoreEmpty() -> Bool {
+        sessionCount() == 0
+            && ((try? context.fetchCount(FetchDescriptor<WorkLabel>())) ?? 0) == 0
+            && ((try? context.fetchCount(FetchDescriptor<WorkTag>())) ?? 0) == 0
+            && ((try? context.fetchCount(FetchDescriptor<WorkProfile>())) ?? 0) == 0
+    }
+
+    // MARK: - Import rules (pure; unit-tested)
+
+    /// M7: a local label/tag created after the archive was exported is a re-seeded default (same fixed uuid), not a
+    /// user edit, so a merge lets the archived values win. (1 s margin: archive dates are whole seconds.)
+    nonisolated static func isFreshLocalCopy(createdAt: Date, archive: ExportArchive) -> Bool {
+        createdAt.timeIntervalSince(archive.exportedAt) > 1
+    }
+
+    /// M2: an archived running session stays running only when this Mac owned it.
+    nonisolated static func keepsArchivedSessionRunning(ownerDeviceID: String?, localDeviceID: String) -> Bool {
+        guard let owner = ownerDeviceID, !owner.isEmpty, !localDeviceID.isEmpty else { return false }
+        return owner == localDeviceID
+    }
+
+    /// M2: where an archived running session from another Mac ends: max(last activity, min(exportedAt, now)).
+    nonisolated static func archivedRunningSessionEnd(lastActivity: Date, exportedAt: Date, now: Date) -> Date {
+        max(lastActivity, min(exportedAt, now))
+    }
+
     /// True when a session with endedAt == nil exists (CORE helper used by BackupService.restore).
     func hasActiveSession() -> Bool {
         ((try? fetchActiveSessions()) ?? []).isEmpty == false
@@ -571,6 +643,36 @@ final class ExportService {
     }
 
     // MARK: - Private
+
+    /// Image bytes of a store attachment, kept across a Replace.
+    private struct PreservedImage {
+        var data: Data
+        var thumbnailData: Data?
+        var uti: String
+        var pixelWidth: Int
+        var pixelHeight: Int
+    }
+
+    /// Replace: the bytes of store attachments the archive lists without image bytes (loaded before everything is
+    /// deleted). Only those attachments' external-storage bytes are read.
+    private func imagesToPreserve(for archive: ExportArchive) throws -> [UUID: PreservedImage] {
+        var wanted = Set<UUID>()
+        for session in archive.sessions {
+            for attachment in session.attachments where attachment.data == nil {
+                wanted.insert(attachment.id)
+            }
+        }
+        guard !wanted.isEmpty else { return [:] }
+        var result: [UUID: PreservedImage] = [:]
+        for attachment in try context.fetch(FetchDescriptor<Attachment>())
+        where !attachment.isDeleted && wanted.contains(attachment.uuid) && result[attachment.uuid] == nil {
+            guard let data = attachment.data else { continue }
+            result[attachment.uuid] = PreservedImage(data: data, thumbnailData: attachment.thumbnailData,
+                                                     uti: attachment.uti, pixelWidth: attachment.pixelWidth,
+                                                     pixelHeight: attachment.pixelHeight)
+        }
+        return result
+    }
 
     private func fetchActiveSessions() throws -> [WorkSession] {
         let descriptor = FetchDescriptor<WorkSession>(predicate: #Predicate<WorkSession> { $0.endedAt == nil })
@@ -697,7 +799,8 @@ final class ExportService {
                 LearningPointDTO(id: point.uuid, createdAt: point.createdAt, text: point.text,
                                  sortIndex: point.sortIndex, mastery: point.mastery, tagIDs: point.tagList.map(\.uuid))
             },
-            profileID: ModelLiveness.live(session.profile)?.uuid
+            profileID: ModelLiveness.live(session.profile)?.uuid,
+            ownerDeviceID: session.ownerDeviceID.isEmpty ? nil : session.ownerDeviceID
         )
     }
 

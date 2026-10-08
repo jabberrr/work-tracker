@@ -4,7 +4,8 @@ import Foundation
 import Observation
 import SwiftData
 
-enum BackupReason: String { case scheduled, onQuit, manual, beforeRestore }
+/// `beforeChange`: the safety copy taken before deleting, merging or re-scoping labels/tags (Settings).
+enum BackupReason: String { case scheduled, onQuit, manual, beforeRestore, beforeChange }
 
 struct BackupFile: Identifiable, Hashable {
     let url: URL; let date: Date; let sizeBytes: Int64; let reason: String
@@ -13,7 +14,7 @@ struct BackupFile: Identifiable, Hashable {
     /// Pinned backups ("-pinned" in the file name) are never pruned automatically.
     var isPinned: Bool = false
     var id: URL { url }
-    /// Scheduled and on-quit backups rotate; manual and before-restore backups are kept longer.
+    /// Scheduled and on-quit backups rotate; manual, before-restore and before-change backups are kept longer.
     var isAutomatic: Bool { reason == BackupReason.scheduled.rawValue || reason == BackupReason.onQuit.rawValue }
 }
 
@@ -30,11 +31,12 @@ struct BackupImagePayload: Sendable {
 ///   of embedding base64. Unreferenced image files are garbage-collected after pruning. Older backups with embedded
 ///   images restore as before. User-facing "Export JSON with images" still embeds them.
 /// - Retention: automatic backups keep the newest `backupRetentionCount`, plus the newest per day for 14 days and per
-///   week for 8 weeks; manual and before-restore backups keep the newest 20; pinned backups and the newest backup that
-///   contains sessions are never pruned; the backup being restored is never pruned.
-/// - Shrinkage guard: when a new backup has under half the sessions of the previous one (which had > 10), or none
-///   while the previous had some, the previous backup is pinned. Automatic backups of an empty store are skipped when
-///   the previous backup had sessions.
+///   week for 8 weeks; manual, before-restore and before-change backups each keep their own newest 20 (so a burst of
+///   one kind never pushes out another); pinned backups and the newest backup that contains sessions are never
+///   pruned; the backup being restored is never pruned.
+/// - Shrinkage guard: when a new backup has under half the sessions of the previous one (or none while the previous
+///   had some), the previous backup is pinned. Automatic backups of an empty store are skipped when the previous
+///   backup had sessions. An iCloud account change pins the newest backup with sessions (`pinNewestBackupWithSessions`).
 @MainActor @Observable
 final class BackupService {
     private(set) var lastBackupDate: Date? = nil
@@ -99,6 +101,50 @@ final class BackupService {
     /// Returns nil when skipped or failed (`lastError` is set on failure).
     @discardableResult func backupNow(reason: BackupReason) -> URL? {
         performBackup(reason: reason, protecting: nil)
+    }
+
+    /// A pinned manual backup that always includes images (whatever "Include images" says), read back and checked:
+    /// same session count as the store, every image file present. Used before "Move to iCloud <env>". Throws when
+    /// the store is in memory only, the write fails or the check fails (the file is then left for inspection).
+    func makeVerifiedFullBackup(reason: BackupReason = .manual) throws -> BackupFile {
+        guard !exporter.isEphemeralStore else {
+            throw DataTransferError.writeFailed("your data isn\u{2019}t on disk")
+        }
+        let expectedSessions = exporter.sessionCount()
+        guard let url = performBackup(reason: reason, protecting: nil, forceImages: true, pinned: true) else {
+            throw DataTransferError.writeFailed(lastError ?? "the backup couldn\u{2019}t be written")
+        }
+        let archive = try exporter.decodeArchive(from: url)
+        guard archive.sessions.count == expectedSessions else {
+            throw DataTransferError.writeFailed("the backup has \(archive.sessions.count) of \(expectedSessions) sessions")
+        }
+        guard archive.missingImageCount == 0 else {
+            throw DataTransferError.writeFailed("\(archive.missingImageCount) images are missing from the backup")
+        }
+        refreshList()
+        if let file = backups.first(where: { $0.url == url }) { return file }
+        let parsed = Self.parse(filename: url.lastPathComponent)
+        return BackupFile(url: url, date: parsed.date ?? .now, sizeBytes: 0, reason: parsed.reason,
+                          sessionCount: parsed.sessionCount, isPinned: parsed.isPinned)
+    }
+
+    /// L1: the safety copy taken before deleting, merging or re-scoping a label or tag. Returns nil when it was
+    /// written, or when there is nothing on disk to protect (in-memory or empty store); else the error to show (the
+    /// caller then changes nothing).
+    func backupBeforeChange() -> String? {
+        guard !exporter.isEphemeralStore, !exporter.isStoreEmpty() else { return nil }
+        if performBackup(reason: .beforeChange, protecting: nil) != nil { return nil }
+        return lastError ?? "The safety backup failed, so nothing changed."
+    }
+
+    /// M4: pins the newest backup that has sessions (e.g. when the iCloud account changed, before CloudKit may empty
+    /// the store). Returns it (renamed), or nil when there is none.
+    @discardableResult func pinNewestBackupWithSessions() -> BackupFile? {
+        refreshList()
+        guard let newest = backups.first(where: { (Self.knownSessionCount($0) ?? 0) > 0 }) else { return nil }
+        guard !newest.isPinned else { return newest }
+        Log.backup.info("Pinning \(newest.url.lastPathComponent, privacy: .public) (iCloud account change)")
+        return setPinned(true, for: newest)
     }
 
     func refreshList() {
@@ -186,14 +232,17 @@ final class BackupService {
         var sessionCount: Int { archive.sessions.count }
     }
 
+    /// Skipped while the store is in memory only or empty (nothing to protect).
     private func makeSafetyBackup(protecting: URL?) throws {
-        guard !exporter.isEphemeralStore else { return }
+        guard !exporter.isEphemeralStore, !exporter.isStoreEmpty() else { return }
         guard performBackup(reason: .beforeRestore, protecting: protecting) != nil else {
             throw DataTransferError.writeFailed("no safety backup could be made first")
         }
     }
 
-    private func performBackup(reason: BackupReason, protecting: URL?) -> URL? {
+    /// `forceImages`: include images even when the setting is off. `pinned`: write the file pinned.
+    private func performBackup(reason: BackupReason, protecting: URL?, forceImages: Bool = false,
+                               pinned: Bool = false) -> URL? {
         let ephemeral = exporter.isEphemeralStore
         if ephemeral && (reason == .scheduled || reason == .onQuit) {
             if reason == .onQuit && writesUnsavedSnapshotOnQuit && isDirty {
@@ -215,8 +264,8 @@ final class BackupService {
         }
 
         do {
-            let capture = try makeCapture()
-            let url = uniqueURL(for: reason, date: .now, sessionCount: capture.sessionCount)
+            let capture = try makeCapture(forceImages: forceImages)
+            let url = uniqueURL(for: reason, date: .now, sessionCount: capture.sessionCount, pinned: pinned)
             try Self.write(capture, to: url)
             isDirty = false
             lastError = nil
@@ -272,9 +321,9 @@ final class BackupService {
         }
     }
 
-    private func makeCapture() throws -> Capture {
+    private func makeCapture(forceImages: Bool = false) throws -> Capture {
         var archive = try exporter.makeArchive(includeAttachments: false)
-        guard settings.backupIncludesAttachments else {
+        guard settings.backupIncludesAttachments || forceImages else {
             return Capture(archive: archive, images: [], imageFolder: nil)
         }
         let folder = backupsDirectory.appending(path: ExportArchive.backupAttachmentFolder, directoryHint: .isDirectory)
@@ -379,8 +428,11 @@ final class BackupService {
         if let protecting { keep.insert(protecting) }
         for file in sorted where file.isPinned { keep.insert(file.url) }
 
-        let manual = sorted.filter { !$0.isAutomatic }
-        for file in manual.prefix(manualKeepCount) { keep.insert(file.url) }
+        // Manual, before-restore and before-change backups: the newest `manualKeepCount` of EACH kind.
+        let kept = Dictionary(grouping: sorted.filter { !$0.isAutomatic }, by: \.reason)
+        for files in kept.values {
+            for file in files.prefix(manualKeepCount) { keep.insert(file.url) }
+        }
 
         let automatic = sorted.filter(\.isAutomatic)
         for file in automatic.prefix(max(1, keepAutomatic)) { keep.insert(file.url) }
@@ -407,10 +459,9 @@ final class BackupService {
         return sorted.filter { !keep.contains($0.url) }
     }
 
-    /// Pin the previous backup when the new one lost most of its sessions (or all of them).
+    /// Pin the previous backup when the new one lost more than half of its sessions (or all of them).
     nonisolated static func shouldPinPrevious(previousCount: Int, newCount: Int) -> Bool {
-        if previousCount > 0 && newCount == 0 { return true }
-        return previousCount > 10 && newCount * 2 < previousCount
+        previousCount > 0 && newCount * 2 < previousCount
     }
 
     /// Deletes image files no backup references any more (older than the grace period). Gives up if any backup
@@ -463,9 +514,9 @@ final class BackupService {
 
     // MARK: - File names
 
-    private func uniqueURL(for reason: BackupReason, date: Date, sessionCount: Int) -> URL {
+    private func uniqueURL(for reason: BackupReason, date: Date, sessionCount: Int, pinned: Bool = false) -> URL {
         let stamp = Self.makeFormatter(utc: true).string(from: date)
-        let base = "\(Self.filePrefix)\(stamp)Z-\(reason.rawValue)-n\(sessionCount)"
+        let base = "\(Self.filePrefix)\(stamp)Z-\(reason.rawValue)-n\(sessionCount)" + (pinned ? "-\(Self.pinnedToken)" : "")
         var url = backupsDirectory.appending(path: base + ".json", directoryHint: .notDirectory)
         var counter = 2
         while FileManager.default.fileExists(atPath: url.path(percentEncoded: false)) {

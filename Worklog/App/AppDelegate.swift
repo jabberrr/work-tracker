@@ -39,6 +39,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateNow
     }
 
+    /// M4: after an iCloud account change, warn once if the store lost most of its sessions.
+    func applicationDidBecomeActive(_ notification: Notification) {
+        services.checkDataShrinkage()
+    }
+
     /// The menu bar extra keeps the app alive.
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {
         false

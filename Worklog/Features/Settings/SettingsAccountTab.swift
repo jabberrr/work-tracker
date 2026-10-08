@@ -31,6 +31,16 @@ struct SettingsAccountTab: View {
 
             Section("Storage") {
                 storageStatusRow
+                if let mismatch = persistence.environmentMismatch, !persistence.isInMemory {
+                    HStack(spacing: theme.spacingS) {
+                        SettingsFootnote("Move it to iCloud \(mismatch.build.rawValue) or keep it on this Mac.")
+                        Spacer()
+                        Button("Move to iCloud \(mismatch.build.rawValue)\u{2026}") {
+                            router.showSettings(tab: SettingsTab.data.rawValue)
+                        }
+                        .buttonStyle(QuietButtonStyle())
+                    }
+                }
                 if SettingsRecovery.isNeeded(persistence) {
                     HStack {
                         Spacer()
@@ -152,7 +162,7 @@ struct SettingsAccountTab: View {
     private var storageDetail: String {
         switch persistence.storeMode {
         case .cloudKit:
-            return "Synced through your private iCloud database."
+            return "Synced through your private iCloud database (\(persistence.buildEnvironment.rawValue))."
         case .localOnly(let reason):
             return "\(reason)."
         case .inMemory(let reason):
@@ -260,9 +270,11 @@ struct SettingsAccountTab: View {
     }
 
     /// True when the toggle differs from what this launch used (it's read once at launch). Never while the store
-    /// couldn't be opened — recovery is offered in the Data tab instead.
+    /// couldn't be opened — recovery is offered in the Data tab instead — nor when sync was turned off while the
+    /// store is local-only anyway (iCloud environment mismatch: nothing changes at the next launch).
     private var needsRelaunch: Bool {
         guard !persistence.isInMemory else { return false }
+        if persistence.environmentMismatch != nil && !settings.iCloudSyncEnabled { return false }
         return settings.iCloudSyncEnabled != persistence.cloudSyncRequestedAtLaunch
     }
 

@@ -23,7 +23,9 @@ struct SessionTakeaway: Equatable {
 @MainActor @Observable
 final class SessionEngine {
     // MARK: State (read-only for views unless noted)
-    private(set) var activeSession: WorkSession? = nil
+    private(set) var activeSession: WorkSession? = nil {
+        didSet { activeSessionUUID = activeSession.flatMap { ModelLiveness.live($0)?.uuid } }
+    }
     /// Ended session awaiting the end-of-session sheet. RootView presents `EndSessionSheet` while non-nil.
     /// Settable so `.sheet(item:)` bindings work; setting nil by dismissal must go through `completeReview()`.
     var pendingEndSession: WorkSession? = nil {
@@ -61,10 +63,14 @@ final class SessionEngine {
     let deviceID: String
 
     var isActive: Bool { activeSession != nil }
-    var isPaused: Bool { activeSession?.isPaused ?? false }
+    /// Reads guard with `ModelLiveness`: the active session may have been deleted underneath (remote deletion,
+    /// replace import) until `verifyTrackedSessions()` / `reconcile()` clears it.
+    var isPaused: Bool { ModelLiveness.live(activeSession)?.isPaused ?? false }
     var isRunning: Bool { isActive && !isPaused }
-    var currentSegment: Segment? { activeSession?.currentSegment }
-    var currentLabel: WorkLabel? { currentSegment?.effectiveLabel ?? activeSession?.label }
+    var currentSegment: Segment? { ModelLiveness.live(ModelLiveness.live(activeSession)?.currentSegment) }
+    var currentLabel: WorkLabel? {
+        ModelLiveness.live(currentSegment?.effectiveLabel) ?? ModelLiveness.live(ModelLiveness.live(activeSession)?.label)
+    }
     /// Effective profile of the active session (`ProfileOps.effectiveProfile(of:)`: an unassigned session started by
     /// an older app version counts as the profile it is shown in); nil when idle.
     var activeSessionProfile: WorkProfile? {
@@ -80,7 +86,7 @@ final class SessionEngine {
     }
     /// The active session was last controlled from another Mac (its owner is set and isn't this install).
     var isActiveSessionOnAnotherMac: Bool {
-        guard let owner = activeSession?.ownerDeviceID, !owner.isEmpty else { return false }
+        guard let owner = ModelLiveness.live(activeSession)?.ownerDeviceID, !owner.isEmpty else { return false }
         return owner != deviceID
     }
 
@@ -99,6 +105,8 @@ final class SessionEngine {
     /// Identity of the pending session, captured when it is set, so reconcile never has to touch a model
     /// object that may have been deleted underneath us (import/replace, remote deletion).
     @ObservationIgnored private var pendingSessionUUID: UUID?
+    /// Identity of the active session (same reason).
+    @ObservationIgnored private var activeSessionUUID: UUID?
     @ObservationIgnored private var tickTimer: Timer?
     @ObservationIgnored private var observerTokens: [NSObjectProtocol] = []
     @ObservationIgnored private var workspaceObserverTokens: [NSObjectProtocol] = []
@@ -138,11 +146,18 @@ final class SessionEngine {
     }
 
     /// Re-sync with the store (after import/restore, remote CloudKit changes, app activation). Same logic as restore.
-    func reconcile() {
+    /// Extra running sessions are ended only when this Mac owns them or they started more than a minute ago
+    /// (`shouldEndExtraSession`): a session another Mac started a moment ago is left to that Mac.
+    func reconcile(now: Date = .now) {
         let actives = fetchActiveSessions()
         var changed = false
         if let newest = actives.first {
             for extra in actives.dropFirst() {
+                guard Self.shouldEndExtraSession(ownerDeviceID: extra.ownerDeviceID, deviceID: deviceID,
+                                                 startedAt: extra.startedAt, now: now) else {
+                    Log.engine.info("Reconcile: left another Mac\u{2019}s just-started session to that Mac")
+                    continue
+                }
                 let end = handoffEnd(of: extra, newest: newest)
                 let extraOwner = extra.ownerDeviceID
                 let newestOwner = newest.ownerDeviceID
@@ -173,7 +188,7 @@ final class SessionEngine {
             }
         }
 
-        if !(activeSession?.isPaused ?? false), autoPauseReason != nil {
+        if !isPaused, autoPauseReason != nil {
             autoPauseReason = nil
         }
         if changed { save() }
@@ -181,8 +196,36 @@ final class SessionEngine {
         updateTickTimer()
     }
 
+    /// L6 (pure): an extra running session is ended when this Mac owns it (or it has no owner), or it started more
+    /// than 60 s ago.
+    nonisolated static func shouldEndExtraSession(ownerDeviceID: String, deviceID: String, startedAt: Date,
+                                                  now: Date) -> Bool {
+        if ownerDeviceID.isEmpty || ownerDeviceID == deviceID { return true }
+        return now.timeIntervalSince(startedAt) > 60
+    }
+
+    /// M3: right after a remote change, drop an active/pending session that was deleted or can't be fetched any
+    /// more, so views never read a deleted model while the coalesced `reconcile()` is still waiting.
+    func verifyTrackedSessions() {
+        if let session = activeSession {
+            let gone = !ModelLiveness.isLive(session)
+                || activeSessionUUID.map { fetchSession(uuid: $0) == nil } ?? true
+            if gone {
+                activeSession = nil
+                updateTickTimer()
+                Log.engine.info("The active session was deleted elsewhere")
+            }
+        }
+        if let pending = pendingEndSession {
+            let gone = !ModelLiveness.isLive(pending)
+                || pendingSessionUUID.map { fetchSession(uuid: $0) == nil } ?? true
+            if gone { pendingEndSession = nil }
+        }
+    }
+
     /// Installs NSWorkspace willSleep/didWake + NSApplication.didBecomeActive observers (called by AppServices /
-    /// AppDelegate). Also observes `.worklogDataDidImport` and persistent-store remote changes (CloudKit imports).
+    /// AppDelegate). Also observes `.worklogDataDidImport`, persistent-store remote changes (CloudKit imports) and
+    /// `.worklogSaveFailed` (shown through `lastError`).
     func startObservingSystemEvents() {
         guard !isObservingSystemEvents else { return }
         isObservingSystemEvents = true
@@ -213,7 +256,18 @@ final class SessionEngine {
         observerTokens.append(center.addObserver(
             forName: .NSPersistentStoreRemoteChange, object: nil, queue: .main
         ) { [weak self] _ in
-            MainActor.assumeIsolated { () -> Void in self?.scheduleRemoteChangeReconcile() }
+            MainActor.assumeIsolated { () -> Void in
+                self?.verifyTrackedSessions()
+                self?.scheduleRemoteChangeReconcile()
+            }
+        })
+        observerTokens.append(center.addObserver(
+            forName: .worklogSaveFailed, object: nil, queue: .main
+        ) { [weak self] notification in
+            let text = notification.userInfo?[SafeSave.messageKey] as? String
+            MainActor.assumeIsolated { () -> Void in
+                self?.lastError = text ?? "Couldn\u{2019}t save your change."
+            }
         })
         observerTokens.append(center.addObserver(
             forName: ModelContext.didSave, object: nil, queue: .main
@@ -230,7 +284,7 @@ final class SessionEngine {
             pause()
             autoPauseReason = .quit
         }
-        if let session = activeSession {
+        if let session = ModelLiveness.live(activeSession) {
             session.recomputeStoredDuration()
         }
         save()
@@ -249,9 +303,9 @@ final class SessionEngine {
 
     // MARK: - Time
 
-    /// Active (pause-excluded) seconds of the active session at `date`; 0 if none.
+    /// Active (pause-excluded) seconds of the active session at `date`; 0 if none (or deleted underneath).
     func elapsed(at date: Date = .now) -> TimeInterval {
-        activeSession?.activeDuration(at: date) ?? 0
+        ModelLiveness.live(activeSession)?.activeDuration(at: date) ?? 0
     }
 
     /// Active seconds of the current segment at `date`; 0 if none.
@@ -268,7 +322,7 @@ final class SessionEngine {
             ?? today.start.addingTimeInterval(-2 * 86_400)
         let descriptor = FetchDescriptor<WorkSession>(predicate: #Predicate<WorkSession> { $0.startedAt >= cutoff })
         var sessions = (try? context.fetch(descriptor)) ?? []
-        if let active = activeSession, !sessions.contains(where: { $0 === active }) {
+        if let active = ModelLiveness.live(activeSession), !sessions.contains(where: { $0 === active }) {
             sessions.append(active)
         }
         return scope.filter(sessions).reduce(0) { $0 + $1.activeDuration(in: today, now: now) }
@@ -304,7 +358,7 @@ final class SessionEngine {
     @discardableResult
     func start(label: WorkLabel?, tags: [WorkTag] = [], focus: String = "", at date: Date = .now,
                profile: WorkProfile? = nil) -> WorkSession {
-        if let session = activeSession { return session }
+        if let session = ModelLiveness.live(activeSession) { return session }
 
         let resolvedProfile: WorkProfile?
         if let given = ModelLiveness.live(profile) {
@@ -347,7 +401,7 @@ final class SessionEngine {
 
     /// No-op unless running. Appends PauseInterval(start: date).
     func pause(at date: Date = .now) {
-        guard isRunning, let session = activeSession else { return }
+        guard isRunning, let session = ModelLiveness.live(activeSession) else { return }
         var pauses = session.pauseIntervals
         let lowerBound = max(session.startedAt, pauses.last?.end ?? session.startedAt)
         pauses.append(PauseInterval(start: max(date, lowerBound)))
@@ -360,7 +414,7 @@ final class SessionEngine {
 
     /// No-op unless paused. Closes the open interval with end = date; clears autoPauseReason.
     func resume(at date: Date = .now) {
-        guard isPaused, let session = activeSession else { return }
+        guard isPaused, let session = ModelLiveness.live(activeSession) else { return }
         var pauses = session.pauseIntervals
         guard let lastIndex = pauses.indices.last else { return }
         pauses[lastIndex].end = max(date, pauses[lastIndex].start)
@@ -387,7 +441,10 @@ final class SessionEngine {
     /// Callers outside the main window MUST call `router.showMainWindow()` afterwards so the sheet is visible.
     @discardableResult
     func stop(at date: Date = .now) -> WorkSession? {
-        guard let session = activeSession else { return nil }
+        guard let session = ModelLiveness.live(activeSession) else {
+            clearStaleActiveSession()
+            return nil
+        }
         stampOwner(session)
         ProfileOps.assignProfileIfUnassigned(session, in: context)
         SessionEditor.endSession(session, at: date)
@@ -413,7 +470,10 @@ final class SessionEngine {
     /// (tests can `await engine.discard()?.value`); nil when there was no active session.
     @discardableResult
     func discard() -> Task<Void, Never>? {
-        guard let session = activeSession else { return nil }
+        guard let session = ModelLiveness.live(activeSession) else {
+            clearStaleActiveSession()
+            return nil
+        }
         let uuid = session.uuid
         discardingUUIDs.insert(uuid)
         activeSession = nil
@@ -432,7 +492,7 @@ final class SessionEngine {
     /// place instead (no zero-length segments) and returned.
     @discardableResult
     func split(label: WorkLabel?, tags: [WorkTag] = [], focus: String = "", at date: Date = .now) -> Segment? {
-        guard let session = activeSession else { return nil }
+        guard let session = ModelLiveness.live(activeSession) else { return nil }
         stampOwner(session)
         ProfileOps.assignProfileIfUnassigned(session, in: context)
         let resolvedLabel = label ?? currentLabel
@@ -464,7 +524,7 @@ final class SessionEngine {
 
     /// Edit the current segment in place (no split). If the session has exactly one segment, session.label follows.
     func updateCurrentSegment(label: WorkLabel?, tags: [WorkTag], focus: String) {
-        guard let session = activeSession, let segment = session.currentSegment else { return }
+        guard let session = ModelLiveness.live(activeSession), let segment = session.currentSegment else { return }
         stampOwner(session)
         ProfileOps.assignProfileIfUnassigned(session, in: context)
         segment.label = label
@@ -481,7 +541,7 @@ final class SessionEngine {
     @discardableResult
     func addNote(_ text: String, at date: Date = .now) -> Note? {
         let trimmedText = text.trimmed
-        guard !trimmedText.isEmpty, let session = activeSession else { return nil }
+        guard !trimmedText.isEmpty, let session = ModelLiveness.live(activeSession) else { return nil }
         let note = Note(text: trimmedText, createdAt: date)
         context.insert(note)
         note.session = session
@@ -616,6 +676,13 @@ final class SessionEngine {
     }
 
     // MARK: - Private
+
+    /// The active session was deleted underneath (it can't be read any more): forget it.
+    private func clearStaleActiveSession() {
+        guard activeSession != nil else { return }
+        activeSession = nil
+        updateTickTimer()
+    }
 
     private func fetchActiveSessions() -> [WorkSession] {
         let descriptor = FetchDescriptor<WorkSession>(

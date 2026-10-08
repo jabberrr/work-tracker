@@ -2,8 +2,13 @@ import Foundation
 
 enum AppConstants {
     static let appName = "Worklog"
-    static let bundleID = "app.dabora.worktracker"                 // CHANGE ME (also BUNDLE_ID in scripts/generate_xcodeproj.py)
-    static let cloudKitContainerID = "iCloud.app.dabora.worktracker" // CHANGE ME (also entitlements)
+    /// The Release bundle id (also `BUNDLE_ID` in scripts/generate_xcodeproj.py). Debug builds run as
+    /// "app.dabora.worktracker.debug", with their own sandbox container, store, backups, defaults and keychain items.
+    /// Used as the log subsystem and as a fallback only; code that needs the running app's id reads
+    /// `Bundle.main.bundleIdentifier`.
+    static let bundleID = "app.dabora.worktracker"
+    /// Fallback only: at runtime the id is read from the entitlements (`Entitlements.cloudKitContainerIdentifier`).
+    static let cloudKitContainerID = "iCloud.app.dabora.worktracker"
     static let backupFolderName = "Backups"
     /// Folder (inside applicationSupportURL) for quarantined/damaged stores, pre-upgrade snapshots and unsaved data.
     static let recoveredFolderName = "Recovered"
@@ -66,9 +71,23 @@ enum AppConstants {
         ensureDirectory(url)
     }
 
-    /// CFBundleShortVersionString of the running app ("0" if missing).
+    /// CFBundleShortVersionString of the running app ($(MARKETING_VERSION); "0" if missing).
     static var appVersion: String {
         Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "0"
+    }
+
+    /// CFBundleVersion of the running app ($(CURRENT_PROJECT_VERSION); "0" if missing).
+    static var buildNumber: String {
+        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "0"
+    }
+
+    /// "Debug" or "Release" (the build configuration this binary was compiled with).
+    static var buildConfiguration: String {
+        #if DEBUG
+        return "Debug"
+        #else
+        return "Release"
+        #endif
     }
 
     private static func ensureDirectory(_ url: URL) {

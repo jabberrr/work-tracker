@@ -3,7 +3,7 @@ import SwiftData
 import SwiftUI
 
 /// Content of the floating, non-activating overlay panel (hosted by `OverlayPanelController`, which also applies
-/// opacity, level, spaces and visibility). Renders `settings.overlayLayout` through `OverlayContent` in `.live`
+/// opacity, level, spaces and visibility). Renders `settings.overlayGrid` through `OverlayContent` in `.live`
 /// mode: 300 pt wide, 220 pt compact; height is intrinsic (`fixedSize(vertical:)`) so the panel's sizingOptions
 /// follow the content as elements appear and disappear.
 ///
@@ -33,7 +33,7 @@ struct OverlayView: View {
         LiveTodaySessionsQuery { sessions in
             OverlayTicker(isTicking: engine.isRunning) { date in
                 OverlayContent(
-                    layout: settings.overlayLayout,
+                    grid: settings.overlayGrid,
                     data: liveData(sessions: sessions, at: date),
                     isCompact: settings.overlayCompact,
                     mode: .live,

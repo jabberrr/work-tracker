@@ -18,6 +18,18 @@ struct ExportArchive: Codable {
     var attachmentStore: String? = nil
     /// v2+. v2 always writes it (possibly []); nil when decoding a v1 archive.
     var profiles: [ProfileDTO]? = nil
+    /// Not encoded: images listed by an `attachmentStore` archive whose files couldn't be read when it was decoded
+    /// (`ExportService.decodeArchive(from:)`). Shown before a restore; Replace keeps the store's own bytes for them.
+    var missingImageCount: Int = 0
+
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion, exportedAt, appVersion, includesAttachments, labels, tags, sessions, attachmentStore, profiles
+    }
+
+    /// Attachments in the archive that carry no image bytes (exported without images, or missing files).
+    var attachmentsWithoutImageCount: Int {
+        sessions.reduce(0) { total, session in total + session.attachments.filter { $0.data == nil }.count }
+    }
 }
 struct ProfileDTO: Codable, Hashable {
     var id: UUID; var name: String; var colorHex: String; var symbolName: String; var sortIndex: Int
@@ -44,6 +56,9 @@ struct SessionDTO: Codable {
     var attachments: [AttachmentDTO]; var learningPoints: [LearningPointDTO]
     /// v2+: the session's profile; nil = unassigned (imported into the home profile).
     var profileID: UUID? = nil
+    /// The Mac that last controlled the session while it was running ("" = unknown). Lets an import keep this Mac's
+    /// own running session running and end any other (see `ExportService.importArchive`). Optional (older files).
+    var ownerDeviceID: String? = nil
 }
 struct SegmentDTO: Codable {
     var id: UUID; var startedAt: Date; var endedAt: Date?; var sortIndex: Int

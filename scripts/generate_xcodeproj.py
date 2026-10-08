@@ -5,6 +5,10 @@ You don't need this when working in Xcode — just open Worklog.xcodeproj and ad
 It exists so the project can be regenerated without a Mac (e.g. by tooling on Linux) after files are
 added or removed:   python3 scripts/generate_xcodeproj.py
 
+The committed Worklog.xcodeproj is exactly this script's output. Build settings live HERE: a setting changed
+in Xcode's editor (version, bundle id, entitlements, signing) is lost the next time the project is
+regenerated unless it is mirrored in this file.
+
 Object IDs are derived from stable keys, so regenerating an unchanged tree produces an identical file.
 """
 import hashlib
@@ -17,7 +21,10 @@ PROJECT = "Worklog"
 APP_DIR = "Worklog"
 TEST_DIR = "WorklogTests"
 DEVELOPMENT_TEAM = "6W4ZKDHBVD"  # requires a paid Apple Developer Program team (iCloud + Sign in with Apple)
-BUNDLE_ID = "app.dabora.worktracker"  # CHANGE ME (also AppConstants.swift and the entitlements files)
+BUNDLE_ID = "app.dabora.worktracker"  # Release; Debug appends ".debug" (also AppConstants.bundleID)
+DEBUG_BUNDLE_ID = f"{BUNDLE_ID}.debug"  # own sandbox container, store, backups, defaults and keychain items
+MARKETING_VERSION = "1.0.1"  # CFBundleShortVersionString (Info.plist uses $(MARKETING_VERSION))
+CURRENT_PROJECT_VERSION = "1"  # CFBundleVersion
 DEPLOYMENT_TARGET = "14.0"
 
 # Files that live in the source tree but must not be compiled or copied as resources.
@@ -251,13 +258,13 @@ def main():
         "CODE_SIGN_IDENTITY": "Apple Development",
         "CODE_SIGN_STYLE": "Automatic",
         "COMBINE_HIDPI_IMAGES": "YES",
-        "CURRENT_PROJECT_VERSION": "1",
+        "CURRENT_PROJECT_VERSION": CURRENT_PROJECT_VERSION,
         "DEVELOPMENT_TEAM": DEVELOPMENT_TEAM,
         "ENABLE_PREVIEWS": "YES",
         "GENERATE_INFOPLIST_FILE": "NO",
         "INFOPLIST_FILE": f"{APP_DIR}/Resources/Info.plist",
         "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/../Frameworks"],
-        "MARKETING_VERSION": "1.0.0",
+        "MARKETING_VERSION": MARKETING_VERSION,
         "PRODUCT_BUNDLE_IDENTIFIER": BUNDLE_ID,
         "PRODUCT_NAME": "$(TARGET_NAME)",
         "SWIFT_EMIT_LOC_STRINGS": "YES",
@@ -266,11 +273,11 @@ def main():
         "BUNDLE_LOADER": "$(TEST_HOST)",
         "CODE_SIGN_IDENTITY": "Apple Development",
         "CODE_SIGN_STYLE": "Automatic",
-        "CURRENT_PROJECT_VERSION": "1",
+        "CURRENT_PROJECT_VERSION": CURRENT_PROJECT_VERSION,
         "DEVELOPMENT_TEAM": DEVELOPMENT_TEAM,
         "GENERATE_INFOPLIST_FILE": "YES",
         "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/../Frameworks", "@loader_path/../Frameworks"],
-        "MARKETING_VERSION": "1.0.0",
+        "MARKETING_VERSION": MARKETING_VERSION,
         "PRODUCT_BUNDLE_IDENTIFIER": f"{BUNDLE_ID}.tests",
         "PRODUCT_NAME": "$(TARGET_NAME)",
         "SWIFT_EMIT_LOC_STRINGS": "NO",
@@ -290,8 +297,11 @@ def main():
 
     project_configs = config_list("project", [("Debug", project_debug), ("Release", project_release)])
     # Hardened runtime is for distribution; Debug leaves it off so the test bundle always loads into the host app.
-    app_debug = dict(app_settings, ENABLE_HARDENED_RUNTIME="NO")
-    app_release = dict(app_settings, ENABLE_HARDENED_RUNTIME="YES")
+    # Debug: its own bundle id (never opens the real store) and Worklog.entitlements (CloudKit Development).
+    # Release: WorklogRelease.entitlements (CloudKit Production, production push) for Developer ID distribution.
+    app_debug = dict(app_settings, ENABLE_HARDENED_RUNTIME="NO", PRODUCT_BUNDLE_IDENTIFIER=DEBUG_BUNDLE_ID)
+    app_release = dict(app_settings, ENABLE_HARDENED_RUNTIME="YES",
+                       CODE_SIGN_ENTITLEMENTS=f"{APP_DIR}/Resources/WorklogRelease.entitlements")
     app_configs = config_list("app", [("Debug", app_debug), ("Release", app_release)])
     test_configs = config_list("tests", [("Debug", test_settings), ("Release", test_settings)])
 

@@ -84,7 +84,7 @@ Owners:
 /Worklog/Services/AttachmentImporter.swift          CORE  (AttachmentImporter, ImportedImage, AttachmentImportError)
 /Worklog/Services/AppSettings.swift                 CORE  (AppSettings, BackupInterval)
 /Worklog/Services/OverlayPanelController.swift      CORE  (OverlayPanelController, OverlayPanel)
-/Worklog/Services/OverlayLayout.swift               CORE  (OverlayElement; round 2, §11.1)
+/Worklog/Services/OverlayLayout.swift               CORE  (OverlayElement; round 2, §11.1. Grid model: OverlayPlacement, OverlayGridLayout, OverlayGridGeometry…; round 4, §13.2)
 /Worklog/Services/ShortcutStore.swift               CORE  (ShortcutStore, ShortcutAction, ShortcutGroup, StoredShortcut, ShortcutValidation; round 2, §11.3)
 
 /Worklog/Utilities/Formatting.swift                 CORE  (TimeInterval/Date/DateInterval/String extensions)
@@ -127,6 +127,7 @@ Owners:
 /Worklog/Features/MenuBar/MenuBarLabelView.swift         A  (public: MenuBarLabelView)
 /Worklog/Features/MenuBar/*.swift                        A
 /Worklog/Features/Overlay/OverlayView.swift              A  (public: OverlayView)
+/Worklog/Features/Overlay/OverlayGridViews.swift         A  (round 4: OverlayGridRowLayout, cell/frame keys, render helpers)
 /Worklog/Features/Overlay/*.swift                        A
 
 /Worklog/Features/History/HistoryView.swift              B  (public: HistoryView)
@@ -148,6 +149,7 @@ Owners:
 /WorklogTests/ExportRoundTripTests.swift            CORE
 /WorklogTests/OverlayLayoutTests.swift              CORE  (round 2)
 /WorklogTests/ShortcutStoreTests.swift              CORE  (round 2)
+/WorklogTests/OverlayGridLayoutTests.swift          CORE  (round 4, §13.6)
 ```
 
 ### 1.2 Cross-agent dependencies
@@ -1943,6 +1945,8 @@ Round 2 adds in-app Settings, customizable shortcuts and an editable overlay lay
 
 ### 11.1 `Services/OverlayLayout.swift`
 
+> Superseded in round 4: the overlay layout is a grid (`OverlayGridLayout`), see §13.2. `OverlayElement` below is unchanged.
+
 ```swift
 /// One element of the floating overlay. Persisted by rawValue in `AppSettings.overlayLayout`.
 enum OverlayElement: String, CaseIterable, Identifiable, Codable, Hashable {
@@ -1960,6 +1964,8 @@ enum OverlayElement: String, CaseIterable, Identifiable, Codable, Hashable {
 ```
 
 ### 11.2 `AppSettings` overlay changes
+
+> Superseded in round 4: `overlayGrid` is the source of truth and `overlayLayout` is a compatibility accessor, see §13.3. The legacy-boolean migration below still applies.
 
 - **Removed:** `overlayShowTimer`, `overlayShowLabel`, `overlayShowSegmentFocus`, `overlayShowControls`, `overlayShowSplitButton`, `overlayShowNoteField`, `overlayShowLastTakeaway`, `overlayShowTodayTotal`.
 - **Kept:** `overlayEnabled`, `overlayCompact`, `overlayOpacity`, `overlayAlwaysOnTop`, `overlayShowOnAllSpaces`, `overlayHideWhenIdle`.
@@ -2290,3 +2296,147 @@ static func mergeTargets(for: WorkTag, among: [WorkTag]) -> [WorkTag]
 - `lastTakeaway` is computed; observation tracks it through `takeaways`, `activeSession` and the observed `ProfileStore`.
 - Old app versions can't see profiles; their new sessions arrive unassigned and are repaired. Upgrade every Mac.
 - Deploy the CloudKit schema to Production (new record type + three fields).
+
+---
+
+## 13. Round 4: inline profile list, grid overlay layout
+
+Round 4 replaces the profile switcher's popover with an inline list in the sidebar, shrinks the edit badges and turns the overlay's ordered list into a 6-column grid. The design side is in `docs/DESIGN.md` §17.
+
+### 13.1 Ownership
+
+| Agent | Owns |
+|---|---|
+| ENG | `Services/OverlayLayout.swift` (grid model), `Services/AppSettings.swift`, `App/RootView.swift`, `WorklogTests/OverlayLayoutTests.swift`, `WorklogTests/OverlayGridLayoutTests.swift`, this document |
+| DES | `DesignSystem/**` (`EditModeChrome`: `RemoveBadgeButton`, `editRemoveBadge`, `EditResizeHandle`, `AddBadgeButton`), `Shared/**` (`ProfileSwitcher` inline list), `docs/DESIGN.md` |
+| F-OVERLAY | `Features/Overlay/**` (`OverlayContent`, `OverlayLayoutEditor`, `OverlayView`, `OverlayGridViews`), `Features/Settings/SettingsOverlayTab.swift` |
+
+New files (`OverlayGridLayoutTests.swift`, `OverlayGridViews.swift`) are added to `Worklog.xcodeproj` by running `python3 scripts/generate_xcodeproj.py`.
+
+### 13.2 Grid model (`Services/OverlayLayout.swift`)
+
+Six columns across the overlay's content width (276 pt regular, 204 pt compact), gutter `spacingXS`; column step = (width + gutter) / 6. Rows have intrinsic height and every element is one row high. **Row 0 is the header row**: it always exists (possibly empty) and renders next to the dot; body rows are 1…n and empty body rows never persist.
+
+```swift
+extension OverlayElement {
+    var defaultSpan: Int { get }            // label 4, timer 6, segmentFocus 6, controls 2, split 1, todayTotal 2, note 6, takeaway 6
+    var minSpan: Int { get }                // label 2, timer 3, segmentFocus 3, controls 2, split 1, todayTotal 2, note 3, takeaway 3
+    var prefersTrailing: Bool { get }       // true only for .todayTotal
+    var isInlineInLegacyLayout: Bool { get } // label, controls, split, todayTotal (list → grid migration only)
+}
+
+struct OverlayPlacement: Codable, Hashable, Identifiable, Sendable {
+    var element: OverlayElement; var row: Int; var column: Int; var span: Int
+    var id: OverlayElement { element }
+    var columnRange: Range<Int> { get }     // column ..< column + span
+    var endColumn: Int { get }              // column + span
+    init(element: OverlayElement, row: Int, column: Int, span: Int)
+    func overlaps(_ other: OverlayPlacement) -> Bool   // same row, intersecting columns
+}
+
+enum OverlayGridDirection: CaseIterable, Sendable { case left, right, up, down; var title: String { get } } // "Move Left"…
+
+struct OverlayGridRenderRow: Equatable, Identifiable, Sendable { let row: Int; let placements: [OverlayPlacement]; var id: Int { row } }
+struct OverlayGridRenderRows: Equatable, Sendable { let header: OverlayGridRenderRow; let body: [OverlayGridRenderRow] }
+
+struct OverlayGridLayout: Codable, Hashable, Sendable {
+    static let columns = 6, headerRow = 0, currentFormatVersion = 1
+    private(set) var placements: [OverlayPlacement]          // ALWAYS normalized
+    init(placements: [OverlayPlacement])
+    static let empty: OverlayGridLayout
+    static let defaultLayout: OverlayGridLayout              // = migrated(from: OverlayElement.defaultLayout)
+    static func migrated(from list: [OverlayElement]) -> OverlayGridLayout
+
+    var rowCount: Int { get }; var readingOrder: [OverlayElement] { get }
+    var elements: Set<OverlayElement> { get }; var hiddenElements: [OverlayElement] { get }
+    func contains(_:) -> Bool; func placement(of:) -> OverlayPlacement?; func placements(inRow:) -> [OverlayPlacement]
+    func isFree(row: Int, columns: Range<Int>, excluding: OverlayElement? = nil) -> Bool
+    func firstFreeCell(span: Int, preferTrailing: Bool = false) -> (row: Int, column: Int)
+    func maxSpan(for:) -> Int
+
+    func adding(_:) -> Self; func removing(_:) -> Self
+    func moving(_:toRow:column:) -> Self; func displaced(byMoving:toRow:column:) -> Set<OverlayElement>
+    func resizing(_:toSpan:) -> Self; func nudged(_:_:) -> Self
+    func canNudge(_:_:) -> Bool; func canResize(_:by:) -> Bool
+    func renderRows(isVisible: (OverlayElement) -> Bool, headerInline: Bool,
+                    widening: Set<OverlayElement> = []) -> OverlayGridRenderRows
+}
+
+struct OverlayGridGeometry: Equatable {   // pure drag/snap math; all frames in ONE coordinate space ("overlayGrid")
+    var rowFrames: [Int: CGRect]; var gutter: CGFloat
+    func columnStep(row:) -> CGFloat                        // (width + gutter) / 6; 0 for an unknown row
+    func snappedColumn(leadingX:row:span:) -> Int           // round((x − minX) / step), clamped 0...(6 − span)
+    func snappedRow(midY:) -> Int?                          // gap midpoints split rows (a midpoint goes to the lower row)
+    func cellFrame(row:column:span:) -> CGRect?             // x = minX + column·step, width = span·step − gutter
+    func snappedSpan(trailingX:row:column:) -> Int          // round((x − minX + gutter) / step) − column, clamped 1...6
+}
+```
+
+**Normalization** (`init(placements:)`, decoding, migration and every "-ing" edit end with it):
+1. Drop duplicates (first in input order wins).
+2. Clamp `span` to `max(minSpan, min(span, 6))`, `column` to `0...(6 − span)`, `row` to `≥ 0`.
+3. Per source row (ascending), sorted by (column, input index), put each placement in the first "line" where it overlaps nothing, else a new line.
+4. Row 0's first line is the header; its extra lines become the first body rows; other rows' lines follow in order.
+5. Drop empty body lines, renumber (header 0, body 1, 2, …), sort by (row, column).
+
+Equality depends on this: two layouts that look the same are equal. Views never build `[OverlayPlacement]` by hand; they call the model's functions.
+
+**Migration** (`migrated(from:)`, round-3 list → grid): sanitize the list; start in the header row, cursor 0. An inline element wraps to a new row when `cursor + defaultSpan > 6`, then takes `defaultSpan` at the cursor. A full-width element starts a new row when the current row is the header or isn't empty, takes `(row, 0, 6)`, and closes the row. Finally, a row whose last placement is `.todayTotal` moves it to `6 − span`. Postcondition: `readingOrder == sanitized(list)`.
+
+Default grid: `label (0,0,4)`, `timer (1,0,6)`, `segmentFocus (2,0,6)`, `controls (3,0,2)`, `split (3,2,1)`, `note (4,0,6)`, `takeaway (5,0,6)`.
+
+**Edits** (return a new normalized layout, or `self` when the edit doesn't apply):
+- `adding`: at `firstFreeCell(defaultSpan, prefersTrailing)` (first body row with room, top to bottom; else a new row; never the header). No-op if present.
+- `removing`: the row collapses when it becomes empty (the header stays).
+- `moving(e, toRow: r, column: c)`: `r` clamped to `0...rowCount` (`rowCount` = a new trailing row), `c` to `0...(6 − span)`. **Push-down**: the elements of row `r` that overlap the target columns (`displaced(...)`) move together into a new row inserted directly below; later rows shift down. The vacated row collapses.
+- `resizing`: clamped to `[minSpan, maxSpan(for:)]` (the next element to the right). Never pushes.
+- `nudged`:
+  - `.left`/`.right`: one column if that column is free, else swap with the adjacent neighbour (the pair keeps its block; other gaps are kept), else no-op.
+  - `.up`: `moving(e, toRow: row − 1, column: column)`; no-op in the header.
+  - `.down`: `moving(e, toRow: row + 1, column: column)`, **except** when `e` is alone in a body row. That row collapses once `e` leaves, so a plain push-down would put `e` straight back above the next row (a no-op for stacked full-width rows). Instead the elements of the next row that overlap `e` stay where they are (they move up), and `e` plus the rest of that row go below them: full-width rows swap, mirroring `.up`. Alone in the last row: no-op.
+  - `canNudge` / `canResize` = "the edit changes the layout".
+
+**Rendering** (`renderRows`): per row, the visible placements. Each element in `widening` spans from the end of its visible left neighbour (else 0) to the start of its visible right neighbour (else 6); neighbours are processed left to right so two widened elements never overlap. `headerInline` (editing or a session is active) keeps row 0 as `header`; otherwise `header` is empty and row 0's visible items lead `body`. `body` holds only non-empty rows.
+
+**Codable**: `{"columns":6,"formatVersion":1,"placements":[{"column":0,"element":"label","row":0,"span":4},…]}`. Decoding is lenient: unknown elements (and malformed entries) are skipped via a private lossy wrapper, a different `columns` count is rescaled to 6 (`round(value · 6 / stored)`, span ≥ 1), a higher `formatVersion` is accepted, unknown keys are ignored. A missing `placements` key throws. The result is normalized.
+
+### 13.3 `AppSettings`
+
+```swift
+var overlayGrid: OverlayGridLayout { didSet { persistOverlayGrid() } }   // source of truth
+var overlayLayout: [OverlayElement] { get set }   // COMPATIBILITY: get = readingOrder, set = overlayGrid = .migrated(from:)
+func overlayShows(_:) -> Bool                     // overlayGrid.contains
+func resetOverlayLayout()                         // overlayGrid = .defaultLayout
+func resetOverlayDefaults()                       // overlayGrid = .defaultLayout + the appearance defaults (as round 2)
+```
+
+- **Keys:** `settings.overlayGrid` holds the grid as JSON `Data` (`JSONEncoder`, `.sortedKeys`). `settings.overlayLayout` mirrors the reading order as `[String]` raw values, so a round-3 build still shows the same elements in reading order after a downgrade. The legacy `settings.overlayShow…` booleans are never touched.
+- **Loading** (`loadOverlayGrid(_:) -> (grid, migrated)` in `init`):
+  1. `mirror` = the sanitized `settings.overlayLayout` array, or nil.
+  2. The stored grid decodes **and** `mirror` is nil or equals its reading order → use it (`migrated = false`).
+  3. Otherwise, with a mirror (no grid yet, corrupt grid data, or a mirror changed by an older build) → `migrated(from: mirror)`. The user's visible elements are never lost.
+  4. Otherwise the round-1 booleans (§11.2), migrated.
+- **Writing at launch:** a migrated grid is persisted (grid + mirror). A stored grid is **never re-encoded** at launch, so fields added by a newer version survive; only the mirror is refreshed.
+- **Every change** to `overlayGrid` (including through `overlayLayout` and the resets) writes both keys.
+
+### 13.4 `RootView`: inline profile list
+
+- State: `@State isProfileListExpanded` (the sidebar owns it so a click elsewhere in the sidebar can collapse it) and `@State sidebarHeight`.
+- `ProfileSwitcher(isExpanded: $isProfileListExpanded, maxMenuHeight: ProfileSwitcher.menuHeightLimit(sidebarHeight: sidebarHeight))` sits in the bottom `safeAreaInset`, between the mini status row and the footer. The list expands upward inside the inset, so the footer never moves.
+- **Dismiss layer:** while expanded, a clear `.overlay` on the `List` collapses the list on a click (and swallows it, like a menu). It is applied **before** `.safeAreaInset`, so it never covers the switcher, the mini status row or the footer. Clicks in the detail pane don't collapse the list.
+- **Sidebar height:** a `.background { GeometryReader }` (measurement only, never affects layout) feeds `sidebarHeight` through `onAppear`/`onChange(of: proxy.size.height)`. `onGeometryChange` needs macOS 15. The limit `min(360, max(120, h · 0.5))` keeps the inset bounded by the measured sidebar, never by data, so the window's 900×600 minimum can't grow.
+- **Collapse** (`collapseProfileList()`: no-op when collapsed; `.easeOut(0.18)`, none under Reduce Motion) on: the mini status row, the account button and the gear (before their action), any `router.selection` change, and any `auth.needsWelcome` change.
+
+### 13.5 Pitfalls
+
+- macOS 14: no `onGeometryChange`/`onScrollGeometryChange`, no `@Entry`.
+- Keep the dismiss layer before `safeAreaInset`, and the sidebar `GeometryReader` in a background.
+- Never build placements in views; `placements` is `private(set)` and every path normalizes.
+- Don't re-encode the stored grid at launch unless it was migrated; always write the mirror; never touch the legacy keys.
+- Drag math (`OverlayGridGeometry`), row frames and the drag gesture must share the `"overlayGrid"` coordinate space.
+- Run `python3 scripts/generate_xcodeproj.py` after adding files.
+
+### 13.6 Tests
+
+- `OverlayGridLayoutTests` (pure model): default grid, migration (reading order, wrapping, today's total trailing, duplicates), normalization (clamps, overlap push-down, empty-row collapse), move/push-down/new row/vacated row/header, `displaced`, resize clamps, nudges (free move, swap, up/down incl. the alone-in-row case), `firstFreeCell`, add/remove, Codable (round trip, sorted-keys bytes, unknown elements, rescaling, future version, missing placements, overlapping data), `renderRows` (active, idle demotion and widening), geometry at 276 and 204 pt.
+- `OverlayLayoutTests` (`AppSettings`): the round-2 tests (via the compatibility accessors and the mirror key) plus fresh install, list-only and boolean migration, stored grid winning, older-build mirror, corrupt data, byte-identical launch, empty grid, `overlayLayout` setter, resets and mirror updates.

@@ -368,12 +368,11 @@ enum ProfileOpResult: Equatable {
 
     private static let homeCache = HomeProfileCache()
 
+    /// Saves; on failure rolls back and tells the user (`SafeSave`, L5).
     private static func save(_ context: ModelContext) {
         invalidateHomeProfileCache()
-        do {
-            try context.save()
-        } catch {
-            Log.persistence.error("ProfileOps save failed: \(error.localizedDescription, privacy: .public)")
+        if !SafeSave.save(context, source: "ProfileOps") {
+            invalidateHomeProfileCache()
         }
     }
 }

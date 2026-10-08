@@ -545,11 +545,8 @@ enum TaxonomyScopeImpact: Equatable {
         return result
     }
 
+    /// Saves; on failure rolls back and tells the user (`SafeSave`, L5).
     private static func save(_ context: ModelContext) {
-        do {
-            try context.save()
-        } catch {
-            Log.persistence.error("TaxonomyOps save failed: \(error.localizedDescription, privacy: .public)")
-        }
+        SafeSave.save(context, source: "TaxonomyOps")
     }
 }

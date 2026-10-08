@@ -358,12 +358,9 @@ enum SessionEditError: LocalizedError {
         save(context)
     }
 
+    /// Saves; on failure rolls back and tells the user (`SafeSave`, L5).
     private static func save(_ context: ModelContext) {
-        do {
-            try context.save()
-        } catch {
-            Log.persistence.error("SessionEditor save failed: \(error.localizedDescription, privacy: .public)")
-        }
+        SafeSave.save(context, source: "SessionEditor")
     }
 
     /// Segments of `session` that aren't pending deletion, sorted by sortIndex/start.

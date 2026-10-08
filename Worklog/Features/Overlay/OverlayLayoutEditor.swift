@@ -1,24 +1,26 @@
 import AppKit
 import SwiftData
 import SwiftUI
-import UniformTypeIdentifiers
 
 /// Settings ▸ Overlay ▸ Layout: a real-size preview of the overlay (current theme, compact setting and opacity)
-/// with an edit mode in the spirit of iPhone Control Center:
-/// - elements wiggle (a dashed outline under Reduce Motion) and carry a (−) badge that removes them
-/// - drag an element onto another to reorder (live, as the drag moves)
-/// - (+) adds an element that isn't shown
-/// - context menu and accessibility actions: Move Up / Move Down / Remove
+/// with an edit mode in the spirit of iPhone Control Center, on the overlay's 6-column grid
+/// (`OverlayGridLayout`):
+/// - elements wiggle (a dashed outline under Reduce Motion) and carry a small top-trailing (−) badge
+/// - drag an element anywhere: a floating copy follows the pointer, a dashed ghost shows the cell it snaps to and
+///   the elements it would push down are dimmed. Dropping on occupied columns pushes those elements into a new
+///   row below; dropping under the last row creates a row; releasing far outside the panel cancels
+/// - drag the trailing-edge handle to resize in column steps (clamped to `minSpan` and the right neighbour)
+/// - (+) adds a hidden element to the first free cell
+/// - keyboard (focused element): arrows move, ⇧← / ⇧→ narrower / wider, ⌫ / ⌦ remove
+/// - context menu and accessibility actions: Move Left / Right / Up / Down, Wider, Narrower, Remove
 ///
-/// Every change writes `settings.overlayLayout` immediately, so the real overlay follows live.
+/// Every change writes `settings.overlayGrid` immediately, so the real overlay follows live.
 /// Preview and edit mode never touch the engine (`OverlayContent` ignores hits outside `.live`).
 @MainActor
 struct OverlayLayoutEditor: View {
     @Environment(AppSettings.self) private var settings
     @Environment(SessionEngine.self) private var engine
-    @Environment(WindowRouter.self) private var router
     @Environment(ProfileStore.self) private var profiles
-    @Environment(\.modelContext) private var modelContext
     @Environment(\.theme) private var theme
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     /// The sample's label is the quick start profile's default label (no fetch in `body`).
@@ -26,10 +28,17 @@ struct OverlayLayoutEditor: View {
 
     @State private var isEditing = false
     @State private var previewStatus: OverlayPreviewStatus = .running
-    @State private var dragging: OverlayElement?
-    /// A reference (not view state): its bookkeeping must not re-render the editor on every drag update.
-    @State private var reorderGuard = OverlayReorderGuard()
     @State private var isAddPresented = false
+    /// The drag in progress (move or resize), nil otherwise.
+    @State private var drag: OverlayGridDragState?
+    /// Row frames in the "overlayGrid" space, reported by `OverlayContent` in edit mode.
+    @State private var rowFrames: [Int: CGRect] = [:]
+    /// The preview panel's size (its bounds in the "overlayGrid" space), for the cancel rule.
+    @State private var panelSize: CGSize = .zero
+    @FocusState private var focusedElement: OverlayElement?
+
+    /// A drop whose floating copy's centre is further than this outside the panel cancels.
+    private static let cancelDistance: CGFloat = 40
 
     init() {}
 
@@ -37,10 +46,11 @@ struct OverlayLayoutEditor: View {
         VStack(alignment: .leading, spacing: theme.spacingM) {
             headerRow
             stage
+            if isEditing {
+                SettingsFootnote("Drag to move; drag the right edge to resize.")
+            }
         }
         .onDisappear(perform: endEditing)
-        // Every drag (and its end) starts the reorder debounce clean.
-        .onChange(of: dragging) { _, _ in reorderGuard.reset() }
     }
 
     // MARK: Header
@@ -61,16 +71,17 @@ struct OverlayLayoutEditor: View {
             Spacer(minLength: 0)
             if isEditing {
                 Button("Reset Layout") {
+                    drag = nil
                     withAnimation(editAnimation) { settings.resetOverlayLayout() }
                 }
                 .buttonStyle(QuietButtonStyle())
-                .disabled(settings.overlayLayout == OverlayElement.defaultLayout)
+                .disabled(settings.overlayGrid == OverlayGridLayout.defaultLayout)
 
                 Button("Done", action: endEditing)
                     .buttonStyle(PrimaryButtonStyle())
             } else {
                 Button("Edit") {
-                    dragging = nil
+                    drag = nil
                     isEditing = true
                 }
                 .buttonStyle(QuietButtonStyle())
@@ -81,22 +92,53 @@ struct OverlayLayoutEditor: View {
 
     // MARK: Stage
 
+    private var geometry: OverlayGridGeometry {
+        OverlayGridGeometry(rowFrames: rowFrames, gutter: theme.spacingXS)
+    }
+
     private var stage: some View {
         let data = previewData
-        let layout = settings.overlayLayout
+        let grid = settings.overlayGrid
         let isCompact = settings.overlayCompact
+        let order = grid.readingOrder
+        let preview = dragPreview(grid: grid, geometry: geometry)
+        let editingOptions = OverlayEditingOptions(
+            trailingDropRowHeight: drag?.mode == .move ? drag?.start.height : nil,
+            reportsFrames: isEditing
+        )
 
         return VStack(spacing: theme.spacingL) {
             OverlayContent(
-                layout: layout,
+                grid: grid,
                 data: data,
                 isCompact: isCompact,
                 mode: isEditing ? .editing : .preview,
-                panelOpacity: settings.overlayOpacity
-            ) { element, index, view in
-                editableElement(element, index: index, view: view, count: layout.count,
-                                data: data, isCompact: isCompact)
+                panelOpacity: settings.overlayOpacity,
+                editing: editingOptions
+            ) { placement, view in
+                editableElement(placement, view: view, grid: grid,
+                                seed: order.firstIndex(of: placement.element) ?? 0,
+                                isDimmed: preview?.displaced.contains(placement.element) ?? false)
             }
+            .background {
+                if isEditing {
+                    GeometryReader { proxy in
+                        Color.clear
+                            .onAppear { panelSize = proxy.size }
+                            .onChange(of: proxy.size) { _, size in panelSize = size }
+                    }
+                }
+            }
+            .coordinateSpace(name: OverlayGridSpace.name)
+            .overlay(alignment: .topLeading) {
+                dragLayer(preview, data: data, isCompact: isCompact)
+            }
+            .onPreferenceChange(OverlayGridRowFramesKey.self) { frames in
+                MainActor.assumeIsolated {
+                    if rowFrames != frames { rowFrames = frames }
+                }
+            }
+            .allowsHitTesting(isEditing)
             .accessibilityElement(children: .contain)
             .accessibilityLabel("Overlay preview")
 
@@ -109,25 +151,29 @@ struct OverlayLayoutEditor: View {
         .background(RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous).fill(theme.insetSurface))
         .overlay(RoundedRectangle(cornerRadius: theme.radiusM, style: .continuous)
             .strokeBorder(theme.separator, lineWidth: 1))
-        // A drop anywhere else on the stage just ends the drag.
-        .onDrop(of: [.plainText], delegate: OverlayStageDropDelegate(dragging: $dragging))
     }
 
-    private func editableElement(_ element: OverlayElement, index: Int, view: OverlayElementView, count: Int,
-                                 data: OverlayDisplayData, isCompact: Bool) -> some View {
-        OverlayEditableElement(
-            element: element,
+    private func editableElement(_ placement: OverlayPlacement, view: OverlayElementView, grid: OverlayGridLayout,
+                                 seed: Int, isDimmed: Bool) -> some View {
+        let element = placement.element
+        let isDragged = drag?.element == element
+        return OverlayEditableElement(
+            placement: placement,
             content: view,
-            seed: index,
+            seed: seed,
             isEditing: isEditing,
-            canMoveUp: index > 0,
-            canMoveDown: index < count - 1,
-            dragging: $dragging,
-            reorderGuard: reorderGuard,
-            dragPreview: dragPreview(element, data: data, isCompact: isCompact),
-            onMove: { move($0, to: $1) },
-            onStep: { step($0, by: $1) },
-            onRemove: { remove($0) }
+            isDragged: isDragged,
+            isDimmed: isDimmed && !isDragged,
+            directions: OverlayGridDirection.allCases.filter { grid.canNudge(element, $0) },
+            canWiden: grid.canResize(element, by: 1),
+            canNarrow: grid.canResize(element, by: -1),
+            focus: $focusedElement,
+            onNudge: { nudge(element, $0) },
+            onResize: { resize(element, by: $0) },
+            onRemove: { remove(element) },
+            dragDidChange: { dragChanged(element, mode: $0, translation: $1) },
+            dragDidEnd: { dragEnded(element, mode: $0, translation: $1) },
+            dragWasCancelled: { dragCancelled(element, mode: $0) }
         )
     }
 
@@ -142,31 +188,155 @@ struct OverlayLayoutEditor: View {
                        profileName: fields.name, profileColorHex: fields.colorHex)
     }
 
-    /// The element as it looks on the panel, unrotated, for the drag image. Environment passed explicitly in
-    /// case the preview is rendered outside this hierarchy.
-    private func dragPreview(_ element: OverlayElement, data: OverlayDisplayData, isCompact: Bool) -> some View {
-        let isInline = OverlayBlockPlan.isInline(element, isCompact: isCompact, isIdle: false)
-        let width: CGFloat = isCompact ? 220 - 2 * theme.spacingS : 300 - 2 * theme.spacingM
-        return OverlayElementView(element: element, data: data, isCompact: isCompact, mode: .editing)
-            .frame(width: isInline ? nil : width, alignment: .leading)
-            .fixedSize(horizontal: isInline, vertical: true)
-            .padding(theme.spacingS)
-            .themedPanelBackground(cornerRadius: theme.radiusM)
-            .environment(\.theme, theme)
-            .environment(engine)
-            .environment(router)
-            .environment(profiles)
-            .environment(\.modelContext, modelContext)
+    // MARK: Drag layer (never animated, never hit)
+
+    /// The snap ghost (accent dashed outline + faint fill) and, while moving, the floating copy that follows the
+    /// pointer (unrotated, no shadow). Drawn over the panel in the same coordinate space as the row frames.
+    @ViewBuilder
+    private func dragLayer(_ preview: OverlayGridDragPreview?, data: OverlayDisplayData, isCompact: Bool) -> some View {
+        if let preview {
+            ZStack(alignment: .topLeading) {
+                if let ghost = preview.ghost {
+                    RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
+                        .fill(theme.accent.opacity(0.08))
+                        .overlay(RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
+                            .strokeBorder(theme.accent, style: StrokeStyle(lineWidth: 1, dash: [4, 3])))
+                        .frame(width: max(0, ghost.width), height: max(0, ghost.height))
+                        .offset(x: ghost.minX, y: ghost.minY)
+                }
+                if let floating = preview.floating {
+                    let placement = preview.placement
+                    OverlayElementView(element: placement.element, data: data, isCompact: isCompact,
+                                       mode: .editing,
+                                       alignment: placement.element.overlayCellAlignment(
+                                           column: placement.column, span: placement.span,
+                                           isActive: data.isActive))
+                        .frame(width: max(0, floating.width), height: max(0, floating.height))
+                        .background(RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
+                            .fill(theme.elevatedSurface))
+                        .overlay(RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
+                            .strokeBorder(theme.accent, lineWidth: 1))
+                        .opacity(0.9)
+                        .offset(x: floating.minX, y: floating.minY)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .allowsHitTesting(false)
+            .accessibilityHidden(true)
+            .transaction { $0.animation = nil }
+        }
+    }
+
+    /// What the drag layer draws for the current drag (nil when there is none).
+    private func dragPreview(grid: OverlayGridLayout, geometry: OverlayGridGeometry) -> OverlayGridDragPreview? {
+        guard let drag, let placement = grid.placement(of: drag.element) else { return nil }
+        switch drag.mode {
+        case .move:
+            let floating = drag.currentFrame
+            guard !isFarOutside(floating), let target = moveTarget(drag, geometry: geometry) else {
+                // Released here, the drop cancels: no ghost, nothing pushed.
+                return OverlayGridDragPreview(placement: placement, ghost: nil, floating: floating, displaced: [])
+            }
+            return OverlayGridDragPreview(
+                placement: placement,
+                ghost: geometry.cellFrame(row: target.row, column: target.column, span: placement.span),
+                floating: floating,
+                displaced: grid.displaced(byMoving: drag.element, toRow: target.row, column: target.column)
+            )
+        case .resize:
+            let span = resizedGrid(drag, placement: placement, grid: grid, geometry: geometry)
+                .placement(of: drag.element)?.span ?? placement.span
+            return OverlayGridDragPreview(
+                placement: placement,
+                ghost: geometry.cellFrame(row: placement.row, column: placement.column, span: span),
+                floating: nil,
+                displaced: []
+            )
+        }
+    }
+
+    /// The cell under the floating copy: its vertical centre picks the row, its leading edge the column.
+    private func moveTarget(_ drag: OverlayGridDragState, geometry: OverlayGridGeometry) -> (row: Int, column: Int)? {
+        let frame = drag.currentFrame
+        guard let row = geometry.snappedRow(midY: frame.midY) else { return nil }
+        let column = geometry.snappedColumn(leadingX: frame.minX, row: row, span: drag.span)
+        return (row, column)
+    }
+
+    /// The grid with `drag`'s element resized to the span under its dragged trailing edge (clamped by the model).
+    private func resizedGrid(_ drag: OverlayGridDragState, placement: OverlayPlacement, grid: OverlayGridLayout,
+                             geometry: OverlayGridGeometry) -> OverlayGridLayout {
+        let span = geometry.snappedSpan(trailingX: drag.start.maxX + drag.translation.width,
+                                        row: placement.row, column: placement.column)
+        return grid.resizing(drag.element, toSpan: span)
+    }
+
+    /// The floating copy's centre is more than `cancelDistance` outside the panel.
+    private func isFarOutside(_ frame: CGRect) -> Bool {
+        guard panelSize.width > 0, panelSize.height > 0 else { return false }
+        let limit = CGRect(origin: .zero, size: panelSize)
+            .insetBy(dx: -Self.cancelDistance, dy: -Self.cancelDistance)
+        return !limit.contains(CGPoint(x: frame.midX, y: frame.midY))
+    }
+
+    // MARK: Drag handling
+
+    private func dragChanged(_ element: OverlayElement, mode: OverlayGridDragMode, translation: CGSize) {
+        guard isEditing else { return }
+        if var current = drag, current.element == element, current.mode == mode {
+            current.translation = translation
+            drag = current
+        } else {
+            drag = startedDrag(element, mode: mode, translation: translation)
+        }
+        if mode == .resize {
+            // The pointer leaves the handle while dragging; keep the resize cursor.
+            NSCursor.resizeLeftRight.set()
+        }
+    }
+
+    private func dragEnded(_ element: OverlayElement, mode: OverlayGridDragMode, translation: CGSize) {
+        var state = drag
+        if state?.element != element || state?.mode != mode {
+            state = startedDrag(element, mode: mode, translation: translation)
+        }
+        state?.translation = translation
+        drag = nil
+        guard isEditing, let state else { return }
+
+        let grid = settings.overlayGrid
+        switch mode {
+        case .move:
+            guard !isFarOutside(state.currentFrame),
+                  let target = moveTarget(state, geometry: geometry) else { return }   // cancelled: snaps back
+            apply(grid.moving(element, toRow: target.row, column: target.column))
+        case .resize:
+            guard let placement = grid.placement(of: element) else { return }
+            apply(resizedGrid(state, placement: placement, grid: grid, geometry: geometry))
+        }
+    }
+
+    /// The gesture ended without `onEnded` (e.g. the view went away): just forget the drag.
+    private func dragCancelled(_ element: OverlayElement, mode: OverlayGridDragMode) {
+        if drag?.element == element, drag?.mode == mode {
+            drag = nil
+        }
+    }
+
+    /// The element's cell frame at the start of a drag (from the reported row frames).
+    private func startedDrag(_ element: OverlayElement, mode: OverlayGridDragMode,
+                             translation: CGSize) -> OverlayGridDragState? {
+        guard let placement = settings.overlayGrid.placement(of: element),
+              let frame = geometry.cellFrame(row: placement.row, column: placement.column, span: placement.span)
+        else { return nil }
+        return OverlayGridDragState(element: element, mode: mode, start: frame, span: placement.span,
+                                    translation: translation)
     }
 
     // MARK: Add
 
-    private var hiddenElements: [OverlayElement] {
-        OverlayElement.allCases.filter { !settings.overlayLayout.contains($0) }
-    }
-
     private var addButton: some View {
-        let allShown = hiddenElements.isEmpty
+        let allShown = settings.overlayGrid.hiddenElements.isEmpty
         return AddBadgeButton(accessibilityLabel: "Add element") {
             isAddPresented = true
         }
@@ -180,7 +350,7 @@ struct OverlayLayoutEditor: View {
 
     private var addList: some View {
         VStack(alignment: .leading, spacing: 2) {
-            ForEach(hiddenElements) { element in
+            ForEach(settings.overlayGrid.hiddenElements) { element in
                 Button {
                     add(element)
                 } label: {
@@ -205,47 +375,50 @@ struct OverlayLayoutEditor: View {
         .frame(width: 220)
     }
 
-    // MARK: Changes (each writes settings.overlayLayout, so the real overlay follows)
+    // MARK: Changes (each writes settings.overlayGrid, so the real overlay follows)
 
     private var editAnimation: Animation? {
         reduceMotion ? nil : .easeOut(duration: 0.15)
     }
 
+    private func apply(_ grid: OverlayGridLayout) {
+        guard grid != settings.overlayGrid else { return }
+        withAnimation(editAnimation) { settings.overlayGrid = grid }
+    }
+
     private func add(_ element: OverlayElement) {
-        guard !settings.overlayLayout.contains(element) else { return }
-        withAnimation(editAnimation) { settings.overlayLayout.append(element) }
-        if hiddenElements.isEmpty { isAddPresented = false }
+        apply(settings.overlayGrid.adding(element))
+        if settings.overlayGrid.hiddenElements.isEmpty { isAddPresented = false }
     }
 
     private func remove(_ element: OverlayElement) {
-        if dragging == element { dragging = nil }
-        withAnimation(editAnimation) { settings.overlayLayout.removeAll { $0 == element } }
+        if drag?.element == element { drag = nil }
+        apply(settings.overlayGrid.removing(element))
     }
 
-    /// Moves `element` to `target`'s position (after it when moving down, before it when moving up).
-    private func move(_ element: OverlayElement, to target: OverlayElement) {
-        var layout = settings.overlayLayout
-        guard element != target,
-              let from = layout.firstIndex(of: element),
-              let to = layout.firstIndex(of: target) else { return }
-        layout.move(fromOffsets: IndexSet(integer: from), toOffset: to > from ? to + 1 : to)
-        withAnimation(editAnimation) { settings.overlayLayout = layout }
+    private func nudge(_ element: OverlayElement, _ direction: OverlayGridDirection) {
+        apply(settings.overlayGrid.nudged(element, direction))
+        keepFocus(on: element)
     }
 
-    /// Move Up (-1) / Move Down (+1).
-    private func step(_ element: OverlayElement, by offset: Int) {
-        var layout = settings.overlayLayout
-        guard let from = layout.firstIndex(of: element) else { return }
-        let to = from + offset
-        guard layout.indices.contains(to) else { return }
-        layout.swapAt(from, to)
-        withAnimation(editAnimation) { settings.overlayLayout = layout }
+    /// Wider (+1) / Narrower (−1).
+    private func resize(_ element: OverlayElement, by delta: Int) {
+        guard let placement = settings.overlayGrid.placement(of: element) else { return }
+        apply(settings.overlayGrid.resizing(element, toSpan: placement.span + delta))
+        keepFocus(on: element)
+    }
+
+    /// A move to another row rebuilds the element's view; give keyboard focus back once it exists.
+    private func keepFocus(on element: OverlayElement) {
+        guard focusedElement == element else { return }
+        Task { @MainActor in focusedElement = element }
     }
 
     private func endEditing() {
         isEditing = false
-        dragging = nil
+        drag = nil
         isAddPresented = false
+        focusedElement = nil
     }
 }
 
@@ -253,213 +426,208 @@ private enum OverlayPreviewStatus: Hashable {
     case running, idle
 }
 
+// MARK: - Drag state
+
+private enum OverlayGridDragMode: Equatable {
+    case move, resize
+}
+
+/// One drag: the element, its cell frame when the drag started (in the "overlayGrid" space) and the translation.
+private struct OverlayGridDragState: Equatable {
+    let element: OverlayElement
+    let mode: OverlayGridDragMode
+    let start: CGRect
+    let span: Int
+    var translation: CGSize
+
+    /// Where the floating copy is now.
+    var currentFrame: CGRect {
+        start.offsetBy(dx: translation.width, dy: translation.height)
+    }
+}
+
+/// What the drag layer draws.
+private struct OverlayGridDragPreview {
+    /// The dragged element's placement (before the drop).
+    let placement: OverlayPlacement
+    /// The snap target (move) or the clamped resized cell (resize); nil when a release would cancel.
+    let ghost: CGRect?
+    /// The floating copy (move only).
+    let floating: CGRect?
+    /// Elements the drop would push down (dimmed).
+    let displaced: Set<OverlayElement>
+}
+
 // MARK: - Editable element
 
-/// Edit-mode chrome around one element: wiggle, (−) badge, drag source + drop target, context menu and
+/// Edit-mode chrome around one element: wiggle, (−) badge, move drag, resize handle, keyboard, context menu and
 /// accessibility actions. Outside edit mode it is inert (the element ignores hits and there is no hit area).
 @MainActor
-private struct OverlayEditableElement<DragPreview: View>: View {
-    private let element: OverlayElement
+private struct OverlayEditableElement: View {
+    @Environment(\.theme) private var theme
+
+    private let placement: OverlayPlacement
     private let content: OverlayElementView
     private let seed: Int
     private let isEditing: Bool
-    private let canMoveUp: Bool
-    private let canMoveDown: Bool
-    @Binding private var dragging: OverlayElement?
-    private let reorderGuard: OverlayReorderGuard
-    private let dragPreview: DragPreview
-    private let onMove: (OverlayElement, OverlayElement) -> Void
-    private let onStep: (OverlayElement, Int) -> Void
-    private let onRemove: (OverlayElement) -> Void
+    private let isDragged: Bool
+    private let isDimmed: Bool
+    private let directions: [OverlayGridDirection]
+    private let canWiden: Bool
+    private let canNarrow: Bool
+    private let focus: FocusState<OverlayElement?>.Binding
+    private let onNudge: (OverlayGridDirection) -> Void
+    private let onResize: (Int) -> Void
+    private let onRemove: () -> Void
+    private let dragDidChange: (OverlayGridDragMode, CGSize) -> Void
+    private let dragDidEnd: (OverlayGridDragMode, CGSize) -> Void
+    private let dragWasCancelled: (OverlayGridDragMode) -> Void
 
-    init(element: OverlayElement, content: OverlayElementView, seed: Int, isEditing: Bool,
-         canMoveUp: Bool, canMoveDown: Bool, dragging: Binding<OverlayElement?>,
-         reorderGuard: OverlayReorderGuard, dragPreview: DragPreview,
-         onMove: @escaping (OverlayElement, OverlayElement) -> Void,
-         onStep: @escaping (OverlayElement, Int) -> Void,
-         onRemove: @escaping (OverlayElement) -> Void) {
-        self.element = element
+    @GestureState private var isMoving = false
+    @GestureState private var isResizing = false
+
+    init(placement: OverlayPlacement, content: OverlayElementView, seed: Int, isEditing: Bool, isDragged: Bool,
+         isDimmed: Bool, directions: [OverlayGridDirection], canWiden: Bool, canNarrow: Bool,
+         focus: FocusState<OverlayElement?>.Binding,
+         onNudge: @escaping (OverlayGridDirection) -> Void,
+         onResize: @escaping (Int) -> Void,
+         onRemove: @escaping () -> Void,
+         dragDidChange: @escaping (OverlayGridDragMode, CGSize) -> Void,
+         dragDidEnd: @escaping (OverlayGridDragMode, CGSize) -> Void,
+         dragWasCancelled: @escaping (OverlayGridDragMode) -> Void) {
+        self.placement = placement
         self.content = content
         self.seed = seed
         self.isEditing = isEditing
-        self.canMoveUp = canMoveUp
-        self.canMoveDown = canMoveDown
-        self._dragging = dragging
-        self.reorderGuard = reorderGuard
-        self.dragPreview = dragPreview
-        self.onMove = onMove
-        self.onStep = onStep
+        self.isDragged = isDragged
+        self.isDimmed = isDimmed
+        self.directions = directions
+        self.canWiden = canWiden
+        self.canNarrow = canNarrow
+        self.focus = focus
+        self.onNudge = onNudge
+        self.onResize = onResize
         self.onRemove = onRemove
+        self.dragDidChange = dragDidChange
+        self.dragDidEnd = dragDidEnd
+        self.dragWasCancelled = dragWasCancelled
     }
+
+    private var element: OverlayElement { placement.element }
+    private var isFocused: Bool { focus.wrappedValue == element }
 
     var body: some View {
         content
             .accessibilityElement(children: .ignore)
             .accessibilityLabel(element.title)
+            .accessibilityValue(OverlayGridCopy.position(placement))
             .accessibilityActions {
                 if isEditing {
-                    if canMoveUp {
-                        Button("Move Up") { onStep(element, -1) }
+                    ForEach(directions, id: \.self) { direction in
+                        Button(direction.title) { onNudge(direction) }
                     }
-                    if canMoveDown {
-                        Button("Move Down") { onStep(element, 1) }
+                    if canWiden {
+                        Button("Wider") { onResize(1) }
                     }
-                    Button("Remove") { onRemove(element) }
+                    if canNarrow {
+                        Button("Narrower") { onResize(-1) }
+                    }
+                    Button("Remove", action: onRemove)
                 }
             }
-            // The element itself ignores hits; this transparent layer is what the drag, the context menu and
-            // the drop target hit in edit mode.
+            // The element itself ignores hits; this transparent layer is what the drag and the context menu hit
+            // in edit mode. The focus ring wiggles with the element.
             .overlay {
                 if isEditing {
                     Color.clear
                         .contentShape(Rectangle())
                         .accessibilityHidden(true)
+                    if isFocused {
+                        RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
+                            .strokeBorder(theme.accent, lineWidth: 2)
+                            .padding(-3)
+                            .allowsHitTesting(false)
+                            .accessibilityHidden(true)
+                    }
                 }
             }
-            .wiggle(isEditing, seed: seed)
-            .overlay(alignment: .topLeading) {
+            .wiggle(isEditing && !isDragged, seed: seed)
+            .opacity(isDragged ? 0.35 : (isDimmed ? 0.5 : 1))
+            .contentShape(Rectangle())
+            .gesture(moveGesture, including: isEditing ? .all : .none)
+            .editRemoveBadge(isEditing, accessibilityLabel: "Remove \(element.title)", action: onRemove)
+            .overlay(alignment: .trailing) {
                 if isEditing {
-                    RemoveBadgeButton(accessibilityLabel: "Remove \(element.title)") { onRemove(element) }
-                        .offset(x: -6, y: -6)
+                    EditResizeHandle()
+                        .offset(x: EditResizeHandle.edgeOffset)
+                        .gesture(resizeGesture)
                 }
             }
-            .onDrag {
-                // A drop outside the window gives no callback: every new drag starts clean.
-                dragging = element
-                return NSItemProvider(object: element.rawValue as NSString)
-            } preview: {
-                dragPreview
+            .focusable(isEditing)
+            .focusEffectDisabled()
+            .focused(focus, equals: element)
+            .onKeyPress(keys: [.leftArrow, .rightArrow, .upArrow, .downArrow, .delete, .deleteForward]) { press in
+                handleKey(press)
             }
-            .onDrop(of: [.plainText],
-                    delegate: OverlayReorderDropDelegate(target: element, dragging: $dragging,
-                                                         reorderGuard: reorderGuard, move: onMove))
             .contextMenu {
                 if isEditing {
-                    Button("Move Up") { onStep(element, -1) }
-                        .disabled(!canMoveUp)
-                    Button("Move Down") { onStep(element, 1) }
-                        .disabled(!canMoveDown)
+                    ForEach(OverlayGridDirection.allCases, id: \.self) { direction in
+                        Button(direction.title) { onNudge(direction) }
+                            .disabled(!directions.contains(direction))
+                    }
                     Divider()
-                    Button("Remove", role: .destructive) { onRemove(element) }
+                    Button("Wider") { onResize(1) }
+                        .disabled(!canWiden)
+                    Button("Narrower") { onResize(-1) }
+                        .disabled(!canNarrow)
+                    Divider()
+                    Button("Remove", role: .destructive, action: onRemove)
                 }
             }
-    }
-}
-
-/// Debounces live reorder. A move reflows the preview (an element can switch between inline and full width),
-/// which can put the pointer over another element, or back over the same one, and move it again (jitter).
-/// - Right after a move, entering the same target again is ignored.
-/// - Entering a different target during the cooldown is remembered and done on a later `dropUpdated` there,
-///   so a fast drag still lands where the pointer rests.
-private final class OverlayReorderGuard {
-    private static let cooldown: TimeInterval = 0.3
-
-    private var lastDragging: OverlayElement?
-    private var lastTarget: OverlayElement?
-    private var lastMoveAt: Date = .distantPast
-    private var pendingTarget: OverlayElement?
-
-    func reset() {
-        lastDragging = nil
-        lastTarget = nil
-        lastMoveAt = .distantPast
-        pendingTarget = nil
+            .onChange(of: isMoving) { _, active in
+                if !active { dragWasCancelled(.move) }
+            }
+            .onChange(of: isResizing) { _, active in
+                if !active { dragWasCancelled(.resize) }
+            }
     }
 
-    /// The pointer entered `target`: whether to move `dragging` there now.
-    func shouldMoveOnEnter(_ dragging: OverlayElement, onto target: OverlayElement, now: Date = Date()) -> Bool {
-        pendingTarget = nil
-        guard now.timeIntervalSince(lastMoveAt) < Self.cooldown else {
-            record(dragging, target, now)
-            return true
+    // MARK: Gestures (in the "overlayGrid" space, like the row frames and the drag layer)
+
+    private var moveGesture: some Gesture {
+        DragGesture(minimumDistance: 2, coordinateSpace: OverlayGridSpace.coordinateSpace)
+            .updating($isMoving) { _, state, _ in state = true }
+            .onChanged { value in dragDidChange(.move, value.translation) }
+            .onEnded { value in dragDidEnd(.move, value.translation) }
+    }
+
+    private var resizeGesture: some Gesture {
+        DragGesture(minimumDistance: 1, coordinateSpace: OverlayGridSpace.coordinateSpace)
+            .updating($isResizing) { _, state, _ in state = true }
+            .onChanged { value in dragDidChange(.resize, value.translation) }
+            .onEnded { value in dragDidEnd(.resize, value.translation) }
+    }
+
+    // MARK: Keyboard
+
+    /// ←/→/↑/↓ move, ⇧← narrower, ⇧→ wider, ⌫/⌦ remove.
+    private func handleKey(_ press: KeyPress) -> KeyPress.Result {
+        guard isEditing else { return .ignored }
+        let shift = press.modifiers.contains(.shift)
+        let key = press.key
+        if key == .leftArrow {
+            if shift { onResize(-1) } else { onNudge(.left) }
+        } else if key == .rightArrow {
+            if shift { onResize(1) } else { onNudge(.right) }
+        } else if key == .upArrow {
+            onNudge(.up)
+        } else if key == .downArrow {
+            onNudge(.down)
+        } else if key == .delete || key == .deleteForward {
+            onRemove()
+        } else {
+            return .ignored
         }
-        if lastDragging != dragging || lastTarget != target {
-            pendingTarget = target
-        }
-        return false
-    }
-
-    /// The pointer is still over `target`: whether a move deferred by the cooldown is due now.
-    func shouldMoveOnUpdate(_ dragging: OverlayElement, onto target: OverlayElement, now: Date = Date()) -> Bool {
-        guard pendingTarget == target, now.timeIntervalSince(lastMoveAt) >= Self.cooldown else { return false }
-        pendingTarget = nil
-        record(dragging, target, now)
-        return true
-    }
-
-    func exited(_ target: OverlayElement) {
-        if pendingTarget == target { pendingTarget = nil }
-    }
-
-    private func record(_ dragging: OverlayElement, _ target: OverlayElement, _ now: Date) {
-        lastDragging = dragging
-        lastTarget = target
-        lastMoveAt = now
-    }
-}
-
-/// Live reorder: entering another element moves the dragged one to its position (debounced by
-/// `OverlayReorderGuard`).
-private struct OverlayReorderDropDelegate: DropDelegate {
-    private let target: OverlayElement
-    @Binding private var dragging: OverlayElement?
-    private let reorderGuard: OverlayReorderGuard
-    private let move: (OverlayElement, OverlayElement) -> Void
-
-    init(target: OverlayElement, dragging: Binding<OverlayElement?>, reorderGuard: OverlayReorderGuard,
-         move: @escaping (OverlayElement, OverlayElement) -> Void) {
-        self.target = target
-        self._dragging = dragging
-        self.reorderGuard = reorderGuard
-        self.move = move
-    }
-
-    func validateDrop(info: DropInfo) -> Bool {
-        dragging != nil
-    }
-
-    func dropEntered(info: DropInfo) {
-        guard let dragging, dragging != target else { return }
-        if reorderGuard.shouldMoveOnEnter(dragging, onto: target) {
-            move(dragging, target)
-        }
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        if let dragging, dragging != target, reorderGuard.shouldMoveOnUpdate(dragging, onto: target) {
-            move(dragging, target)
-        }
-        return DropProposal(operation: .move)
-    }
-
-    func dropExited(info: DropInfo) {
-        reorderGuard.exited(target)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        dragging = nil
-        return true
-    }
-}
-
-/// The stage around the preview: a drop there ends the drag (only drags that started in the editor count).
-private struct OverlayStageDropDelegate: DropDelegate {
-    @Binding private var dragging: OverlayElement?
-
-    init(dragging: Binding<OverlayElement?>) {
-        self._dragging = dragging
-    }
-
-    func validateDrop(info: DropInfo) -> Bool {
-        dragging != nil
-    }
-
-    func dropUpdated(info: DropInfo) -> DropProposal? {
-        DropProposal(operation: .move)
-    }
-
-    func performDrop(info: DropInfo) -> Bool {
-        dragging = nil
-        return true
+        return .handled
     }
 }

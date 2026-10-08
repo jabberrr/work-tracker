@@ -238,6 +238,7 @@ private struct SettingsLabelEditor: View {
     @Environment(\.modelContext) private var context
     @Environment(AppSettings.self) private var settings
     @Environment(ProfileStore.self) private var profileStore
+    @Environment(BackupService.self) private var backups
     @Environment(\.theme) private var theme
     @Bindable var label: WorkLabel
     /// Every live label (all profiles); merge/delete targets are narrowed by `TaxonomyOps.reassignmentTargets`.
@@ -251,6 +252,8 @@ private struct SettingsLabelEditor: View {
     @State private var mergeTarget: WorkLabel?
     /// Set while "Make “X” Work only?" is asked (other profiles use the label).
     @State private var pendingLocalProfileID: UUID?
+    /// The safety backup before a merge or scope change failed (nothing was changed).
+    @State private var safetyError: String?
 
     /// Merge and delete targets that keep every session's labels offered in its profile.
     private var otherLabels: [WorkLabel] {
@@ -373,6 +376,9 @@ private struct SettingsLabelEditor: View {
                 if changesAllProfiles {
                     SettingsFootnote("Changes it in all profiles.")
                 }
+                if let safetyError {
+                    InlineBanner(safetyError, style: .error, onDismiss: { self.safetyError = nil })
+                }
             }
         }
         .formStyle(.grouped)
@@ -409,6 +415,7 @@ private struct SettingsLabelEditor: View {
                     return
                 }
                 mergeTarget = nil
+                guard makeSafetyBackup() else { return }
                 TaxonomyOps.mergeLabel(label, into: target, settings: settings, in: context)
                 onMerged(target)
             }
@@ -424,7 +431,7 @@ private struct SettingsLabelEditor: View {
             Button("Make Local") {
                 let profile = profileStore.profile(withID: pendingLocalProfileID)
                 pendingLocalProfileID = nil
-                guard let profile, ModelLiveness.isLive(label) else { return }
+                guard let profile, ModelLiveness.isLive(label), makeSafetyBackup() else { return }
                 TaxonomyOps.setScope(of: label, to: profile, in: context)
             }
             Button("Cancel", role: .cancel) { pendingLocalProfileID = nil }
@@ -439,13 +446,14 @@ private struct SettingsLabelEditor: View {
         guard ModelLiveness.isLive(label) else { return }
         switch scope {
         case .allProfiles:
-            guard !label.isAvailableEverywhere else { return }
+            guard !label.isAvailableEverywhere, makeSafetyBackup() else { return }
             TaxonomyOps.setScope(of: label, to: nil, in: context)
         case .thisProfile:
             guard label.isAvailableEverywhere, let profile = currentProfile else { return }
             if case .copiesForOtherProfiles = TaxonomyOps.scopeChangeImpact(of: label, to: profile) {
                 pendingLocalProfileID = profile.uuid
             } else {
+                guard makeSafetyBackup() else { return }
                 TaxonomyOps.setScope(of: label, to: profile, in: context)
             }
         }
@@ -488,11 +496,13 @@ private struct SettingsLabelEditor: View {
     }
 
     private func save() {
-        do {
-            try context.save()
-        } catch {
-            Log.persistence.error("Saving label failed: \(error.localizedDescription, privacy: .public)")
-        }
+        SafeSave.save(context, source: "Label editor")
+    }
+
+    /// L1: a before-change backup first; false (and an error shown) when it failed.
+    private func makeSafetyBackup() -> Bool {
+        safetyError = backups.backupBeforeChange()
+        return safetyError == nil
     }
 }
 
@@ -503,6 +513,7 @@ private struct SettingsLabelEditor: View {
 private struct SettingsDeleteLabelSheet: View {
     @Environment(\.modelContext) private var context
     @Environment(AppSettings.self) private var settings
+    @Environment(BackupService.self) private var backups
     @Environment(\.theme) private var theme
     @Environment(\.dismiss) private var dismiss
     let label: WorkLabel
@@ -514,6 +525,8 @@ private struct SettingsDeleteLabelSheet: View {
     let onDeleted: () -> Void
 
     @State private var targetID: PersistentIdentifier?
+    /// The safety backup failed (nothing was deleted).
+    @State private var errorText: String?
 
     private var sortedCandidates: [WorkLabel] {
         candidates.filter { !$0.isArchived } + candidates.filter { $0.isArchived }
@@ -560,6 +573,10 @@ private struct SettingsDeleteLabelSheet: View {
             if changesAllProfiles {
                 SettingsFootnote("Changes it in all profiles.")
             }
+            SettingsFootnote("A backup is made first.")
+            if let errorText {
+                InlineBanner(errorText, style: .error, onDismiss: { self.errorText = nil })
+            }
 
             HStack(spacing: theme.spacingS) {
                 Button("Cancel", role: .cancel) { dismiss() }
@@ -570,12 +587,16 @@ private struct SettingsDeleteLabelSheet: View {
                     Button("Archive Instead") {
                         label.isArchived = true
                         SettingsDefaultLabels.clear(label, in: context)
-                        try? context.save()
+                        SafeSave.save(context, source: "Archive label")
                         dismiss()
                     }
                     .buttonStyle(QuietButtonStyle())
                 }
                 Button("Delete Label", role: .destructive) {
+                    if let failure = backups.backupBeforeChange() {
+                        errorText = failure
+                        return
+                    }
                     let target = sortedCandidates.first { $0.persistentModelID == targetID }
                     TaxonomyOps.deleteLabel(label, reassignTo: target, settings: settings, in: context)
                     onDeleted()

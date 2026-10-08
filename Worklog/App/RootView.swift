@@ -15,6 +15,7 @@ struct RootView: View {
     @Environment(SyncMonitor.self) private var sync
     @Environment(\.openWindow) private var openWindow
     @Environment(\.theme) private var theme
+    @Environment(\.accessibilityReduceMotion) private var reduceMotion
 
     /// The sync error text the user dismissed (or that timed out); a different error shows again.
     @State private var dismissedSyncError: String?
@@ -22,6 +23,10 @@ struct RootView: View {
     @State private var isEndSheetVisible = false
     /// Briefly holds back the end-of-session sheet while Settings (and any sheet it presented) is closed for it.
     @State private var holdEndSheet = false
+    /// The sidebar's inline profile list (owned here so a click elsewhere in the sidebar can collapse it).
+    @State private var isProfileListExpanded = false
+    /// The sidebar column's measured height (drives the profile list's height limit).
+    @State private var sidebarHeight: CGFloat = 0
 
     var body: some View {
         // Read here (not only inside the Binding) so observation re-renders on pendingEndSession / selection.
@@ -59,7 +64,11 @@ struct RootView: View {
                 holdEndSheet = false
             }
         }
+        .onChange(of: router.selection) { _, _ in
+            collapseProfileList()
+        }
         .onChange(of: auth.needsWelcome) {
+            collapseProfileList()
             // Passing Welcome (signed in / guest) from its Settings starts on Today; signing out from Settings
             // shows Welcome rather than its Settings page.
             if router.selection == .settings {
@@ -160,8 +169,20 @@ struct RootView: View {
             }
         }
         .listStyle(.sidebar)
+        // Dismiss layer while the inline profile list is open: a click anywhere in the List area only collapses it
+        // (like a menu). Applied BEFORE safeAreaInset, so it covers the List region above the inset, never the
+        // switcher, the mini status row or the footer.
+        .overlay {
+            if isProfileListExpanded {
+                Color.clear
+                    .contentShape(Rectangle())
+                    .onTapGesture { collapseProfileList() }
+                    .accessibilityHidden(true)
+            }
+        }
         // Pinned to the bottom of the sidebar column (not a VStack sibling), so it can't be pushed off-screen.
-        // Order: mini status row (while active) → profile switcher (always: it's where profiles are created) → footer.
+        // Order: mini status row (while active) → profile switcher (always: it's where profiles are created; its
+        // inline list grows the inset upward) → footer (never moves).
         .safeAreaInset(edge: .bottom, spacing: 0) {
             VStack(spacing: 0) {
                 if engine.isActive {
@@ -170,7 +191,8 @@ struct RootView: View {
                         .padding(.vertical, theme.spacingS)
                 }
                 Divider()
-                ProfileSwitcher()
+                ProfileSwitcher(isExpanded: $isProfileListExpanded,
+                                maxMenuHeight: ProfileSwitcher.menuHeightLimit(sidebarHeight: sidebarHeight))
                     .padding(.horizontal, theme.spacingS)
                     .padding(.vertical, theme.spacingXS)
                 Divider()
@@ -180,13 +202,32 @@ struct RootView: View {
             }
             .background(theme.color(for: .sidebar))
         }
+        // Measurement only (a background never affects layout): the list's height limit is a fraction of the
+        // measured sidebar, so the inset can't grow the window's minimum size or push the footer off-screen.
+        // onAppear/onChange (not onGeometryChange, which needs macOS 15).
+        .background {
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { sidebarHeight = proxy.size.height }
+                    .onChange(of: proxy.size.height) { _, height in sidebarHeight = height }
+            }
+        }
         .themedBackground(.sidebar)
+    }
+
+    /// Collapses the inline profile list (no animation under Reduce Motion). No-op while collapsed.
+    private func collapseProfileList() {
+        guard isProfileListExpanded else { return }
+        withAnimation(reduceMotion ? nil : .easeOut(duration: 0.18)) {
+            isProfileListExpanded = false
+        }
     }
 
     // MARK: - Mini status row
 
     private var miniStatusRow: some View {
         Button {
+            collapseProfileList()
             router.selection = .today
         } label: {
             HStack(spacing: theme.spacingS) {
@@ -252,6 +293,7 @@ struct RootView: View {
         let isShowingSettings = router.selection == .settings
         return HStack(spacing: theme.spacingS) {
             Button {
+                collapseProfileList()
                 router.showSettings(tab: "account")
             } label: {
                 HStack(spacing: theme.spacingS) {
@@ -274,6 +316,7 @@ struct RootView: View {
             Spacer(minLength: 0)
 
             Button {
+                collapseProfileList()
                 router.selection = .settings
             } label: {
                 if isShowingSettings {

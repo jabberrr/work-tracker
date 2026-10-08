@@ -40,7 +40,21 @@ final class BackupRetentionTests: XCTestCase {
         let doomed = BackupService.filesToPrune(files, keepAutomatic: 3, now: now, calendar: calendar,
                                                 protecting: URL(filePath: "/tmp/backups/restoring.json"))
         let names = Set(doomed.map { $0.url.deletingPathExtension().lastPathComponent })
-        XCTAssertEqual(names, ["a4", "a5", "quit", "d2", "w2", "old", "m20", "m21", "m22", "m23", "m24"])
+        // 13 manual + 12 before-restore backups: each kind keeps its own newest 20, so none of them goes.
+        XCTAssertEqual(names, ["a4", "a5", "quit", "d2", "w2", "old"])
+    }
+
+    /// M8: a burst of one kept kind (e.g. before-change safety copies) never pushes out another kind.
+    func testEachKeptKindHasItsOwnBucket() {
+        var files: [BackupFile] = []
+        for index in 0..<25 {
+            files.append(file("c\(index)", -Double(1 + index) * hour, reason: .beforeChange))
+        }
+        files.append(file("restore", -40 * day, reason: .beforeRestore))
+        files.append(file("manual", -50 * day, reason: .manual))
+        let doomed = BackupService.filesToPrune(files, keepAutomatic: 3, now: now, calendar: calendar, protecting: nil)
+        XCTAssertEqual(Set(doomed.map { $0.url.deletingPathExtension().lastPathComponent }),
+                       ["c20", "c21", "c22", "c23", "c24"])
     }
 
     func testNewestBackupWithSessionsIsNeverPruned() {
@@ -58,7 +72,10 @@ final class BackupRetentionTests: XCTestCase {
         XCTAssertTrue(BackupService.shouldPinPrevious(previousCount: 40, newCount: 10))
         XCTAssertTrue(BackupService.shouldPinPrevious(previousCount: 3, newCount: 0))
         XCTAssertFalse(BackupService.shouldPinPrevious(previousCount: 40, newCount: 20))
-        XCTAssertFalse(BackupService.shouldPinPrevious(previousCount: 8, newCount: 2), "small stores don't trigger")
+        XCTAssertTrue(BackupService.shouldPinPrevious(previousCount: 8, newCount: 2), "small stores count too (M4)")
+        XCTAssertTrue(BackupService.shouldPinPrevious(previousCount: 1, newCount: 0))
+        XCTAssertFalse(BackupService.shouldPinPrevious(previousCount: 3, newCount: 2))
+        XCTAssertFalse(BackupService.shouldPinPrevious(previousCount: 4, newCount: 2), "exactly half isn't a shrink")
         XCTAssertFalse(BackupService.shouldPinPrevious(previousCount: 0, newCount: 0))
     }
 
@@ -78,5 +95,12 @@ final class BackupRetentionTests: XCTestCase {
         XCTAssertEqual(old.date, local, "old names are local time")
 
         XCTAssertEqual(BackupService.parse(filename: "Worklog-Backup-garbage.json").reason, "unknown")
+
+        let pinnedManual = BackupService.parse(filename: "Worklog-Backup-2026-10-07T14-03-22Z-manual-n7-pinned.json")
+        XCTAssertEqual(pinnedManual.reason, "manual")
+        XCTAssertEqual(pinnedManual.sessionCount, 7)
+        XCTAssertTrue(pinnedManual.isPinned, "the pre-move backup is written pinned")
+        XCTAssertEqual(BackupService.parse(filename: "Worklog-Backup-2026-10-07T14-03-22Z-beforeChange-n7.json").reason,
+                       BackupReason.beforeChange.rawValue)
     }
 }

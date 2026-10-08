@@ -5,9 +5,11 @@ import SwiftUI
 // The floating overlay's renderer, shared by the live panel (`OverlayView`) and the layout editor in
 // Settings ▸ Overlay (`OverlayLayoutEditor`), so both always look the same.
 //
-// Model: `settings.overlayLayout` is an ordered list of `OverlayElement`s. The header (status dot, leading
-// content, close button) is chrome, not an element. Consecutive *inline* elements share one wrapping row;
-// the others take the full width.
+// Model: `settings.overlayGrid` (`OverlayGridLayout`) places each `OverlayElement` in a 6-column grid of rows
+// with intrinsic height. Row 0 is the header row: it renders inline between the status dot and the profile tag /
+// close button (chrome, not elements). Body rows render below it; rows with nothing visible collapse. Idle, the
+// header says "Not tracking" and row 0's visible elements become the first body row. Grid helpers live in
+// `OverlayGridViews.swift`.
 
 /// Where the overlay content is rendered.
 enum OverlayMode {
@@ -94,16 +96,32 @@ struct OverlayActions {
 
 // MARK: - Content
 
-/// Renders `layout` in order with `data`. 300 pt wide (220 compact); height is intrinsic.
+/// Edit-mode extras for `OverlayContent`. `.none` (live and preview) adds no geometry readers or preferences.
+struct OverlayEditingOptions {
+    /// While dragging: an empty row of this height under the last row (grid row `rowCount`), a drop target that
+    /// creates a new row.
+    var trailingDropRowHeight: CGFloat? = nil
+    /// Each row reports its frame in the "overlayGrid" space (`OverlayGridRowFramesKey`).
+    var reportsFrames = false
+
+    init(trailingDropRowHeight: CGFloat? = nil, reportsFrames: Bool = false) {
+        self.trailingDropRowHeight = trailingDropRowHeight
+        self.reportsFrames = reportsFrames
+    }
+
+    static let none = OverlayEditingOptions()
+}
+
+/// Renders `grid` with `data`. 300 pt wide (220 compact); height is intrinsic.
 ///
-/// `chrome` wraps every rendered element (the editor adds the wiggle, remove badge, drag and drop and the
-/// context menu there); the header's dot, status and close button are never passed through it.
+/// `chrome` wraps every rendered element (the editor adds the wiggle, remove badge, resize handle, drag gesture
+/// and the context menu there); the header's dot, status and close button are never passed through it.
 /// `panelOpacity` fades the panel (background and content) without fading the chrome the editor adds.
 @MainActor
 struct OverlayContent<ElementChrome: View>: View {
     @Environment(\.theme) private var theme
 
-    private let layout: [OverlayElement]
+    private let grid: OverlayGridLayout
     private let data: OverlayDisplayData
     private let isCompact: Bool
     private let mode: OverlayMode
@@ -111,13 +129,14 @@ struct OverlayContent<ElementChrome: View>: View {
     private let isSplitting: Bool
     private let noteFocus: FocusState<Bool>.Binding?
     private let actions: OverlayActions
-    private let chrome: (OverlayElement, Int, OverlayElementView) -> ElementChrome
+    private let editing: OverlayEditingOptions
+    private let chrome: (OverlayPlacement, OverlayElementView) -> ElementChrome
 
-    init(layout: [OverlayElement], data: OverlayDisplayData, isCompact: Bool, mode: OverlayMode,
+    init(grid: OverlayGridLayout, data: OverlayDisplayData, isCompact: Bool, mode: OverlayMode,
          panelOpacity: Double = 1, isSplitting: Bool = false, noteFocus: FocusState<Bool>.Binding? = nil,
-         actions: OverlayActions = .none,
-         @ViewBuilder chrome: @escaping (OverlayElement, Int, OverlayElementView) -> ElementChrome) {
-        self.layout = layout
+         actions: OverlayActions = .none, editing: OverlayEditingOptions = .none,
+         @ViewBuilder chrome: @escaping (OverlayPlacement, OverlayElementView) -> ElementChrome) {
+        self.grid = grid
         self.data = data
         self.isCompact = isCompact
         self.mode = mode
@@ -125,33 +144,47 @@ struct OverlayContent<ElementChrome: View>: View {
         self.isSplitting = isSplitting
         self.noteFocus = noteFocus
         self.actions = actions
+        self.editing = editing
         self.chrome = chrome
     }
 
     private var isLive: Bool { mode == .live }
+    /// Idle outside edit mode (edit mode always shows the running sample).
+    private var isIdle: Bool { mode != .editing && !data.isActive }
+    /// Frames are an edit-mode affair: never in the live overlay.
+    private var reportsFrames: Bool { editing.reportsFrames && !isLive }
 
     var body: some View {
-        let plan = OverlayBlockPlan(layout: layout, data: data, isCompact: isCompact, mode: mode)
+        let rows = renderRows
 
         VStack(alignment: .leading, spacing: isCompact ? theme.spacingXS + 2 : theme.spacingS) {
-            header(run: plan.headerRun)
+            header(rows.header)
 
             if isLive && data.isActive && data.isOnAnotherMac {
                 LiveOtherMacHint()
             }
 
-            if showsSplitForm(after: plan.headerRun) {
+            if showsSplitForm(after: rows.header) {
                 splitForm
             }
 
-            ForEach(plan.blocks) { block in
-                blockView(block)
-                if showsSplitForm(after: block.items) {
+            ForEach(rows.body) { row in
+                gridRow(row)
+                    .overlayGridRowFrame(row.row, isActive: reportsFrames)
+                if showsSplitForm(after: row) {
                     splitForm
                 }
             }
 
-            if plan.needsStandaloneReview {
+            if !isLive, let height = editing.trailingDropRowHeight {
+                Color.clear
+                    .frame(maxWidth: .infinity)
+                    .frame(height: max(height, 1))
+                    .overlayGridRowFrame(grid.rowCount, isActive: reportsFrames)
+                    .accessibilityHidden(true)
+            }
+
+            if needsStandaloneReview {
                 standaloneReview
             }
         }
@@ -160,9 +193,56 @@ struct OverlayContent<ElementChrome: View>: View {
         .modifier(OverlayPanelSurface(isLive: isLive, opacity: panelOpacity))
     }
 
+    // MARK: Rows
+
+    /// Visible placements per row. Idle: the header shows "Not tracking", row 0's visible elements become the first
+    /// body row, and the idle controls (Review… / Start) widen over the free columns of their row.
+    private var renderRows: OverlayGridRenderRows {
+        let sample = self.data
+        let idle = self.isIdle
+        let widening: Set<OverlayElement> = idle ? [.controls] : []
+        return grid.renderRows(isVisible: { Self.isVisible($0, data: sample, isIdle: idle) },
+                               headerInline: !idle,
+                               widening: widening)
+    }
+
+    /// Same rule as before the grid: a takeaway needs one; idle shows only the takeaway, today's total and the
+    /// controls.
+    private static func isVisible(_ element: OverlayElement, data: OverlayDisplayData, isIdle: Bool) -> Bool {
+        if element == .takeaway && data.takeaway == nil { return false }
+        guard isIdle else { return true }
+        switch element {
+        case .takeaway, .todayTotal, .controls: return true
+        case .label, .timer, .segmentFocus, .split, .note: return false
+        }
+    }
+
+    /// Idle + pending review + no Controls element (live only): the review must stay reachable.
+    private var needsStandaloneReview: Bool {
+        isLive && isIdle && data.hasPendingReview && !grid.contains(.controls)
+    }
+
+    private func gridRow(_ row: OverlayGridRenderRow) -> some View {
+        OverlayGridRowLayout(gutter: theme.spacingXS) {
+            ForEach(row.placements) { placement in
+                chrome(placement, elementView(placement))
+                    .overlayGridCell(column: placement.column, span: placement.span)
+            }
+        }
+    }
+
+    private func elementView(_ placement: OverlayPlacement) -> OverlayElementView {
+        OverlayElementView(element: placement.element, data: data, isCompact: isCompact, mode: mode,
+                           opacity: panelOpacity, noteFocus: noteFocus, actions: actions,
+                           alignment: placement.element.overlayCellAlignment(column: placement.column,
+                                                                             span: placement.span,
+                                                                             isActive: data.isActive))
+    }
+
     // MARK: Header
 
-    private func header(run: [OverlayBlockItem]) -> some View {
+    /// Dot, the header row (row 0) or the status word when nothing in it is visible, profile tag, close button.
+    private func header(_ row: OverlayGridRenderRow) -> some View {
         HStack(spacing: isCompact ? theme.spacingXS : theme.spacingS) {
             Group {
                 if data.isActive {
@@ -175,13 +255,17 @@ struct OverlayContent<ElementChrome: View>: View {
             }
             .opacity(panelOpacity)
 
-            if run.isEmpty {
-                statusText
-                    .opacity(panelOpacity)
-                Spacer(minLength: theme.spacingXS)
-            } else {
-                inlineRun(run)
+            ZStack(alignment: .leading) {
+                if row.placements.isEmpty {
+                    statusText
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .opacity(panelOpacity)
+                }
+                gridRow(row)
             }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .overlayGridRowFrame(OverlayGridLayout.headerRow, isActive: reportsFrames)
 
             if let name = data.profileName {
                 profileTag(name)
@@ -239,58 +323,10 @@ struct OverlayContent<ElementChrome: View>: View {
         .allowsHitTesting(isLive)
     }
 
-    // MARK: Blocks
-
-    @ViewBuilder
-    private func blockView(_ block: OverlayBlock) -> some View {
-        if block.isInline {
-            HStack(spacing: theme.spacingXS) {
-                inlineRun(block.items)
-            }
-        } else if let item = block.items.first {
-            element(item)
-                .frame(maxWidth: .infinity, alignment: .leading)
-        }
-    }
-
-    /// A wrapping row of inline elements; Today's total sits trailing when it ends the row.
-    @ViewBuilder
-    private func inlineRun(_ items: [OverlayBlockItem]) -> some View {
-        if let last = items.last, last.element == .todayTotal {
-            let leading = Array(items.dropLast())
-            if !leading.isEmpty {
-                flow(leading)
-            }
-            Spacer(minLength: theme.spacingXS)
-            element(last)
-        } else {
-            flow(items)
-            Spacer(minLength: theme.spacingXS)
-        }
-    }
-
-    private func flow(_ items: [OverlayBlockItem]) -> some View {
-        FlowLayout(spacing: theme.spacingXS, lineSpacing: theme.spacingXS) {
-            ForEach(items) { item in
-                element(item)
-            }
-        }
-        .layoutPriority(1)
-    }
-
-    private func element(_ item: OverlayBlockItem) -> some View {
-        chrome(item.element, item.index, elementView(item.element))
-    }
-
-    private func elementView(_ element: OverlayElement) -> OverlayElementView {
-        OverlayElementView(element: element, data: data, isCompact: isCompact, mode: mode,
-                           opacity: panelOpacity, noteFocus: noteFocus, actions: actions)
-    }
-
     // MARK: Split form (live only)
 
-    private func showsSplitForm(after items: [OverlayBlockItem]) -> Bool {
-        isLive && isSplitting && data.isActive && items.contains { $0.element == .split }
+    private func showsSplitForm(after row: OverlayGridRenderRow) -> Bool {
+        isLive && isSplitting && data.isActive && row.placements.contains { $0.element == .split }
     }
 
     private var splitForm: some View {
@@ -316,12 +352,12 @@ struct OverlayContent<ElementChrome: View>: View {
 
 extension OverlayContent where ElementChrome == OverlayElementView {
     /// No per-element chrome (the live panel and the plain preview).
-    init(layout: [OverlayElement], data: OverlayDisplayData, isCompact: Bool, mode: OverlayMode,
+    init(grid: OverlayGridLayout, data: OverlayDisplayData, isCompact: Bool, mode: OverlayMode,
          panelOpacity: Double = 1, isSplitting: Bool = false, noteFocus: FocusState<Bool>.Binding? = nil,
          actions: OverlayActions = .none) {
-        self.init(layout: layout, data: data, isCompact: isCompact, mode: mode, panelOpacity: panelOpacity,
-                  isSplitting: isSplitting, noteFocus: noteFocus, actions: actions,
-                  chrome: { _, _, view in view })
+        self.init(grid: grid, data: data, isCompact: isCompact, mode: mode, panelOpacity: panelOpacity,
+                  isSplitting: isSplitting, noteFocus: noteFocus, actions: actions, editing: .none,
+                  chrome: { _, view in view })
     }
 }
 
@@ -352,88 +388,10 @@ private struct OverlayPanelSurface: ViewModifier {
     }
 }
 
-// MARK: - Block plan
-
-/// One rendered element and its index in the layout (stable across modes; the editor uses it for seeds and moves).
-struct OverlayBlockItem: Identifiable, Hashable {
-    let element: OverlayElement
-    let index: Int
-    var id: OverlayElement { element }
-}
-
-/// A run of inline elements (one wrapping row) or one full-width element.
-struct OverlayBlock: Identifiable {
-    let isInline: Bool
-    let items: [OverlayBlockItem]
-    var id: String { (isInline ? "row." : "full.") + (items.first?.element.rawValue ?? "") }
-}
-
-/// Decides which elements render and how they group, for one mode/status.
-struct OverlayBlockPlan {
-    /// Inline elements that open the layout render in the header (active only).
-    private(set) var headerRun: [OverlayBlockItem] = []
-    private(set) var blocks: [OverlayBlock] = []
-    /// Idle + pending review + no Controls element (live only).
-    private(set) var needsStandaloneReview = false
-
-    init(layout: [OverlayElement], data: OverlayDisplayData, isCompact: Bool, mode: OverlayMode) {
-        let isIdle = mode != .editing && !data.isActive
-        var visible: [OverlayBlockItem] = []
-        for (index, element) in layout.enumerated()
-        where Self.isVisible(element, data: data, isIdle: isIdle, mode: mode) {
-            visible.append(OverlayBlockItem(element: element, index: index))
-        }
-
-        var blocks: [OverlayBlock] = []
-        var run: [OverlayBlockItem] = []
-        for item in visible {
-            if Self.isInline(item.element, isCompact: isCompact, isIdle: isIdle) {
-                run.append(item)
-            } else {
-                if !run.isEmpty {
-                    blocks.append(OverlayBlock(isInline: true, items: run))
-                    run = []
-                }
-                blocks.append(OverlayBlock(isInline: false, items: [item]))
-            }
-        }
-        if !run.isEmpty {
-            blocks.append(OverlayBlock(isInline: true, items: run))
-        }
-
-        // The header always says "Not tracking" while idle; while active, a leading inline run replaces the status word.
-        if !isIdle, let first = blocks.first, first.isInline {
-            headerRun = first.items
-            blocks.removeFirst()
-        }
-        self.blocks = blocks
-        needsStandaloneReview = mode == .live && isIdle && data.hasPendingReview && !layout.contains(.controls)
-    }
-
-    private static func isVisible(_ element: OverlayElement, data: OverlayDisplayData, isIdle: Bool,
-                                  mode: OverlayMode) -> Bool {
-        if element == .takeaway && data.takeaway == nil { return false }
-        guard isIdle else { return true }
-        switch element {
-        case .takeaway, .todayTotal, .controls: return true
-        case .label, .timer, .segmentFocus, .split, .note: return false
-        }
-    }
-
-    /// Inline elements share a wrapping row; the others take the full width.
-    static func isInline(_ element: OverlayElement, isCompact: Bool, isIdle: Bool) -> Bool {
-        switch element {
-        case .label, .split, .todayTotal: return true
-        case .controls: return !isIdle          // idle: "Review…" + Start take the full row
-        case .timer: return isCompact
-        case .segmentFocus, .note, .takeaway: return false
-        }
-    }
-}
-
 // MARK: - Element view
 
-/// One element's content in any mode. Outside `.live` it ignores hits, so nothing reaches the engine.
+/// One element's content in any mode, filling its grid cell (`alignment` places hug elements inside it; they
+/// truncate rather than overflow a narrow cell). Outside `.live` it ignores hits, so nothing reaches the engine.
 @MainActor
 struct OverlayElementView: View {
     @Environment(\.theme) private var theme
@@ -445,9 +403,11 @@ struct OverlayElementView: View {
     private let opacity: Double
     private let noteFocus: FocusState<Bool>.Binding?
     private let actions: OverlayActions
+    private let alignment: Alignment
 
     init(element: OverlayElement, data: OverlayDisplayData, isCompact: Bool, mode: OverlayMode,
-         opacity: Double = 1, noteFocus: FocusState<Bool>.Binding? = nil, actions: OverlayActions = .none) {
+         opacity: Double = 1, noteFocus: FocusState<Bool>.Binding? = nil, actions: OverlayActions = .none,
+         alignment: Alignment = .leading) {
         self.element = element
         self.data = data
         self.isCompact = isCompact
@@ -455,6 +415,7 @@ struct OverlayElementView: View {
         self.opacity = opacity
         self.noteFocus = noteFocus
         self.actions = actions
+        self.alignment = alignment
     }
 
     private var isLive: Bool { mode == .live }
@@ -462,6 +423,7 @@ struct OverlayElementView: View {
 
     var body: some View {
         content
+            .frame(maxWidth: .infinity, alignment: alignment)
             .opacity(opacity)
             .allowsHitTesting(isLive)
     }
@@ -472,7 +434,7 @@ struct OverlayElementView: View {
         case .label:
             LabelBadge(label: data.label, size: .small)
         case .timer:
-            TimerText(data.elapsed, style: isCompact ? .compact : .large, isPaused: data.isPaused)
+            timer
         case .segmentFocus:
             segmentFocus
         case .controls:
@@ -506,6 +468,20 @@ struct OverlayElementView: View {
         return data.label?.name ?? "No focus"
     }
 
+    /// Large digits when they fit the cell, else the compact style (compact mode: always compact).
+    @ViewBuilder
+    private var timer: some View {
+        if isCompact {
+            TimerText(data.elapsed, style: .compact, isPaused: data.isPaused)
+        } else {
+            ViewThatFits(in: .horizontal) {
+                TimerText(data.elapsed, style: .large, isPaused: data.isPaused)
+                TimerText(data.elapsed, style: .compact, isPaused: data.isPaused)
+            }
+        }
+    }
+
+    /// The focus truncates first, then the segment time.
     private var segmentFocus: some View {
         HStack(spacing: theme.spacingXS) {
             Text(focusText)
@@ -513,7 +489,8 @@ struct OverlayElementView: View {
                 .truncationMode(.tail)
             Text("· seg \(data.segmentElapsed.formattedClock)")
                 .monospacedDigit()
-                .fixedSize()
+                .lineLimit(1)
+                .layoutPriority(1)
         }
         .font(isCompact ? theme.captionFont : theme.calloutFont)
         .foregroundStyle(theme.textSecondary)
@@ -565,20 +542,32 @@ struct OverlayElementView: View {
         .help(title)
     }
 
+    /// "Today 2h 15m", then "2h 15m" when the cell is narrow, then the bare value (truncating).
     private var todayTotal: some View {
-        HStack(spacing: 3) {
-            Image(systemName: "target")
-                .foregroundStyle(theme.textTertiary)
-                .accessibilityHidden(true)
-            Text("Today \(data.todayTotal.formattedShort)")
-                .monospacedDigit()
-                .foregroundStyle(theme.textSecondary)
+        let value = data.todayTotal.formattedShort
+        return ViewThatFits(in: .horizontal) {
+            todayTotalRow("Today \(value)", showsIcon: true)
+            todayTotalRow(value, showsIcon: true)
+            todayTotalRow(value, showsIcon: false)
         }
         .font(theme.captionFont)
         .lineLimit(1)
-        .fixedSize()
         .accessibilityElement(children: .combine)
         .accessibilityLabel("Today, \(DesignSystemDurationSpeech.spoken(data.todayTotal))")
+    }
+
+    private func todayTotalRow(_ text: String, showsIcon: Bool) -> some View {
+        HStack(spacing: 3) {
+            if showsIcon {
+                Image(systemName: "target")
+                    .foregroundStyle(theme.textTertiary)
+                    .accessibilityHidden(true)
+            }
+            Text(text)
+                .monospacedDigit()
+                .foregroundStyle(theme.textSecondary)
+                .truncationMode(.tail)
+        }
     }
 
     @ViewBuilder

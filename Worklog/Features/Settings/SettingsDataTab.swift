@@ -8,6 +8,11 @@ import UniformTypeIdentifiers
 ///
 /// When the store couldn't be opened (in-memory fallback) the tab leads with "Recover…" and every restore goes
 /// through `SettingsRecoverySheet` (move the damaged store aside, relaunch, restore) — never into the temporary store.
+/// A store made by a newer Worklog is never moved aside: the tab only says so.
+///
+/// When the store synced with another CloudKit environment than this build (`persistence.environmentMismatch`), the
+/// tab leads with "Move to iCloud <env>…" (verified pinned backup incl. images → marker → relaunch; the next launch
+/// moves the old store to Recovered/Env-…, opens a fresh CloudKit store and restores) or "Keep Local Only".
 @MainActor
 struct SettingsDataTab: View {
     @Environment(ExportService.self) private var exporter
@@ -25,8 +30,13 @@ struct SettingsDataTab: View {
     @State private var confirmsDeleteAll = false
     @State private var confirmsDeleteAllAgain = false
     @State private var recoveryRequest: SettingsRecoveryRequest?
+    @State private var confirmsMove = false
+    @State private var isMoving = false
 
+    /// Recover… is offered (the store failed to open and isn't from a newer Worklog).
     private var needsRecovery: Bool { SettingsRecovery.isNeeded(persistence) }
+    /// Running on the in-memory fallback: nothing can be imported or deleted for real.
+    private var storeUnavailable: Bool { persistence.isRecoveryMode }
 
     var body: some View {
         @Bindable var settings = settings
@@ -34,14 +44,19 @@ struct SettingsDataTab: View {
         Form {
             if needsRecovery {
                 recoverySection
+            } else if persistence.isStoreFromNewerVersion {
+                newerVersionSection
+            }
+            if let mismatch = persistence.environmentMismatch, !storeUnavailable {
+                environmentSection(mismatch)
             }
 
             exportSection
-            if !needsRecovery {
+            if !storeUnavailable {
                 importSection
             }
             backupsSection(settings: $settings)
-            if !needsRecovery {
+            if !storeUnavailable {
                 dangerSection
             }
         }
@@ -84,6 +99,93 @@ struct SettingsDataTab: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text("A backup is saved first.")
+        }
+        .confirmationDialog(moveTitle, isPresented: $confirmsMove, titleVisibility: .visible) {
+            Button("Back Up and Relaunch") { moveToBuildEnvironment() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Worklog backs up everything, images included, relaunches and uploads your data. "
+                 + "The current copy stays in the Recovered folder.")
+        }
+    }
+
+    // MARK: - iCloud environment (C1b)
+
+    private var moveTitle: String {
+        "Move your data to iCloud \(persistence.environmentMismatch?.build.rawValue ?? persistence.buildEnvironment.rawValue)?"
+    }
+
+    private func environmentSection(_ mismatch: EnvironmentMismatch) -> some View {
+        Section("iCloud") {
+            InlineBanner("This data syncs with iCloud \(mismatch.store.rawValue), but this build uses "
+                         + "\(mismatch.build.rawValue). It\u{2019}s saved on this Mac only for now.",
+                         systemImage: "icloud.slash", style: .warning)
+            HStack(spacing: theme.spacingS) {
+                Button("Move to iCloud \(mismatch.build.rawValue)\u{2026}") { confirmsMove = true }
+                    .buttonStyle(PrimaryButtonStyle())
+                    .disabled(isMoving || backups.isWorking)
+                Button("Keep Local Only", action: keepLocalOnly)
+                    .buttonStyle(QuietButtonStyle())
+                    .disabled(isMoving || !settings.iCloudSyncEnabled)
+                Spacer()
+                if isMoving {
+                    ProgressView()
+                        .controlSize(.small)
+                        .accessibilityLabel("Backing up")
+                }
+            }
+            SettingsFootnote(settings.iCloudSyncEnabled
+                             ? "Moving makes a pinned backup first; nothing is deleted."
+                             : "Kept on this Mac. You can still move it later.")
+        }
+    }
+
+    /// Verified, pinned full backup → marker (`environmentMove`) → relaunch. Nothing changes if any step fails.
+    private func moveToBuildEnvironment() {
+        guard let mismatch = persistence.environmentMismatch else { return }
+        if exporter.hasActiveSession() {
+            message = SettingsDataMessage(title: "Session running",
+                                          text: DataTransferError.sessionActive.localizedDescription)
+            return
+        }
+        isMoving = true
+        defer { isMoving = false }
+        let backup: BackupFile
+        do {
+            backup = try backups.makeVerifiedFullBackup()
+        } catch {
+            Log.ui.error("Move: backup failed: \(error.localizedDescription, privacy: .public)")
+            message = SettingsDataMessage(title: "Nothing was moved", text: error.localizedDescription)
+            return
+        }
+        do {
+            try PersistenceController.scheduleRecovery(backupURL: backup.url, environmentMove: mismatch.build)
+        } catch {
+            Log.ui.error("Move: scheduling failed: \(error.localizedDescription, privacy: .public)")
+            message = SettingsDataMessage(title: "Nothing was moved", text: error.localizedDescription)
+            return
+        }
+        // The move needs sync at the next launch (it is skipped otherwise).
+        settings.iCloudSyncEnabled = true
+        Log.ui.info("Move to iCloud \(mismatch.build.rawValue, privacy: .public) scheduled; relaunching")
+        PersistenceController.relaunchApp()
+    }
+
+    /// Stays local-only on purpose: sync off (so nothing is switched later by accident) and the banner dismissed.
+    private func keepLocalOnly() {
+        settings.iCloudSyncEnabled = false
+        if case .localOnly(let reason) = persistence.storeMode {
+            settings.dismissedLocalOnlyBannerReason = reason
+        }
+    }
+
+    // MARK: - Newer data (M5)
+
+    private var newerVersionSection: some View {
+        Section {
+            InlineBanner("This data was made by a newer version of Worklog. Changes here won\u{2019}t be saved.",
+                         systemImage: "exclamationmark.triangle.fill", style: .error)
+            SettingsFootnote("Install the latest Worklog to open it. Nothing was changed.")
         }
     }
 
@@ -193,7 +295,7 @@ struct SettingsDataTab: View {
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
-            let archive = try exporter.decodeArchive(from: url)
+            let archive = try SettingsRecovery.decodeRequestingImageFolder(url, exporter: exporter)
             pendingImport = SettingsPendingImport(source: .file(url), archive: archive)
         } catch {
             Log.ui.error("Import decode failed: \(error.localizedDescription, privacy: .public)")
@@ -221,8 +323,8 @@ struct SettingsDataTab: View {
                     Label("Back Up Now", systemImage: "externaldrive")
                 }
                 .buttonStyle(QuietButtonStyle())
-                .disabled(backups.isWorking || needsRecovery)
-                .help(needsRecovery ? "Paused while data can’t open" : "Back up now")
+                .disabled(backups.isWorking || storeUnavailable)
+                .help(storeUnavailable ? "Paused while data can’t open" : "Back up now")
                 Button {
                     backups.revealInFinder()
                 } label: {
@@ -246,7 +348,7 @@ struct SettingsDataTab: View {
                          format: { "\($0) \($0 == 1 ? "backup" : "backups")" })
             Toggle("Include images", isOn: settings.backupIncludesAttachments)
             if !self.settings.backupIncludesAttachments {
-                SettingsFootnote("Restoring with Replace then removes all images.")
+                SettingsFootnote("Replace then keeps only images still in Worklog.")
             }
 
             ForEach(backups.backups) { backup in
@@ -331,6 +433,7 @@ struct SettingsDataTab: View {
         case BackupReason.onQuit.rawValue: "On quit"
         case BackupReason.manual.rawValue: "Manual"
         case BackupReason.beforeRestore.rawValue: "Before restore"
+        case BackupReason.beforeChange.rawValue: "Before change"
         default: reason.capitalized
         }
     }
@@ -342,9 +445,15 @@ struct SettingsDataTab: View {
     }
 
     private func prepareRestore(_ backup: BackupFile) {
-        if needsRecovery {
+        if storeUnavailable {
             // Never restore into the temporary in-memory store: recover into a fresh on-disk store instead.
-            recoveryRequest = SettingsRecoveryRequest(preselected: backup)
+            if needsRecovery {
+                recoveryRequest = SettingsRecoveryRequest(preselected: backup)
+            } else {
+                message = SettingsDataMessage(title: "Can\u{2019}t restore here",
+                                              text: StoreRecoveryError.storeIsNewer.localizedDescription
+                                                + " Install the latest Worklog first.")
+            }
             return
         }
         do {
@@ -491,12 +600,17 @@ private struct SettingsImportSheet: View {
             .pickerStyle(.radioGroup)
             .labelsHidden()
 
+            if archive.missingImageCount > 0 {
+                InlineBanner("\(archive.missingImageCount) \(archive.missingImageCount == 1 ? "image is" : "images are") "
+                             + "missing from this backup. Copies already in Worklog are kept.",
+                             systemImage: "photo", style: .warning)
+            }
             if mode == .replace {
                 if hasActiveSession {
                     InlineBanner("Stop the running session first.", style: .error)
                 }
                 if !archive.includesAttachments {
-                    InlineBanner("This file has no images, so all images are deleted.",
+                    InlineBanner("This file has no images. Only images still in Worklog are kept.",
                                  systemImage: "photo", style: .warning)
                 }
                 SettingsFootnote("Your current data is backed up first.")
@@ -536,9 +650,9 @@ private struct SettingsImportSheet: View {
             Button("Replace All", role: .destructive) { perform() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text(archive.includesAttachments
+            Text(archive.includesAttachments && archive.missingImageCount == 0
                  ? "Everything in Worklog is replaced with \(sourceName)."
-                 : "Everything in Worklog, images included, is replaced with \(sourceName).")
+                 : "Everything in Worklog is replaced with \(sourceName). Images it lacks are kept only if Worklog still has them.")
         }
     }
 
@@ -553,8 +667,9 @@ private struct SettingsImportSheet: View {
         if profiles > 0 {
             parts.insert("\(profiles) \(profiles == 1 ? "profile" : "profiles")", at: 1)
         }
+        let imageCount = archiveImageCount - archive.missingImageCount
         parts.append(archive.includesAttachments
-                     ? "\(archiveImageCount) \(archiveImageCount == 1 ? "image" : "images")"
+                     ? "\(imageCount) \(imageCount == 1 ? "image" : "images")"
                      : "no images")
         return parts.joined(separator: " · ") + " — exported \(archive.exportedAt.shortDateTime)"
     }

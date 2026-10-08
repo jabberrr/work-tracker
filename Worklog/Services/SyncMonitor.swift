@@ -36,6 +36,10 @@ final class SyncMonitor {
     let isEnabled: Bool
     let containerIdentifier: String
 
+    /// Called on `.CKAccountChanged` (before the status refresh). AppServices pins the newest backup with sessions
+    /// there, because CloudKit may empty the local store after a sign-out or account switch (M4).
+    @ObservationIgnored var onAccountChanged: (() -> Void)?
+
     @ObservationIgnored private var observers: [NSObjectProtocol] = []
     @ObservationIgnored private var inFlight: Set<UUID> = []
     @ObservationIgnored private var isStarted = false
@@ -59,7 +63,11 @@ final class SyncMonitor {
             MainActor.assumeIsolated { () -> Void in self?.handle(snapshot) }
         })
         observers.append(center.addObserver(forName: .CKAccountChanged, object: nil, queue: .main) { [weak self] _ in
-            MainActor.assumeIsolated { () -> Void in self?.refreshAccountStatus() }
+            MainActor.assumeIsolated { () -> Void in
+                Log.sync.info("iCloud account changed")
+                self?.onAccountChanged?()
+                self?.refreshAccountStatus()
+            }
         })
         refreshAccountStatus()
         Log.sync.info("Sync monitor started")

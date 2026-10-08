@@ -163,6 +163,7 @@ struct SettingsTagsPane: View {
 private struct SettingsTagEditor: View {
     @Environment(\.modelContext) private var context
     @Environment(ProfileStore.self) private var profileStore
+    @Environment(BackupService.self) private var backups
     @Environment(\.theme) private var theme
     @Bindable var tag: WorkTag
     /// Every live tag (all profiles); merge targets are narrowed by `TaxonomyOps.mergeTargets`.
@@ -179,6 +180,8 @@ private struct SettingsTagEditor: View {
     @State private var confirmsDelete = false
     /// Set while "Make “x” Work only?" is asked (other profiles use the tag).
     @State private var pendingLocalProfileID: UUID?
+    /// The safety backup before a merge, delete or scope change failed (nothing was changed).
+    @State private var safetyError: String?
 
     /// Merge targets that keep every session's tags offered in its profile, by name.
     private var otherTags: [WorkTag] {
@@ -301,6 +304,9 @@ private struct SettingsTagEditor: View {
                 if changesAllProfiles {
                     SettingsFootnote("Changes it in all profiles.")
                 }
+                if let safetyError {
+                    InlineBanner(safetyError, style: .error, onDismiss: { self.safetyError = nil })
+                }
             }
         }
         .formStyle(.grouped)
@@ -331,6 +337,7 @@ private struct SettingsTagEditor: View {
                     return
                 }
                 mergeTarget = nil
+                guard makeSafetyBackup() else { return }
                 TaxonomyOps.mergeTag(tag, into: target, in: context)
                 onMerged(target)
             }
@@ -340,6 +347,7 @@ private struct SettingsTagEditor: View {
         }
         .confirmationDialog("Delete “\(tag.name)”?", isPresented: $confirmsDelete, titleVisibility: .visible) {
             Button("Delete Tag", role: .destructive) {
+                guard ModelLiveness.isLive(tag), makeSafetyBackup() else { return }
                 TaxonomyOps.deleteTag(tag, in: context)
                 onDeleted()
             }
@@ -355,7 +363,7 @@ private struct SettingsTagEditor: View {
             Button("Make Local") {
                 let profile = profileStore.profile(withID: pendingLocalProfileID)
                 pendingLocalProfileID = nil
-                guard let profile, ModelLiveness.isLive(tag) else { return }
+                guard let profile, ModelLiveness.isLive(tag), makeSafetyBackup() else { return }
                 TaxonomyOps.setScope(of: tag, to: profile, in: context)
             }
             Button("Cancel", role: .cancel) { pendingLocalProfileID = nil }
@@ -370,7 +378,7 @@ private struct SettingsTagEditor: View {
         guard ModelLiveness.isLive(tag) else { return }
         switch scope {
         case .allProfiles:
-            guard !tag.isAvailableEverywhere else { return }
+            guard !tag.isAvailableEverywhere, makeSafetyBackup() else { return }
             // A local parent label isn't offered in the other profiles: drop it so the global tag stays consistent.
             if let parent = ModelLiveness.live(tag.label), !parent.isAvailableEverywhere {
                 tag.label = nil
@@ -381,6 +389,7 @@ private struct SettingsTagEditor: View {
             if case .copiesForOtherProfiles = TaxonomyOps.scopeChangeImpact(of: tag, to: profile) {
                 pendingLocalProfileID = profile.uuid
             } else {
+                guard makeSafetyBackup() else { return }
                 TaxonomyOps.setScope(of: tag, to: profile, in: context)
             }
         }
@@ -414,10 +423,12 @@ private struct SettingsTagEditor: View {
     }
 
     private func save() {
-        do {
-            try context.save()
-        } catch {
-            Log.persistence.error("Saving tag failed: \(error.localizedDescription, privacy: .public)")
-        }
+        SafeSave.save(context, source: "Tag editor")
+    }
+
+    /// L1: a before-change backup first; false (and an error shown) when it failed.
+    private func makeSafetyBackup() -> Bool {
+        safetyError = backups.backupBeforeChange()
+        return safetyError == nil
     }
 }

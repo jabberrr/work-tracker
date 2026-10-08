@@ -140,7 +140,8 @@ import SwiftData
     // MARK: - Deduplicate
 
     /// Merge duplicate WorkLabel/WorkTag objects sharing the same uuid (CloudKit can import a second copy of the
-    /// seeded rows from another Mac) and duplicate ended sessions sharing a uuid (same archive imported on two Macs).
+    /// seeded rows from another Mac) and duplicate ended sessions sharing a uuid (same archive imported on two Macs;
+    /// notes, learning points and images only the deleted copy has move to the survivor first — `absorbChildren`).
     ///
     /// The survivor must be the SAME row on every Mac, otherwise each Mac deletes the other's copy and both vanish after
     /// sync. So the order only uses synced values: labels/tags by (createdAt asc, instanceID asc), sessions by
@@ -318,11 +319,53 @@ import SwiftData
                 continue
             }
             for duplicate in pick.duplicates {
+                // H4: the copy being deleted may hold children the survivor lacks (an image or note added on one
+                // Mac before the copies met). Move them over first; the cascade would delete them otherwise.
+                absorbChildren(of: duplicate, into: pick.survivor)
                 context.delete(duplicate)
                 changed = true
             }
         }
         return changed
+    }
+
+    /// Re-parents to `survivor` the notes, learning points and images of `duplicate` whose uuid the survivor doesn't
+    /// have, and fills image bytes the survivor's same-uuid attachment is missing. Never touches either session's
+    /// modifiedAt. Does not save. (Internal for tests.)
+    static func absorbChildren(of duplicate: WorkSession, into survivor: WorkSession) {
+        var survivorAttachments: [UUID: Attachment] = [:]
+        for attachment in ModelLiveness.live(survivor.attachments ?? []) where survivorAttachments[attachment.uuid] == nil {
+            survivorAttachments[attachment.uuid] = attachment
+        }
+        for attachment in ModelLiveness.live(duplicate.attachments ?? []) {
+            if let existing = survivorAttachments[attachment.uuid] {
+                if existing.data == nil, let data = attachment.data {
+                    existing.data = data
+                    existing.thumbnailData = attachment.thumbnailData ?? existing.thumbnailData
+                    existing.uti = attachment.uti
+                    existing.pixelWidth = attachment.pixelWidth
+                    existing.pixelHeight = attachment.pixelHeight
+                } else if existing.thumbnailData == nil, let thumb = attachment.thumbnailData {
+                    existing.thumbnailData = thumb
+                }
+            } else {
+                attachment.session = survivor
+                survivorAttachments[attachment.uuid] = attachment
+            }
+        }
+
+        var noteIDs = Set(ModelLiveness.live(survivor.notes ?? []).map(\.uuid))
+        for note in ModelLiveness.live(duplicate.notes ?? []) where !noteIDs.contains(note.uuid) {
+            note.session = survivor
+            note.segment = survivor.segment(containing: note.createdAt)
+            noteIDs.insert(note.uuid)
+        }
+
+        var pointIDs = Set(ModelLiveness.live(survivor.learningPoints ?? []).map(\.uuid))
+        for point in ModelLiveness.live(duplicate.learningPoints ?? []) where !pointIDs.contains(point.uuid) {
+            point.session = survivor
+            pointIDs.insert(point.uuid)
+        }
     }
 
     private static func replacing(_ old: WorkTag, with new: WorkTag, in tags: [WorkTag]) -> [WorkTag] {

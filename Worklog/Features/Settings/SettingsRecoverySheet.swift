@@ -5,10 +5,32 @@ import UniformTypeIdentifiers
 /// Helpers for the "store couldn't be opened" recovery flow (Settings ▸ Data ▸ Recover…).
 enum SettingsRecovery {
     /// True when Worklog runs on the in-memory fallback because the on-disk store failed to open
-    /// (not for previews/tests, which are in memory on purpose).
+    /// (not for previews/tests, which are in memory on purpose) and Recover may move it aside — never for a store a
+    /// newer Worklog made (`isStoreFromNewerVersion`).
     @MainActor
     static func isNeeded(_ persistence: PersistenceController) -> Bool {
-        persistence.isRecoveryMode
+        persistence.isRecoveryMode && !persistence.isStoreFromNewerVersion
+    }
+
+    /// Decodes a user-picked archive. When it is a backup whose images live in a sibling folder the sandbox can't
+    /// read yet (`attachmentStore`), asks once for access to the backup's folder and decodes again. The result's
+    /// `missingImageCount` says how many images are still missing.
+    @MainActor
+    static func decodeRequestingImageFolder(_ url: URL, exporter: ExportService) throws -> ExportArchive {
+        let archive = try exporter.decodeArchive(from: url)
+        guard archive.missingImageCount > 0, archive.attachmentStore != nil else { return archive }
+        let panel = NSOpenPanel()
+        panel.title = "Allow Access to the Backup\u{2019}s Images"
+        panel.message = "Choose the folder that contains \u{201C}\(url.lastPathComponent)\u{201D} so Worklog can read its images."
+        panel.prompt = "Allow"
+        panel.canChooseFiles = false
+        panel.canChooseDirectories = true
+        panel.allowsMultipleSelection = false
+        panel.directoryURL = url.deletingLastPathComponent()
+        guard panel.runModal() == .OK, let folder = panel.url else { return archive }
+        let accessing = folder.startAccessingSecurityScopedResource()
+        defer { if accessing { folder.stopAccessingSecurityScopedResource() } }
+        return (try? exporter.decodeArchive(from: url)) ?? archive
     }
 
     /// The reason text of the in-memory fallback, if any.
@@ -49,6 +71,8 @@ struct SettingsRecoverySheet: View {
     /// A backup from the list (by URL), or a file the user picked (`chosenFile`).
     @State private var selectedBackupURL: URL?
     @State private var chosenFile: URL?
+    /// `chosenFile` decoded (images rehydrated where they could be read).
+    @State private var chosenArchive: ExportArchive?
     @State private var confirms = false
     @State private var errorText: String?
     @State private var didAppear = false
@@ -170,6 +194,9 @@ struct SettingsRecoverySheet: View {
     private var backupChooser: some View {
         VStack(alignment: .leading, spacing: theme.spacingS) {
             if let chosenFile {
+                if let missing = chosenArchive?.missingImageCount, missing > 0 {
+                    SettingsFootnote("\(missing) \(missing == 1 ? "image is" : "images are") missing from this backup.")
+                }
                 HStack(spacing: theme.spacingS) {
                     Image(systemName: "doc")
                         .foregroundStyle(theme.textSecondary)
@@ -180,7 +207,10 @@ struct SettingsRecoverySheet: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
-                    Button("Use Backup") { self.chosenFile = nil }
+                    Button("Use Backup") {
+                        self.chosenFile = nil
+                        self.chosenArchive = nil
+                    }
                         .buttonStyle(QuietButtonStyle())
                         .controlSize(.small)
                 }
@@ -239,6 +269,13 @@ struct SettingsRecoverySheet: View {
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
         guard panel.runModal() == .OK, let url = panel.url else { return }
+        do {
+            chosenArchive = try SettingsRecovery.decodeRequestingImageFolder(url, exporter: exporter)
+        } catch {
+            Log.ui.error("Recovery: the chosen file can't be read: \(error.localizedDescription, privacy: .public)")
+            errorText = "Couldn\u{2019}t read \u{201C}\(url.lastPathComponent)\u{201D}."
+            return
+        }
         chosenFile = url
         choice = .backup
     }
@@ -262,8 +299,13 @@ struct SettingsRecoverySheet: View {
                 return
             }
             // Make sure the file can be read before anything is copied or moved.
+            let archive: ExportArchive
             do {
-                _ = try exporter.decodeArchive(from: source)
+                if chosenFile != nil, let chosenArchive {
+                    archive = chosenArchive
+                } else {
+                    archive = try exporter.decodeArchive(from: source)
+                }
             } catch {
                 Log.ui.error("Recovery: the backup can't be read: \(error.localizedDescription, privacy: .public)")
                 errorText = "Couldn’t read “\(source.lastPathComponent)”, so nothing changed."
@@ -271,7 +313,7 @@ struct SettingsRecoverySheet: View {
             }
             if chosenFile != nil, !Self.isInsideAppSupport(source) {
                 do {
-                    restoreURL = try copyIntoContainer(source)
+                    restoreURL = try copyIntoContainer(archive, named: source.lastPathComponent)
                 } catch {
                     Log.ui.error("Recovery: copying the chosen file failed: \(error.localizedDescription, privacy: .public)")
                     errorText = "Couldn’t copy “\(source.lastPathComponent)”, so nothing changed."
@@ -316,20 +358,20 @@ struct SettingsRecoverySheet: View {
         return path.hasPrefix(base.hasSuffix("/") ? base : base + "/")
     }
 
-    /// Copies a user-chosen file into Application Support/Worklog/Recovered so the next launch can read it.
-    private func copyIntoContainer(_ source: URL) throws -> URL {
+    /// Writes a user-chosen archive into Application Support/Worklog/Recovered so the next launch can read it. The
+    /// decoded archive is written with its images embedded (L2): a backup's images live in a sibling `Attachments`
+    /// folder that a plain file copy would leave behind (and the sandbox can't read after relaunching).
+    private func copyIntoContainer(_ archive: ExportArchive, named sourceName: String) throws -> URL {
         let folder = persistence.recoveredFolderURL
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(identifier: "UTC")
-        formatter.dateFormat = "yyyy-MM-dd'T'HH-mm-ss'Z'"
         let suffix = UUID().uuidString.prefix(8)
-        let destination = folder.appending(path: "Import-\(formatter.string(from: .now))-\(suffix).json",
+        let destination = folder.appending(path: "Import-\(AppConstants.fileTimestamp())-\(suffix).json",
                                            directoryHint: .notDirectory)
-        let accessing = source.startAccessingSecurityScopedResource()
-        defer { if accessing { source.stopAccessingSecurityScopedResource() } }
-        try FileManager.default.copyItem(at: source, to: destination)
+        var embedded = archive
+        embedded.attachmentStore = nil
+        let data = try ExportArchive.makeEncoder(pretty: false).encode(embedded)
+        try data.write(to: destination, options: .atomic)
+        Log.ui.info("Recovery: wrote \(sourceName, privacy: .private) as \(destination.lastPathComponent, privacy: .public)")
         return destination
     }
 }

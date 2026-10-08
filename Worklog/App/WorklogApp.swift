@@ -4,7 +4,13 @@ import SwiftUI
 @main @MainActor
 struct WorklogApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    private let services = AppServices.shared
+    private let services: AppServices
+
+    init() {
+        // Before the store opens: a second instance activates the running one and exits (C1c).
+        SingleInstanceGuard.enforce()
+        services = AppServices.shared
+    }
 
     var body: some Scene {
         Window("Worklog", id: WindowID.main) {
