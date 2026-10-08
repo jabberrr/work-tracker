@@ -125,11 +125,11 @@ final class SessionEngine {
                 changed = true
                 let time = (extra.endedAt ?? end).shortTime
                 if extraOwner == deviceID && newestOwner != deviceID {
-                    handoffNotice = "A newer session started on another Mac, so this Mac's session was stopped at \(time)."
+                    handoffNotice = "Stopped this Mac\u{2019}s session at \(time): a newer one started on another Mac."
                 } else if !extraOwner.isEmpty && extraOwner != deviceID {
-                    handoffNotice = "A session from another Mac was stopped at \(time)."
+                    handoffNotice = "Stopped another Mac\u{2019}s session at \(time)."
                 } else {
-                    handoffNotice = "An older running session was stopped at \(time)."
+                    handoffNotice = "Stopped an older running session at \(time)."
                 }
                 Log.engine.info("Reconcile: ended an older active session (handoff)")
             }

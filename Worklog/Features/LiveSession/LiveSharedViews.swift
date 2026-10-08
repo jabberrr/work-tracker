@@ -272,7 +272,7 @@ struct LiveSegmentForm: View {
                     }
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .help(mode == .split ? "Close the current segment and start a new one now" : "Save changes to this segment")
+                .help(mode == .split ? "Split segment" : "Save")
             }
             .controlSize(isInline ? .small : .regular)
         }
@@ -385,7 +385,7 @@ struct LiveTagMenu: View {
         .foregroundStyle(theme.textSecondary)
         .accessibilityLabel("Tags")
         .accessibilityValue(liveSelection.isEmpty ? "None" : summary)
-        .help("Choose tags")
+        .help("Tags")
     }
 
     /// Never read a tag deleted or merged in Settings while this menu was on screen.
@@ -459,7 +459,7 @@ struct LiveQuickNoteField: View {
                     .onSubmit(submit)
                     .onExitCommand { focusBinding.wrappedValue = false }
                     .accessibilityLabel("Note")
-                    .accessibilityHint("Press Return to add a timestamped note")
+                    .accessibilityHint("Return adds a timestamped note.")
                 Image(systemName: "return")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textTertiary)
@@ -549,9 +549,9 @@ struct LiveTakeawayView: View {
                             .contentShape(Rectangle())
                     }
                     .buttonStyle(.plain)
-                    .help("Open “\(takeaway.title)” in History")
+                    .help("Open session")
                     .accessibilityLabel("From \(meta)")
-                    .accessibilityHint("Opens the session in History")
+                    .accessibilityHint("Opens the session in History.")
                 }
                 .frame(maxWidth: .infinity, alignment: .leading)
             }
@@ -565,7 +565,7 @@ struct LiveTakeawayView: View {
                 .buttonStyle(IconButtonStyle(size: isCompact ? 20 : 24))
                 .foregroundStyle(theme.textTertiary)
                 .accessibilityLabel("Done with this takeaway")
-                .help("Done: stop showing this takeaway")
+                .help("Done")
             }
         }
         .accessibilityElement(children: .contain)
@@ -606,7 +606,7 @@ struct LiveOtherMacHint: View {
             .font(theme.captionFont)
             .foregroundStyle(theme.textTertiary)
             .lineLimit(1)
-            .help("This session was started or last changed on another Mac. Pausing, splitting or stopping it here takes it over.")
+            .help("Running on another Mac")
     }
 }
 

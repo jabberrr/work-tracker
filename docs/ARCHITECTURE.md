@@ -84,6 +84,8 @@ Owners:
 /Worklog/Services/AttachmentImporter.swift          CORE  (AttachmentImporter, ImportedImage, AttachmentImportError)
 /Worklog/Services/AppSettings.swift                 CORE  (AppSettings, BackupInterval)
 /Worklog/Services/OverlayPanelController.swift      CORE  (OverlayPanelController, OverlayPanel)
+/Worklog/Services/OverlayLayout.swift               CORE  (OverlayElement; round 2, §11.1)
+/Worklog/Services/ShortcutStore.swift               CORE  (ShortcutStore, ShortcutAction, ShortcutGroup, StoredShortcut, ShortcutValidation; round 2, §11.3)
 
 /Worklog/Utilities/Formatting.swift                 CORE  (TimeInterval/Date/DateInterval/String extensions)
 /Worklog/Utilities/Log.swift                        CORE
@@ -144,6 +146,8 @@ Owners:
 /WorklogTests/SessionMathTests.swift                CORE
 /WorklogTests/SessionEditorTests.swift              CORE
 /WorklogTests/ExportRoundTripTests.swift            CORE
+/WorklogTests/OverlayLayoutTests.swift              CORE  (round 2)
+/WorklogTests/ShortcutStoreTests.swift              CORE  (round 2)
 ```
 
 ### 1.2 Cross-agent dependencies
@@ -926,7 +930,10 @@ enum BackupInterval: String, CaseIterable, Identifiable, Codable {
 @MainActor @Observable
 final class AppSettings {
     init(defaults: UserDefaults = .standard)
+    /// Layout + compact, opacity, level, Spaces, hide-when-idle back to defaults; `overlayEnabled` is unchanged.
     func resetOverlayDefaults()
+    func overlayShows(_ element: OverlayElement) -> Bool   // overlayLayout.contains(element)
+    func resetOverlayLayout()                              // overlayLayout = OverlayElement.defaultLayout
     // properties below
 }
 ```
@@ -948,14 +955,7 @@ The table lists every key. Property names are exact, and the UserDefaults key is
 | `weekStartsOnMonday` | `Bool` | `true` | C stats |
 | `iCloudSyncEnabled` | `Bool` | `true` | PersistenceController (applies at next launch), C |
 | `overlayEnabled` | `Bool` | `false` | OverlayPanelController (source of truth for visibility) |
-| `overlayShowTimer` | `Bool` | `true` | OverlayView |
-| `overlayShowLabel` | `Bool` | `true` | OverlayView |
-| `overlayShowSegmentFocus` | `Bool` | `true` | OverlayView |
-| `overlayShowControls` | `Bool` | `true` | OverlayView (start/pause/stop) |
-| `overlayShowSplitButton` | `Bool` | `true` | OverlayView |
-| `overlayShowNoteField` | `Bool` | `true` | OverlayView |
-| `overlayShowLastTakeaway` | `Bool` | `true` | OverlayView |
-| `overlayShowTodayTotal` | `Bool` | `false` | OverlayView |
+| `overlayLayout` | `[OverlayElement]` (stored as `[String]` raw values) | `OverlayElement.defaultLayout` (migrated once from the round-1 `overlayShow…` keys, §11.2) | OverlayView / OverlayContent, OverlayLayoutEditor |
 | `overlayCompact` | `Bool` | `false` | OverlayView (≈220pt wide vs 300pt) |
 | `overlayOpacity` | `Double` | `0.95` (clamped 0.4…1.0) | OverlayPanelController |
 | `overlayAlwaysOnTop` | `Bool` | `true` | OverlayPanelController (`.floating` vs `.normal` level) |
@@ -965,7 +965,9 @@ The table lists every key. Property names are exact, and the UserDefaults key is
 | `backupRetentionCount` | `Int` | `10` (clamp 1…100) | BackupService |
 | `backupIncludesAttachments` | `Bool` | `true` | BackupService |
 
-Theme, appearance and accent are **not** in AppSettings. ThemeManager owns them (§4).
+Theme, appearance and accent are **not** in AppSettings. ThemeManager owns them (§4). Keyboard shortcuts are **not** in AppSettings either: `ShortcutStore` owns them (key `"shortcuts.overrides"`, §11.3).
+
+The round-1 keys `settings.overlayShowTimer`, `…Label`, `…SegmentFocus`, `…Controls`, `…SplitButton`, `…NoteField`, `…LastTakeaway` and `…TodayTotal` are no longer properties. They are read once by the `overlayLayout` migration and otherwise left untouched (so a downgrade still works).
 
 ### 3.9 Export, import and backup
 
@@ -1146,10 +1148,12 @@ enum AttachmentImportError: LocalizedError { case unreadableImage, encodingFaile
 ### 3.12 `WindowRouter`, `SidebarItem`, `AppServices`
 ```swift
 enum SidebarItem: String, CaseIterable, Identifiable, Hashable {
-    case today, history, learning, stats
+    case today, history, learning, stats, settings
     var id: String { rawValue }
-    var title: String { get }        // "Today", "History", "Learning", "Stats"
-    var systemImage: String { get }  // "timer", "clock.arrow.circlepath", "lightbulb", "chart.bar.xaxis"
+    /// The List rows: [.today, .history, .learning, .stats] (Settings is pinned in the sidebar footer).
+    static let primaryItems: [SidebarItem]
+    var title: String { get }        // "Today", "History", "Learning", "Stats", "Settings"
+    var systemImage: String { get }  // "timer", "clock.arrow.circlepath", "lightbulb", "chart.bar.xaxis", "gearshape"
 }
 
 @MainActor @Observable
@@ -1161,12 +1165,18 @@ final class WindowRouter {
     private(set) var noteFocusRequest: Int = 0
     private(set) var splitRequest: Int = 0
 
-    /// Called by RootView and MenuBarLabelView in .onAppear with @Environment(\.openWindow).
-    func register(openWindow: OpenWindowAction)
-    /// NSApp.activate(ignoringOtherApps: true) + openWindow(id: WindowID.main) (brings an existing Window to front).
+    /// Settings tab to select (a `SettingsTab` rawValue); SettingsView consumes it and sets it back to nil.
+    var settingsTabRequest: String?
+
+    /// Called by RootView, MenuBarLabelView and MenuBarPanelView in .onAppear with @Environment(\.openWindow).
+    /// `openSettings` is deprecated and ignored (there is no Settings scene); it only keeps old call sites compiling.
+    func register(openWindow: OpenWindowAction, openSettings: OpenSettingsAction? = nil)
+    /// NSApp.activate() + openWindow(id: WindowID.main) (brings an existing Window to front, or reopens it).
     func showMainWindow()
-    /// Activate + NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil).
+    /// selection = .settings; showMainWindow(). Works when the main window was closed.
     func showSettings()
+    /// settingsTabRequest = tab; showSettings()
+    func showSettings(tab: String)
     func show(_ item: SidebarItem)                 // selection = item; showMainWindow()
     func showSession(_ session: WorkSession)       // .history + selectedSessionID = session.persistentModelID
     func requestNoteFocus()                        // selection = .today; showMainWindow(); noteFocusRequest += 1
@@ -1178,6 +1188,7 @@ final class AppServices {
     static let shared = AppServices()
     static let preview = AppServices(inMemory: true)   // populated by PreviewData
     let settings: AppSettings
+    let shortcuts: ShortcutStore          // same UserDefaults as `settings` (ephemeral suite when inMemory)
     let persistence: PersistenceController
     let themeManager: ThemeManager
     let auth: AuthService
@@ -1188,7 +1199,7 @@ final class AppServices {
     let overlay: OverlayPanelController
     var container: ModelContainer { persistence.container }
 
-    /// Order: settings → persistence(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory:) → themeManager → auth →
+    /// Order: settings → shortcuts(defaults:) → persistence(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory:) → themeManager → auth →
     /// router → engine(context: mainContext) → exporter → backups → overlay(settings:);
     /// SeedData.seedIfNeeded + deduplicate (or PreviewData.populate if inMemory);
     /// engine.restoreActiveSession(); overlay.install(services: self).
@@ -1198,7 +1209,8 @@ final class AppServices {
 extension View {
     /// Injects every service + modelContainer + theme. Apply to EVERY scene root and to the overlay hosting view.
     func withAppServices(_ services: AppServices) -> some View
-    // = self.environment(services.settings).environment(services.persistence).environment(services.themeManager)
+    // = self.environment(services.settings).environment(services.shortcuts).environment(services.persistence)
+    //   .environment(services.sync).environment(services.themeManager)
     //   .environment(services.auth).environment(services.router).environment(services.engine)
     //   .environment(services.exporter).environment(services.backups).environment(services.overlay)
     //   .modelContainer(services.container).worklogThemed(services.themeManager)
@@ -1501,11 +1513,10 @@ struct WorklogApp: App {
                 .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 1100, height: 720)
+        .windowResizability(.contentMinSize)   // the window minimum is the root's 900 × 600, never a child's
         .commands { WorklogCommands(services: services) }
 
-        Settings {
-            SettingsView().withAppServices(services)
-        }
+        // No Settings scene: Settings is a page of the main window (SidebarItem.settings, §11.4).
 
         MenuBarExtra(isInserted: Bindable(services.settings).showMenuBarExtra) {
             MenuBarPanelView().withAppServices(services)
@@ -1533,20 +1544,25 @@ struct WorklogApp: App {
 ### 5.2 `RootView` (CORE)
 - If `auth.needsWelcome`, show `WelcomeView()` full-window. While `.unknown`, show the main UI.
 - Otherwise show a `NavigationSplitView`:
-  - **Sidebar:** a `List(selection: $router.selection)` over `SidebarItem.allCases`, using `Label(item.title, systemImage: item.systemImage)`.
-  - **Mini status row:** shows the live timer via TimelineView plus the label when `engine.isActive`. Clicking it selects `.today`.
-  - **Footer:** account name or "Guest", and a `SettingsLink` gear.
+  - **Sidebar:** a `List(selection:)` over `SidebarItem.primaryItems`, `.listStyle(.sidebar)`, using `Label(item.title, systemImage: item.systemImage)`. The selection binding reads `nil` while `router.selection == .settings`.
+  - **Pinned bottom inset** (`.safeAreaInset(edge: .bottom, spacing: 0)`, sidebar background), never a VStack sibling of the List:
+    - **Mini status row:** shows the live timer via TimelineView plus the label when `engine.isActive`. Clicking it selects `.today`.
+    - **Footer:** account icon + name ("Guest") as one plain button → `router.showSettings(tab: "account")`; a gear button (`IconButtonStyle(size: 24)`) → `router.selection = .settings`, shown as `gearshape.fill` in the accent colour (and `.isSelected`) while Settings is shown.
   - **Sidebar background:** `themedBackground(.sidebar)`.
+- **Detail column:** a min-size barrier: `VStack(spacing: 0) { bannerStack; detail.frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity) }.frame(minWidth: 0, …).clipped().themedBackground(.background)`, so no page's data-dependent minimum size can grow or move the window.
 - **Detail switch:**
   - `.today` → `LiveSessionView()`
   - `.history` → `HistoryView()`
   - `.learning` → `LearningView()`
   - `.stats` → `StatsView()`
+  - `.settings` → `SettingsView()`
 - **End-of-session sheet:** `.sheet(item: Binding(get: { engine.pendingEndSession }, set: { if $0 == nil { engine.completeReview() } })) { EndSessionSheet(session: $0) }`
 - **On appear:** `.onAppear { router.register(openWindow: openWindow) }`
-- **Storage banner:** if `persistence.storeMode` is `.localOnly`, show a dismissible `InlineBanner` (info) at the top of the detail. If it is `.inMemory`, show a persistent error banner with "Restore from backup…", which calls `router.showSettings()`.
+- **Storage banner:** if `persistence.storeMode` is `.localOnly`, show a dismissible `InlineBanner` (info) at the top of the detail. If it is `.inMemory`, show a persistent error banner ("Your data couldn’t be opened. Changes won’t be saved.") with "Restore…", which calls `router.showSettings(tab: "data")`. A sync error shows "iCloud sync problem. Changes are saved on this Mac." with "Details…" → `router.showSettings(tab: "account")`.
 
 ### 5.3 Root views each feature agent MUST define (exact names and inits)
+
+Round 2 changed several of these views (in-app Settings, the overlay layout editor, History's layout); §11 and `docs/DESIGN.md` describe the current behaviour where they differ from the round-1 notes below.
 
 | Type | Init | Owner | Shown by |
 |---|---|---|---|
@@ -1561,7 +1577,7 @@ struct WorklogApp: App {
 | `LearningsEditorStyle` | `enum { case full, compact }` | B | — |
 | `LearningView` | `init()` | C | RootView `.learning` |
 | `StatsView` | `init()` | C | RootView `.stats` |
-| `SettingsView` | `init()` | C | `Settings` scene |
+| `SettingsView` | `init()` | C | RootView `.settings` (in-app; there is no `Settings` scene) |
 | `WelcomeView` | `init()` | C | RootView gate |
 
 **Feature A.**
@@ -1660,10 +1676,11 @@ struct WorklogApp: App {
 
 ### 5.4 Commands and keyboard shortcuts (CORE `WorklogCommands`)
 
-`CommandMenu("Session")` uses static titles, because Commands don't reliably observe state. Actions do nothing when they don't apply.
+`CommandMenu("Session")` uses static titles, because Commands don't reliably observe state. Actions do nothing when they don't apply. Every shortcut below except ⌘, is a **default**: the user can change it (`ShortcutStore`, §11.3). Each item is a private `ShortcutCommandButton` View that reads `store.shortcut(for:)` in its own body, so changes apply to the menus immediately.
 
 | Action | Shortcut | Behavior |
 |---|---|---|
+| Settings… (app menu) | ⌘, (fixed) | `router.showSettings()` (`CommandGroup(replacing: .appSettings)`; required, since there is no Settings scene) |
 | Start / Stop Session | ⌘⇧S | active → `engine.stop()` + `router.showMainWindow()`; else `engine.start(label: engine.defaultLabel())` |
 | Pause / Resume | ⌘⇧P | `engine.togglePause()` |
 | Add Note… | ⌘⇧N | `router.requestNoteFocus()` |
@@ -1678,8 +1695,8 @@ These shortcuts don't collide with anything:
 - ⌘, opens Settings, which is standard.
 
 Within views:
-- ⌘F focuses History search (`.searchable` or a FocusState).
-- ⌘↩ saves the EndSessionSheet; Esc closes it.
+- ⌘F (default; `ShortcutAction.findInHistory`) focuses History search.
+- ⌘↩ (default; `ShortcutAction.saveReview`) saves the EndSessionSheet; Esc (fixed) closes it.
 - Return submits note fields.
 - ⌫ deletes the selected History row (with confirm).
 
@@ -1752,7 +1769,7 @@ Within views:
 12. **Stop edge cases.** Stop while paused closes the pause at the stop time. A session under 60 s still opens the EndSessionSheet, which highlights Discard.
 13. **Split edge cases.** Live split is allowed while paused. After-the-fact split must be strictly inside the segment, at least `minimumSegmentLength` from each end. Editing times never breaks contiguity, because `normalize` runs.
 14. **Import or restore while active.** Replace mode is blocked with a clear error. Merge is allowed. After any import, the engine reconciles via the notification.
-15. **Settings scene with no main window.** `router.showSettings()` activates the app first. `router.showMainWindow()` works even after the main window was closed, because the openWindow action was registered at launch.
+15. **Settings with no main window.** Settings is a page of the main window, so `router.showSettings()` selects it and calls `router.showMainWindow()`, which works even after the main window was closed, because the openWindow action was registered at launch (by the menu bar label).
 16. **Overlay focus.** The panel is non-activating but can become key, so typing a note doesn't steal app focus. It never hides on deactivate. Its position persists through the frame autosave name.
 
 ---
@@ -1912,3 +1929,110 @@ schemes:
 - /home/user/work-tracker/Worklog/Services/SessionEngine.swift (live session state machine shared by window, menu bar and overlay)
 - /home/user/work-tracker/Worklog/App/AppServices.swift (service graph + `withAppServices` injection used by every scene)
 - /home/user/work-tracker/Worklog/DesignSystem/Theme.swift (Theme API every view depends on)
+
+---
+
+## 11. Round 2
+
+Round 2 adds in-app Settings, customizable shortcuts and an editable overlay layout, and fixes the History layout bug. The engine/app side (CORE, "ENG") is summarised here. The design side is in `docs/DESIGN.md` §7–§12.
+
+### 11.1 `Services/OverlayLayout.swift`
+
+```swift
+/// One element of the floating overlay. Persisted by rawValue in `AppSettings.overlayLayout`.
+enum OverlayElement: String, CaseIterable, Identifiable, Codable, Hashable {
+    case label, timer, segmentFocus, controls, split, todayTotal, note, takeaway
+    var id: String { rawValue }
+    var title: String { get }          // "Label", "Timer", "Segment focus", "Controls", "Split", "Today’s total", "Quick note", "Takeaway"
+    var systemImage: String { get }    // "tag", "timer", "scope", "playpause", "scissors", "target", "square.and.pencil", "quote.opening"
+    /// Fresh install and "Reset layout": [.label, .timer, .segmentFocus, .controls, .split, .note, .takeaway]
+    static let defaultLayout: [OverlayElement]
+    /// Legacy migration order: [.label, .timer, .segmentFocus, .controls, .split, .todayTotal, .note, .takeaway]
+    static let migrationOrder: [OverlayElement]
+    /// Drops unknown raw values and duplicates (first occurrence wins), keeps order.
+    static func sanitized(_ rawValues: [String]) -> [OverlayElement]
+}
+```
+
+### 11.2 `AppSettings` overlay changes
+
+- **Removed:** `overlayShowTimer`, `overlayShowLabel`, `overlayShowSegmentFocus`, `overlayShowControls`, `overlayShowSplitButton`, `overlayShowNoteField`, `overlayShowLastTakeaway`, `overlayShowTodayTotal`.
+- **Kept:** `overlayEnabled`, `overlayCompact`, `overlayOpacity`, `overlayAlwaysOnTop`, `overlayShowOnAllSpaces`, `overlayHideWhenIdle`.
+- **Added:** `var overlayLayout: [OverlayElement]` (key `settings.overlayLayout`, `[String]` raw values), `func overlayShows(_:) -> Bool`, `func resetOverlayLayout()`. An empty layout is valid (the overlay shows only its header).
+- **Migration** (in `init`, once): a stored `settings.overlayLayout` array is sanitized and used. Otherwise the layout is built from `migrationOrder`, keeping each element whose legacy key (`settings.overlayShowLabel`, `…Timer`, `…SegmentFocus`, `…Controls`, `…SplitButton`, `…TodayTotal`, `…NoteField`, `…LastTakeaway`) is true; an absent key counts as its old default (all on except Today’s total). The result is written immediately, so later changes to the legacy keys have no effect. The legacy keys themselves are left untouched (downgrade-safe). With default legacy values the result is exactly `defaultLayout`.
+- **`resetOverlayDefaults()`** sets `overlayLayout = .defaultLayout`, `overlayCompact = false`, `overlayOpacity = 0.95`, `overlayAlwaysOnTop = true`, `overlayShowOnAllSpaces = true`, `overlayHideWhenIdle = false`. `overlayEnabled` is unchanged.
+
+### 11.3 `Services/ShortcutStore.swift`
+
+```swift
+enum ShortcutGroup: String, CaseIterable, Identifiable { case session, navigation, editing; var title: String { get } }
+
+enum ShortcutAction: String, CaseIterable, Identifiable, Codable {
+    case startStop, pauseResume, addNote, splitSegment, discardSession, toggleOverlay   // .session
+    case showToday, showHistory, showLearning, showStats                              // .navigation
+    case findInHistory, saveReview                                                    // .editing (in-view)
+    var title: String { get }                    // also the Settings ▸ Shortcuts row title
+    var group: ShortcutGroup { get }
+    var defaultShortcut: StoredShortcut? { get } // ⇧⌘S ⇧⌘P ⇧⌘N ⇧⌘D – ⇧⌘O ⌘1 ⌘2 ⌘3 ⌘4 ⌘F ⌘↩
+}
+
+struct StoredShortcut: Codable, Hashable {
+    var key: String        // one lowercase character, or a token ("return", "escape", "delete", "deleteForward", "tab",
+                           // "space", "upArrow", "downArrow", "leftArrow", "rightArrow", "home", "end", "pageUp", "pageDown")
+    var modifiers: Int     // EventModifiers.rawValue, limited to ⌃⌥⇧⌘
+    init(key: String, modifiers: EventModifiers)   // lowercases single characters, drops other modifiers
+    static let none: StoredShortcut                // key "" = explicitly no shortcut
+    var isNone: Bool { get }
+    var eventModifiers: EventModifiers { get }
+    var keyboardShortcut: KeyboardShortcut? { get } // nil for .none or an invalid key
+    var displayString: String { get }               // "⌃⌥⇧⌘S" order; "" for .none
+    init?(event: NSEvent)                           // keyDown only; nil for F-keys, keypad-only keys, empty
+}
+
+enum ShortcutValidation: Equatable {
+    case ok, needsModifier, reserved, conflict(ShortcutAction)
+    var message: String? { get }   // nil, "Include ⌘ or ⌃.", "Reserved by macOS.", "Used by <title>."
+}
+
+@MainActor @Observable
+final class ShortcutStore {
+    init(defaults: UserDefaults = .standard)
+    func stored(for action: ShortcutAction) -> StoredShortcut?        // override (nil if .none) else default
+    func shortcut(for action: ShortcutAction) -> KeyboardShortcut?    // for `.keyboardShortcut(_:)` (optional overload)
+    func displayString(for action: ShortcutAction) -> String?         // nil when unassigned
+    func isDefault(_ action: ShortcutAction) -> Bool
+    var hasCustomizations: Bool { get }
+    func validate(_ shortcut: StoredShortcut, for action: ShortcutAction) -> ShortcutValidation
+    @discardableResult func set(_ shortcut: StoredShortcut?, for action: ShortcutAction) -> ShortcutValidation
+    func reset(_ action: ShortcutAction)
+    func resetAll()
+    static let reservedShortcuts: [StoredShortcut]   // ⌘, ⌘Q ⌘W ⌘H ⌥⌘H ⌘M ⌃⌘F ⌃⌘S ⌘` ⌃⌘Q ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⇧⌘/
+}
+```
+
+- **Validation order:** the modifiers must include ⌘ or ⌃ (`.needsModifier`), the combo must not be reserved (`.reserved`), and it must not equal another action's effective shortcut (`.conflict(other)`). Re-assigning an action its current shortcut is `.ok`.
+- **`set`:** `nil` or `StoredShortcut.none` clears (always `.ok`). Anything else is validated and written only on `.ok`. A value equal to the default removes the override. Note that in a `StoredShortcut?` context a bare `.none` means `nil`; both clear.
+- **`reset`:** removes the override. If another action has since taken that default, that other action is cleared, so no two actions ever share a shortcut.
+- **Persistence:** UserDefaults key `shortcuts.overrides` holds JSON `[String: StoredShortcut]` keyed by `ShortcutAction.rawValue`. Only overrides are stored; a cleared action with a default stores `StoredShortcut.none` (clearing Discard Session, which has no default, is the default state). Unknown keys and undecodable data are ignored. With no overrides the key is removed.
+- **Plumbing:** `AppServices.shortcuts` is created right after `settings` with the same `defaults` (the ephemeral suite when `inMemory`). `withAppServices` adds `.environment(services.shortcuts)`, so the main window, the MenuBarExtra (panel and label) and the overlay panel all have it, and sheets/popovers inherit it. Views read it with `@Environment(ShortcutStore.self) private var shortcuts`.
+- **Users:** `WorklogCommands` (every Session and View menu item through a private `ShortcutCommandButton` View), HistoryView (⌘F, `.findInHistory`), EndSessionSheet (Save, `.saveReview`), the menu bar panel's overlay hint (`displayString(for: .toggleOverlay)`) and Settings ▸ Shortcuts.
+- **Fixed, not customizable:** ⌘, Settings; ⌘Q, ⌘H, ⌘W, ⌘M, full screen, ⌃⌘S Toggle Sidebar; the Edit menu; `.defaultAction`/`.cancelAction` in sheets and popovers; Return in text fields; ⌫ in the History list; ←/→ in the image viewer.
+
+### 11.4 In-app Settings and navigation
+
+- `SidebarItem` gains `.settings` ("Settings", `gearshape`) and `static let primaryItems` (the four List rows).
+- There is no `Settings` scene. `WorklogCommands` replaces `.appSettings` with "Settings…" (⌘, fixed) → `router.showSettings()`.
+- `WindowRouter.showSettings()` is `selection = .settings; showMainWindow()` (it reopens a closed main window). `showSettings(tab:)` sets `settingsTabRequest` first. `register(openWindow:openSettings:)` ignores `openSettings` (deprecated). There is no `OpenSettingsAction` storage, and no view uses `SettingsLink` or `@Environment(\.openSettings)`.
+- `RootView` shows `SettingsView()` for `.settings`; the footer gear selects it and is highlighted while it is shown (§5.2). The account name opens Settings ▸ Account.
+- While `auth.needsWelcome`, the Welcome screen covers the whole window, so Settings requests only take effect after it.
+
+### 11.5 Window sizing (History layout fix)
+
+- The main `Window` uses `.windowResizability(.contentMinSize)` with the root's `.frame(minWidth: 900, minHeight: 600)` and `.defaultSize(1100, 720)`.
+- RootView's detail column is a min-size barrier (explicit `minWidth: 0`/`minHeight: 0` frames + `.clipped()`), and the sidebar's mini status row and footer are pinned with `.safeAreaInset(edge: .bottom)`.
+- Feature side (F1): `HistoryView` no longer nests an `HSplitView` inside the `NavigationSplitView`; it uses an `HStack` with a fixed, user-draggable list width (`history.listWidth`, 280–460, default 340) and a zero-minimum detail.
+
+### 11.6 Copy
+
+User-facing strings follow the copy guideline in `docs/DESIGN.md` §12.0 (short action-name tooltips, ≤ 1-sentence helper text and errors, no hard-coded shortcut glyphs). On the CORE side this covers the RootView banners and footer, the recovery launch notices in `AppServices`, the engine's handoff notices and the error messages of `SessionEditError`, `DataTransferError`, `AttachmentImportError`, `AuthService`, `BackupService` and `SyncMonitor`.
+

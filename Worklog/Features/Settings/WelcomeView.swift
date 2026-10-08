@@ -47,9 +47,8 @@ struct WelcomeView: View {
                     .frame(width: 260, height: 36)
                     .accessibilityLabel("Sign in with Apple")
 
-                Button("Continue without signing in") { auth.continueWithoutSigningIn() }
+                Button("Continue as Guest") { auth.continueWithoutSigningIn() }
                     .buttonStyle(QuietButtonStyle())
-                    .help("Use Worklog as a guest. You can sign in later in Settings ▸ Account.")
             }
 
             themePicker
@@ -61,7 +60,7 @@ struct WelcomeView: View {
                     .multilineTextAlignment(.center)
                     .fixedSize(horizontal: false, vertical: true)
                 if !Entitlements.hasSignInWithApple {
-                    Text("Sign in with Apple isn’t configured for this build — continue without signing in.")
+                    Text("Sign in with Apple isn’t available in this build.")
                         .font(theme.captionFont)
                         .foregroundStyle(theme.textTertiary)
                         .multilineTextAlignment(.center)
@@ -83,18 +82,18 @@ struct WelcomeView: View {
     private var storageLine: String {
         switch persistence.storeMode {
         case .cloudKit:
-            return "Your data syncs with iCloud on this Mac’s Apple Account either way."
+            return "Your data syncs with iCloud either way."
         case .localOnly:
             if !Entitlements.hasCloudKit {
                 return "Your data is saved on this Mac."
             }
             return persistence.cloudSyncRequestedAtLaunch
-                ? "iCloud isn’t available right now, so your data is saved on this Mac. See Settings ▸ Account."
-                : "Your data is saved on this Mac. You can turn on iCloud sync in Settings ▸ Account."
+                ? "iCloud isn’t available, so your data stays on this Mac."
+                : "Your data stays on this Mac until you turn on iCloud sync."
         case .inMemory(let reason):
             return reason == "Preview"
-                ? "Preview — nothing is saved."
-                : "Worklog couldn’t open its data store. You can recover it in Settings ▸ Data."
+                ? "Preview, so nothing is saved."
+                : "Your data couldn’t be opened. Recover it in Settings."
         }
     }
 
@@ -108,9 +107,6 @@ struct WelcomeView: View {
                 .foregroundStyle(theme.textSecondary)
                 .accessibilityAddTraits(.isHeader)
             ThemeSwatchRow()
-            Text("You can change it any time in Settings ▸ Appearance.")
-                .font(theme.captionFont)
-                .foregroundStyle(theme.textTertiary)
         }
     }
 }

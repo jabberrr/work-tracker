@@ -65,7 +65,7 @@ struct LearningsEditor: View {
             }
             pointsEditor
         }
-        .frame(maxWidth: .infinity, alignment: .leading)
+        .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
         .onChange(of: session.learningText) { _, _ in
             markEdited()
         }
@@ -142,10 +142,10 @@ struct LearningsEditor: View {
                 Text("\(count)/\(Self.summaryGuidanceLength)")
                     .font(theme.captionFont.monospacedDigit())
                     .foregroundStyle(over ? theme.warning : theme.textTertiary)
-                    .help(over ? "Shorter takeaways fit the overlay better." : "Suggested length: up to 140 characters.")
+                    .help("Suggested length")
                     .accessibilityLabel("\(count) of \(Self.summaryGuidanceLength) suggested characters")
             }
-            TextField("One line to see when you start your next session", text: $session.overlaySummary)
+            TextField("One line for next time", text: $session.overlaySummary)
                 .textFieldStyle(.plain)
                 .font(theme.bodyFont)
                 .foregroundStyle(theme.textPrimary)
@@ -158,10 +158,9 @@ struct LearningsEditor: View {
                 .toggleStyle(.checkbox)
                 .font(theme.calloutFont)
                 .foregroundStyle(theme.textPrimary)
-                .help("Show this takeaway in the overlay and menu bar during your next session.")
 
             if session.showInOverlay && session.takeawayText == nil {
-                Text("Add a takeaway or what you learned, so there is something to show.")
+                Text("Add a takeaway or learning to show.")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -204,7 +203,7 @@ struct LearningsEditor: View {
                     }
                     .buttonStyle(.plain)
                     .foregroundStyle(theme.accent)
-                    .help("Tag learning points and rate how well you know them")
+                    .help(showsPointDetails ? "Hide details" : "Show details")
                 }
             }
 
@@ -235,7 +234,7 @@ struct LearningsEditor: View {
             }
 
             if points.isEmpty {
-                Text("Short, specific lessons. Tag them to follow a topic on the Learning page.")
+                Text("Tag points to follow a topic on the Learning page.")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -262,7 +261,7 @@ struct LearningsEditor: View {
                 .buttonStyle(QuietButtonStyle())
                 .controlSize(.small)
                 .disabled(newPointText.isBlank)
-                .help("Add learning point (Return)")
+                .help("Add learning point")
         }
         .insetField(isFocused: focusedField == .newPoint)
     }
@@ -418,7 +417,7 @@ private struct LearningsPointRow: View {
                         .lineLimit(1)
                         .padding(theme.spacingS)
                 }
-                .help("Drag to reorder")
+                .help("Reorder")
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: theme.spacingXS) {
@@ -435,20 +434,24 @@ private struct LearningsPointRow: View {
                 if showsDetails {
                     HStack(alignment: .center, spacing: theme.spacingM) {
                         TagPicker(selection: $point.tagList, scopeLabel: scopeLabel)
-                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
                         LearningsMasteryControl(rating: $point.mastery)
                     }
                 } else if !point.tagList.isEmpty || point.mastery > 0 {
                     HStack(spacing: theme.spacingS) {
                         TagChipsRow(tags: point.tagList)
+                            .frame(minWidth: 0, alignment: .leading)
                         if point.mastery > 0 {
                             Text("Mastery \(point.mastery)/5")
                                 .font(theme.captionFont.monospacedDigit())
                                 .foregroundStyle(theme.textTertiary)
+                                .lineLimit(1)
+                                .fixedSize()
                         }
                     }
                 }
             }
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
             Button(action: onDelete) {
                 Image(systemName: "trash")
@@ -456,7 +459,7 @@ private struct LearningsPointRow: View {
             .buttonStyle(IconButtonStyle(size: 22))
             .padding(.top, 2)
             .accessibilityLabel("Delete learning point")
-            .help("Delete learning point")
+            .help("Delete")
         }
         .padding(.vertical, 2)
         .padding(.horizontal, 2)
@@ -501,7 +504,8 @@ private struct LearningsPointRow: View {
 
 // MARK: - Mastery
 
-/// Five small circles, filled up to the rating in the accent color; clicking the current value clears it.
+/// "Mastery" caption + five small circles, filled up to the rating in the accent color; clicking the
+/// current value clears it. Each dot's tooltip names its value ("Mastery 3 of 5").
 @MainActor
 private struct LearningsMasteryControl: View {
     @Environment(\.theme) private var theme
@@ -512,6 +516,27 @@ private struct LearningsMasteryControl: View {
     }
 
     var body: some View {
+        HStack(spacing: 4) {
+            Text("Mastery")
+                .font(theme.captionFont)
+                .foregroundStyle(theme.textTertiary)
+                .lineLimit(1)
+            dots
+        }
+        .fixedSize()
+        .accessibilityElement(children: .ignore)
+        .accessibilityLabel("Mastery")
+        .accessibilityValue(rating == 0 ? "Not rated" : "\(rating) of 5")
+        .accessibilityAdjustableAction { direction in
+            switch direction {
+            case .increment: rating = min(5, rating + 1)
+            case .decrement: rating = max(0, rating - 1)
+            @unknown default: break
+            }
+        }
+    }
+
+    private var dots: some View {
         HStack(spacing: 2) {
             ForEach(1...5, id: \.self) { value in
                 let filled = value <= rating
@@ -529,16 +554,6 @@ private struct LearningsMasteryControl: View {
                 }
                 .buttonStyle(.plain)
                 .help(rating == value ? "Clear mastery" : "Mastery \(value) of 5")
-            }
-        }
-        .accessibilityElement(children: .ignore)
-        .accessibilityLabel("Mastery")
-        .accessibilityValue(rating == 0 ? "Not rated" : "\(rating) of 5")
-        .accessibilityAdjustableAction { direction in
-            switch direction {
-            case .increment: rating = min(5, rating + 1)
-            case .decrement: rating = max(0, rating - 1)
-            @unknown default: break
             }
         }
     }

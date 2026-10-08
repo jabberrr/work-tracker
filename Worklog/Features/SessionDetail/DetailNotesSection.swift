@@ -37,7 +37,7 @@ struct DetailNotesSection: View {
                     }
                     .buttonStyle(IconButtonStyle(size: 22))
                     .accessibilityLabel("Add note")
-                    .help("Add a note at a chosen time")
+                    .help("Add note")
                 }
             }
 
@@ -90,7 +90,7 @@ struct DetailNotesSection: View {
     private func noteRow(_ note: Note) -> some View {
         HStack(alignment: .top, spacing: theme.spacingS) {
             NoteRow(note: note, showsSegment: true)
-                .frame(maxWidth: .infinity, alignment: .leading)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             Menu {
                 noteMenuItems(note)
             } label: {
@@ -101,7 +101,7 @@ struct DetailNotesSection: View {
             .menuIndicator(.hidden)
             .fixedSize()
             .padding(.top, theme.spacingXS)
-            .help("Note actions")
+            .help("More")
             .accessibilityLabel("Note actions")
         }
         .contextMenu { noteMenuItems(note) }

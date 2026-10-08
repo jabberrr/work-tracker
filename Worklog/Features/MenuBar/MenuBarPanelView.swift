@@ -10,8 +10,8 @@ struct MenuBarPanelView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(WindowRouter.self) private var router
     @Environment(OverlayPanelController.self) private var overlay
+    @Environment(ShortcutStore.self) private var shortcuts
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.theme) private var theme
 
     @State private var isSplitting = false
@@ -58,7 +58,7 @@ struct MenuBarPanelView: View {
     }
 
     private func onAppear() {
-        router.register(openWindow: openWindow, openSettings: openSettings)
+        router.register(openWindow: openWindow)
         if !didLoadDefaults {
             didLoadDefaults = true
             startLabel = engine.defaultLabel()
@@ -104,7 +104,7 @@ struct MenuBarPanelView: View {
             }
 
             if let reason = engine.autoPauseReason, isPaused {
-                Text(reason == .sleep ? "Paused when your Mac went to sleep." : "Paused when Worklog quit.")
+                Text(reason == .sleep ? "Paused while your Mac slept." : "Paused when Worklog quit.")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.warning)
             }
@@ -116,7 +116,7 @@ struct MenuBarPanelView: View {
                     Label(isPaused ? "Resume" : "Pause", systemImage: isPaused ? "play.fill" : "pause.fill")
                 }
                 .buttonStyle(QuietButtonStyle())
-                .help(isPaused ? "Resume (⌘⇧P)" : "Pause (⌘⇧P)")
+                .help(isPaused ? "Resume" : "Pause")
 
                 Button {
                     isSplitting.toggle()
@@ -124,7 +124,7 @@ struct MenuBarPanelView: View {
                     Label("Split", systemImage: "scissors")
                 }
                 .buttonStyle(QuietButtonStyle())
-                .help("Start a new segment")
+                .help("Split segment")
 
                 Spacer(minLength: 0)
 
@@ -132,7 +132,8 @@ struct MenuBarPanelView: View {
                     Label("Stop", systemImage: "stop.fill")
                 }
                 .buttonStyle(PrimaryButtonStyle())
-                .help("Stop and review the session (⌘⇧S)")
+                .help("Stop")
+                .accessibilityLabel("Stop session")
             }
             .controlSize(.small)
 
@@ -179,7 +180,7 @@ struct MenuBarPanelView: View {
             }
             if engine.pendingEndSession != nil {
                 HStack(spacing: theme.spacingS) {
-                    Text("A finished session is waiting for review.")
+                    Text("Session waiting for review.")
                         .font(theme.captionFont)
                         .foregroundStyle(theme.textSecondary)
                         .fixedSize(horizontal: false, vertical: true)
@@ -187,6 +188,7 @@ struct MenuBarPanelView: View {
                     Button("Review…") { router.showMainWindow() }
                         .buttonStyle(QuietButtonStyle())
                         .controlSize(.small)
+                        .help("Review session")
                 }
             }
             HStack(spacing: theme.spacingS) {
@@ -199,7 +201,7 @@ struct MenuBarPanelView: View {
                 }
                 .buttonStyle(PrimaryButtonStyle())
                 .controlSize(.small)
-                .help("Start a session with the chosen label (⌘⇧S)")
+                .help("Start session")
             }
         }
     }
@@ -241,7 +243,9 @@ struct MenuBarPanelView: View {
                     .font(theme.bodyFont)
                     .foregroundStyle(theme.textPrimary)
                     Spacer(minLength: 0)
-                    shortcutHint("⌘⇧O")
+                    if let hint = shortcuts.displayString(for: .toggleOverlay) {
+                        shortcutHint(hint)
+                    }
                 }
                 if settings.overlayEnabled && settings.overlayHideWhenIdle && !engine.isActive {
                     // Hidden while idle: say so, or the toggle looks broken.
@@ -253,7 +257,7 @@ struct MenuBarPanelView: View {
             }
             .padding(.horizontal, theme.spacingS)
             .padding(.vertical, theme.spacingXS + 1)
-            .help("Show the floating overlay")
+            .help("Show overlay")
 
             menuRow("Open Worklog", systemImage: "macwindow", hint: nil) {
                 router.showMainWindow()

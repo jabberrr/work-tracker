@@ -42,10 +42,9 @@ struct SettingsTagsPane: View {
                         .id(tag.persistentModelID)
                 } else if liveTags.isEmpty {
                     EmptyStateView(title: "No tags", systemImage: "number",
-                                   message: "Tags add detail to a label, like a project or a topic. Create one below or while starting a session.")
+                                   message: "Create one below.")
                 } else {
-                    EmptyStateView(title: "Select a tag", systemImage: "number",
-                                   message: "Choose a tag to rename it, give it a color or a parent label, merge or archive it.")
+                    EmptyStateView(title: "Select a tag", systemImage: "number")
                 }
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -117,7 +116,7 @@ struct SettingsTagsPane: View {
                 .font(theme.captionFont)
                 .monospacedDigit()
                 .foregroundStyle(theme.textTertiary)
-                .help("Sessions, segments and learning points using this tag")
+                .help("Times used")
         }
         .accessibilityElement(children: .combine)
         .accessibilityValue("\(tag.usageCount) uses\(tag.isArchived ? ", archived" : "")")
@@ -187,13 +186,13 @@ private struct SettingsTagEditor: View {
                     TagChip(tag: tag)
                 }
                 LabelPicker(selection: $tag.label, includeNone: true, title: "Parent label")
-                SettingsFootnote("A tag with a parent label is offered first when that label is picked. Without one, the tag is global.")
+                SettingsFootnote("Offered first when that label is picked.")
             }
 
             Section("Color") {
                 LabelColorPicker(hex: $tag.colorHex)
                 if tag.hasCustomColor {
-                    Button("Use Default Gray") { tag.colorHex = LabelPalette.defaultTagHex }
+                    Button("Reset Color") { tag.colorHex = LabelPalette.defaultTagHex }
                         .buttonStyle(QuietButtonStyle())
                         .controlSize(.small)
                 }
@@ -210,7 +209,6 @@ private struct SettingsTagEditor: View {
                         save()
                     }
                     .buttonStyle(QuietButtonStyle())
-                    .help(tag.isArchived ? "Offer this tag in pickers again" : "Hide from pickers. Past sessions keep the tag.")
                     Menu("Merge Into") {
                         ForEach(otherTags) { other in
                             Button(other.isArchived ? "\(other.name) (archived)" : other.name) {
@@ -220,7 +218,7 @@ private struct SettingsTagEditor: View {
                     }
                     .fixedSize()
                     .disabled(otherTags.isEmpty)
-                    .help("Replace this tag with another one everywhere and remove it")
+                    .help("Merge tag")
                     Spacer()
                     Button("Delete…") { confirmsDelete = true }
                         .buttonStyle(DestructiveButtonStyle())
@@ -257,16 +255,16 @@ private struct SettingsTagEditor: View {
             }
             Button("Cancel", role: .cancel) { mergeTarget = nil }
         } message: {
-            Text("Sessions, segments and learning points tagged “\(tag.name)” get “\(mergeTarget?.name ?? "")” instead, and “\(tag.name)” is deleted. This can’t be undone.")
+            Text("Everything tagged “\(tag.name)” gets “\(mergeTarget?.name ?? "")”, and this can’t be undone.")
         }
-        .confirmationDialog("Delete the tag “\(tag.name)”?", isPresented: $confirmsDelete, titleVisibility: .visible) {
+        .confirmationDialog("Delete “\(tag.name)”?", isPresented: $confirmsDelete, titleVisibility: .visible) {
             Button("Delete Tag", role: .destructive) {
                 TaxonomyOps.deleteTag(tag, in: context)
                 onDeleted()
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("It is removed from \(usageDescriptionShort). The sessions themselves are kept. This can’t be undone — archive it to just hide it.")
+            Text("Sessions are kept, but this can’t be undone.")
         }
     }
 
@@ -274,15 +272,12 @@ private struct SettingsTagEditor: View {
         (tag.sessions?.count ?? 0, tag.segments?.count ?? 0, tag.learningPoints?.count ?? 0)
     }
 
-    private var usageDescriptionShort: String {
-        let c = counts
-        return "\(c.sessions) \(c.sessions == 1 ? "session" : "sessions"), "
-            + "\(c.segments) \(c.segments == 1 ? "segment" : "segments") and "
-            + "\(c.points) learning \(c.points == 1 ? "point" : "points")"
-    }
-
+    /// "3 sessions · 2 segments · 4 learning points".
     private var usageDescription: String {
-        "Used on \(usageDescriptionShort)."
+        let c = counts
+        return "\(c.sessions) \(c.sessions == 1 ? "session" : "sessions") · "
+            + "\(c.segments) \(c.segments == 1 ? "segment" : "segments") · "
+            + "\(c.points) learning \(c.points == 1 ? "point" : "points")"
     }
 
     private func commitName() {

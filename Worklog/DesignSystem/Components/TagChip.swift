@@ -57,7 +57,7 @@ struct TagChip: View {
                 .buttonStyle(.plain)
                 .onHover { isHoveringRemove = $0 }
                 .accessibilityLabel("Remove tag \(name)")
-                .help("Remove “\(name)”")
+                .help("Remove")
             }
         }
         .padding(.leading, 7)

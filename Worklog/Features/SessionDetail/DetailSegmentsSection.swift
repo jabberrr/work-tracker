@@ -67,7 +67,7 @@ struct DetailSegmentsSection: View {
             }
 
             if segments.count == 1 {
-                Text("Switched to something else partway through? Use Split… to record when.")
+                Text("Use Split… to record a switch you didn’t log live.")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textTertiary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -87,7 +87,7 @@ struct DetailSegmentsSection: View {
             Button("Delete Segment", role: .destructive) { delete(segment) }
             Button("Cancel", role: .cancel) { deleteCandidate = nil }
         } message: { _ in
-            Text("Its time goes to the neighbouring segment, and its notes move there.")
+            Text("Its time and notes go to the neighbouring segment.")
         }
         .alert("Couldn’t change the segments",
                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -207,6 +207,7 @@ private struct DetailSegmentRow: View {
             + DesignSystemDurationSpeech.spoken(duration)
         return HStack(alignment: .center, spacing: theme.spacingM) {
             LabelBadge(label: segment.effectiveLabel, size: .small)
+                .frame(maxWidth: 160, alignment: .leading)
             VStack(alignment: .leading, spacing: 3) {
                 Text(focusText.isEmpty ? "No focus set" : focusText)
                     .font(theme.bodyFont)
@@ -214,9 +215,10 @@ private struct DetailSegmentRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(focusText)
+                    .frame(minWidth: 0, alignment: .leading)
                 TagChipsRow(tags: segment.tagList)
             }
-            .frame(maxWidth: .infinity, alignment: .leading)
+            .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
 
             Text(rangeText)
                 .font(theme.captionFont.monospacedDigit())
@@ -237,7 +239,7 @@ private struct DetailSegmentRow: View {
             .buttonStyle(QuietButtonStyle())
             .controlSize(.small)
             .fixedSize()
-            .help("Split this segment at a chosen time (for a switch you didn’t record live)")
+            .help("Split segment")
             .accessibilityLabel("Split segment")
 
             Menu {
@@ -249,7 +251,7 @@ private struct DetailSegmentRow: View {
             .buttonStyle(.borderless)
             .menuIndicator(.hidden)
             .fixedSize()
-            .help("Segment actions")
+            .help("More")
             .accessibilityLabel("Segment actions")
         }
         .padding(.vertical, theme.spacingXS + 2)
@@ -406,7 +408,7 @@ private struct DetailBoundaryHandle: View {
             }
             .buttonStyle(QuietButtonStyle())
             .controlSize(.small)
-            .help("Move the boundary between these segments")
+            .help("Move boundary")
             .accessibilityLabel("Move boundary at \(time)")
             .popover(isPresented: $isPresented, arrowEdge: .trailing) {
                 DetailBoundaryEditor(session: session, segment: segment, next: next) { isPresented = false }
@@ -568,7 +570,7 @@ private struct DetailSplitSheet: View {
                 Text("Split segment")
                     .font(theme.titleFont)
                     .foregroundStyle(theme.textPrimary)
-                Text("The part after the split time becomes a new segment; notes after it move along.")
+                Text("The part after this time becomes a new segment.")
                     .font(theme.calloutFont)
                     .foregroundStyle(theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)

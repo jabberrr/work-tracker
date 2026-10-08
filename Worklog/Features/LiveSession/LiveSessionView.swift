@@ -111,7 +111,7 @@ private struct LiveIdlePane: View {
                     .insetField(isFocused: focusFieldFocused)
                     .onSubmit(start)
                     .accessibilityLabel("Focus")
-                    .accessibilityHint("Press Return to start the session")
+                    .accessibilityHint("Return starts the session.")
 
                 HStack(alignment: .firstTextBaseline, spacing: theme.spacingL) {
                     LabelPicker(selection: $startLabel, includeNone: true, title: "Label")
@@ -128,7 +128,7 @@ private struct LiveIdlePane: View {
                     .buttonStyle(PrimaryButtonStyle())
                     .controlSize(.large)
                     .keyboardShortcut(.defaultAction)
-                    .help("Start a session with this label, tags and focus (⌘⇧S starts with the default label)")
+                    .help("Start session")
                 }
             }
             .frame(maxWidth: .infinity, alignment: .leading)
@@ -211,7 +211,7 @@ private struct LiveTodaySummary: View {
                     if !ended.isEmpty { Text("\(ended.count)") }
                 }
                 if ended.isEmpty {
-                    Text("Nothing logged yet today.")
+                    Text("Nothing logged today.")
                         .font(theme.calloutFont)
                         .foregroundStyle(theme.textTertiary)
                 } else {
@@ -266,7 +266,7 @@ private struct LiveTodaySessionRow: View {
             }
             .buttonStyle(LiveHoverRowStyle())
             .accessibilityLabel("\(session.displayTitle), \(session.label?.name ?? "Unlabeled"), \(session.activeDuration().formattedShort)")
-            .accessibilityHint("Opens the session in History")
+            .accessibilityHint("Opens the session in History.")
         }
     }
 }
@@ -338,7 +338,7 @@ private struct LiveActivePane: View {
         if (reason != nil && isPaused) || showLong {
             VStack(alignment: .leading, spacing: theme.spacingS) {
                 if let reason, isPaused {
-                    InlineBanner(reason == .sleep ? "Paused when your Mac went to sleep." : "Paused when Worklog quit.",
+                    InlineBanner(reason == .sleep ? "Paused while your Mac slept." : "Paused when Worklog quit.",
                                  systemImage: "pause.circle",
                                  style: .warning,
                                  actionTitle: "Resume",
@@ -381,8 +381,8 @@ private struct LiveActivePane: View {
                     LabelBadge(label: engine.currentLabel, size: .large)
                 }
                 .buttonStyle(.plain)
-                .help("Change this segment's label, tags and focus")
-                .accessibilityHint("Edits the current segment")
+                .help("Edit segment")
+                .accessibilityHint("Edits the current segment.")
 
                 Button {
                     showEditSegment = true
@@ -401,9 +401,9 @@ private struct LiveActivePane: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Edit the current segment")
+                .help("Edit segment")
                 .accessibilityLabel(focus.isEmpty ? "Add a focus" : "Focus: \(focus)")
-                .accessibilityHint("Edits the current segment")
+                .accessibilityHint("Edits the current segment.")
 
                 if !tags.isEmpty {
                     TagChipsRow(tags: tags)
@@ -476,7 +476,7 @@ private struct LiveActivePane: View {
                 Label(isPaused ? "Resume" : "Pause", systemImage: isPaused ? "play.fill" : "pause.fill")
             }
             .buttonStyle(QuietButtonStyle())
-            .help(isPaused ? "Resume the session (⌘⇧P)" : "Pause the session (⌘⇧P)")
+            .help(isPaused ? "Resume" : "Pause")
 
             Button {
                 showSplit = true
@@ -484,7 +484,7 @@ private struct LiveActivePane: View {
                 Label("Split", systemImage: "scissors")
             }
             .buttonStyle(QuietButtonStyle())
-            .help("Start a new segment when your focus changes (⌘⇧D)")
+            .help("Split segment")
             .popover(isPresented: $showSplit, arrowEdge: .bottom) {
                 LiveSegmentForm(mode: .split, style: .popover) { showSplit = false }
                     .padding(theme.spacingL)
@@ -496,7 +496,7 @@ private struct LiveActivePane: View {
                 Label("Stop", systemImage: "stop.fill")
             }
             .buttonStyle(PrimaryButtonStyle())
-            .help("Stop and review the session (⌘⇧S)")
+            .help("Stop")
         }
         .controlSize(.large)
         .frame(maxWidth: .infinity)
@@ -512,7 +512,7 @@ private struct LiveActivePane: View {
             }
             .buttonStyle(IconButtonStyle())
             .accessibilityLabel("Discard session")
-            .help("Discard this session")
+            .help("Discard")
             .confirmationDialog("Discard this session?", isPresented: $confirmDiscard) {
                 Button("Discard", role: .destructive, action: onDiscard)
                 Button("Cancel", role: .cancel) {}
@@ -578,8 +578,8 @@ private struct LiveActivePane: View {
                     Image(systemName: "photo.badge.plus")
                 }
                 .buttonStyle(IconButtonStyle(size: 24))
-                .accessibilityLabel("Attach image")
-                .help("Attach images to this session (you can also drop or paste them here)")
+                .accessibilityLabel("Add images")
+                .help("Add images")
             }
 
             if !attachments.isEmpty {
@@ -587,7 +587,7 @@ private struct LiveActivePane: View {
             }
 
             if notes.isEmpty {
-                Text("No notes yet. Type below and press Return — each note gets a timestamp.")
+                Text("Notes you add get a timestamp.")
                     .font(theme.calloutFont)
                     .foregroundStyle(theme.textTertiary)
             } else {
@@ -815,7 +815,7 @@ private struct LiveNotesList: View {
                 Button("Save") { commitEditing(note) }
                     .buttonStyle(PrimaryButtonStyle())
                     .disabled(editText.isBlank)
-                    .help("Save the note (Return)")
+                    .help("Save")
             }
             .controlSize(.small)
         }
@@ -945,7 +945,7 @@ private struct LiveLongSessionBanner: View {
                     .font(theme.bodyFont.weight(.semibold))
                     .foregroundStyle(theme.warning)
                     .accessibilityHidden(true)
-                Text("Still working? This session has been running for \(hours) \(hours == 1 ? "hour" : "hours").")
+                Text("Running for \(hours) \(hours == 1 ? "hour" : "hours"). Still working?")
                     .font(theme.calloutFont)
                     .foregroundStyle(theme.textPrimary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -953,7 +953,7 @@ private struct LiveLongSessionBanner: View {
             }
             HStack(spacing: theme.spacingS) {
                 Button("Stop at last activity", action: onStopAtLastActivity)
-                    .help("End the session at your last note, split or resume")
+                    .accessibilityHint("Ends at your last note, split or resume.")
                 Button("Stop now", action: onStopNow)
                 Button("Keep going", action: onKeepGoing)
             }

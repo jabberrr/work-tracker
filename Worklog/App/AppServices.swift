@@ -10,6 +10,8 @@ final class AppServices {
     static let preview = AppServices(inMemory: true)   // populated by PreviewData
 
     let settings: AppSettings
+    /// Customizable keyboard shortcuts (same UserDefaults as `settings`).
+    let shortcuts: ShortcutStore
     let persistence: PersistenceController
     let sync: SyncMonitor
     let themeManager: ThemeManager
@@ -21,7 +23,7 @@ final class AppServices {
     let overlay: OverlayPanelController
     var container: ModelContainer { persistence.container }
 
-    /// Order: settings → persistence(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory:) → sync → themeManager →
+    /// Order: settings → shortcuts(defaults:) → persistence(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory:) → sync → themeManager →
     /// auth → router → engine(context: mainContext) → exporter → backups → overlay(settings:); then data setup:
     /// - previews/tests (`inMemory`): PreviewData.populate;
     /// - store failed to open (in-memory fallback): default labels so the session is usable; on quit, changed data is
@@ -36,6 +38,7 @@ final class AppServices {
     init(inMemory: Bool = false) {
         let defaults: UserDefaults = inMemory ? Self.makeEphemeralDefaults() : .standard
         settings = AppSettings(defaults: defaults)
+        shortcuts = ShortcutStore(defaults: defaults)
         persistence = PersistenceController(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory: inMemory)
         sync = SyncMonitor(enabled: !inMemory && persistence.isSyncingWithICloud,
                            containerIdentifier: persistence.cloudKitContainerIdentifier)
@@ -98,15 +101,14 @@ final class AppServices {
             }
             return false
         }
-        let recoveredHint = "The damaged data was moved to the Recovered folder (Settings ▸ Data)."
         guard let path = marker.backupPath else {
             PersistenceController.clearPendingRecovery()
             // The fresh store has no labels: allow seeding again (deferred until the first iCloud import when syncing,
             // and skipped if labels arrive from iCloud).
             UserDefaults.standard.set(false, forKey: SeedData.didSeedDefaultsKey)
             persistence.launchNotice = persistence.isSyncingWithICloud
-                ? "Worklog started with a fresh data store and is downloading your data from iCloud. \(recoveredHint)"
-                : "Worklog started with a fresh, empty data store. \(recoveredHint)"
+                ? "Started fresh; downloading your data from iCloud."
+                : "Started with an empty data store."
             Log.persistence.info("Recovery: started with a fresh store")
             return false
         }
@@ -115,7 +117,7 @@ final class AppServices {
         do {
             let summary = try exporter.importArchive(from: url, mode: mode)
             PersistenceController.clearPendingRecovery()
-            persistence.launchNotice = "Restored from the backup “\(url.lastPathComponent)”. \(summary.description) \(recoveredHint)"
+            persistence.launchNotice = "Restored “\(url.lastPathComponent)”. \(summary.description)"
             Log.persistence.info("Recovery: restored backup \(url.lastPathComponent, privacy: .public)")
             return true
         } catch {
@@ -125,8 +127,9 @@ final class AppServices {
             default: unreadable = false
             }
             if unreadable { PersistenceController.clearPendingRecovery() }
-            persistence.launchNotice = "The backup “\(url.lastPathComponent)” couldn't be restored: \(error.localizedDescription) "
-                + (unreadable ? "Choose another backup in Settings ▸ Data." : "Worklog will try again at the next launch.")
+            persistence.launchNotice = unreadable
+                ? "Couldn\u{2019}t restore “\(url.lastPathComponent)”. Choose another backup."
+                : "Couldn\u{2019}t restore “\(url.lastPathComponent)”. Retrying at next launch."
             Log.persistence.error("Recovery restore failed: \(error.localizedDescription, privacy: .public)")
             return false
         }
@@ -158,6 +161,7 @@ extension View {
     @MainActor
     func withAppServices(_ services: AppServices) -> some View {
         self.environment(services.settings)
+            .environment(services.shortcuts)
             .environment(services.persistence)
             .environment(services.sync)
             .environment(services.themeManager)

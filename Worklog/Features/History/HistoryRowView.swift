@@ -179,8 +179,8 @@ struct HistoryLiveRow: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Show the running session on Today")
-        .accessibilityHint("Shows the Today page")
+        .help("Show session")
+        .accessibilityHint("Opens Today.")
     }
 
     @ViewBuilder

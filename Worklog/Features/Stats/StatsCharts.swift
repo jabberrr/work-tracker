@@ -102,14 +102,14 @@ struct StatsTimeChartCard: View {
                         .labelsHidden()
                         .controlSize(.small)
                         .fixedSize()
-                        .help("Group bars by day, week or month")
+                        .help("Group by")
                         .accessibilityLabel("Group by")
                     }
                 }
                 chart
                     .frame(height: 220)
                 if result.bucket != .day && dailyGoalHours > 0 {
-                    Text("Daily goal \(StatsView.hoursText(dailyGoalHours)) is shown when grouping by day.")
+                    Text("The goal line shows when grouped by day.")
                         .font(theme.captionFont)
                         .foregroundStyle(theme.textTertiary)
                 }
@@ -274,7 +274,7 @@ struct StatsLabelShareCard: View {
                         .font(theme.calloutFont)
                         .monospacedDigit()
                         .foregroundStyle(theme.textSecondary)
-                        .help("\(series.sessionCount) \(series.sessionCount == 1 ? "session" : "sessions") with this primary label")
+                        .help("\(series.sessionCount) \(series.sessionCount == 1 ? "session" : "sessions")")
                     Text(statsPercent(series.fraction))
                         .font(theme.captionFont)
                         .monospacedDigit()
@@ -352,7 +352,7 @@ struct StatsTopTagsCard: View {
                     .accessibilityLabel("Measure tags")
                 }
                 if values.isEmpty {
-                    Text("No tagged sessions in this range. Add tags when you start or finish a session.")
+                    Text("No tagged sessions in this range.")
                         .font(theme.calloutFont)
                         .foregroundStyle(theme.textTertiary)
                         .fixedSize(horizontal: false, vertical: true)

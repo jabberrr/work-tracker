@@ -165,7 +165,7 @@ struct LearningPageRow: View {
                     .contentShape(Rectangle())
                 }
                 .buttonStyle(.plain)
-                .help("Open “\(session.displayTitle)” in History")
+                .help("Open session")
                 .accessibilityLabel("Open session \(session.displayTitle)")
             }
             ForEach(otherTags) { tag in

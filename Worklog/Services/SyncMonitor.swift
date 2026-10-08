@@ -137,15 +137,15 @@ final class SyncMonitor {
         if let ckError = error as? CKError {
             switch ckError.code {
             case .quotaExceeded:
-                return "Your iCloud storage is full. Free up space to keep syncing."
+                return "Your iCloud storage is full."
             case .notAuthenticated:
                 return "Sign in to iCloud in System Settings to sync."
             case .networkUnavailable, .networkFailure:
-                return "iCloud can't be reached. Worklog will sync when you're back online."
+                return "iCloud can\u{2019}t be reached; syncing resumes when you\u{2019}re online."
             case .accountTemporarilyUnavailable:
                 return "Your iCloud account is temporarily unavailable."
             case .serviceUnavailable, .requestRateLimited, .zoneBusy:
-                return "iCloud is busy. Worklog will try again shortly."
+                return "iCloud is busy; Worklog will retry shortly."
             default:
                 break
             }

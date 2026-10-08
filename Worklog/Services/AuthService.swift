@@ -109,7 +109,7 @@ final class AuthService {
         switch result {
         case .success(let authorization):
             guard let credential = authorization.credential as? ASAuthorizationAppleIDCredential else {
-                lastError = "Unexpected sign-in credential. Please try again."
+                lastError = "Unexpected sign-in credential; try again."
                 return
             }
             let userID = credential.user
@@ -146,7 +146,7 @@ final class AuthService {
                 return
             }
             if !Entitlements.hasSignInWithApple {
-                lastError = "Sign in with Apple isn't configured for this build — continue without signing in."
+                lastError = "Sign in with Apple isn\u{2019}t available in this build."
             } else {
                 lastError = "Sign in with Apple failed: \(error.localizedDescription)"
             }

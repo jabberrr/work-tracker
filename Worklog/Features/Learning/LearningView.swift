@@ -76,9 +76,7 @@ struct LearningView: View {
                 }
                 Section("Tags") {
                     if index.tagRows.isEmpty {
-                        Text(index.isSearching
-                             ? "No tags match."
-                             : "No tags on your learnings yet. Tag learning points to follow how a topic develops.")
+                        Text(index.isSearching ? "No tags match." : "No tagged learnings")
                             .font(theme.captionFont)
                             .foregroundStyle(theme.textTertiary)
                             .fixedSize(horizontal: false, vertical: true)
@@ -155,17 +153,14 @@ struct LearningView: View {
 
         if case .tag = filter, focusedTag == nil {
             EmptyStateView(title: "Tag not found", systemImage: "number",
-                           message: "This tag was deleted or merged. Choose another tag.",
-                           actionTitle: "Show all learnings", action: { selection = .all })
+                           message: "This tag was deleted or merged.",
+                           actionTitle: "Show all", action: { selection = .all })
         } else if entries.isEmpty && index.isSearching {
-            EmptyStateView(title: "No matches", systemImage: "magnifyingglass",
-                           message: "No learning points match “\(appliedQuery)”.")
+            EmptyStateView(title: "No matches", systemImage: "magnifyingglass")
         } else if entries.isEmpty {
             EmptyStateView(title: filter == .untagged ? "No untagged learnings" : "No learnings here",
                            systemImage: "lightbulb",
-                           message: filter == .untagged
-                               ? "Every learning point has at least one tag."
-                               : "Learning points tagged like this will collect here.")
+                           message: filter == .untagged ? "Every learning point has a tag." : nil)
         } else {
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.spacingXL) {
@@ -250,7 +245,7 @@ struct LearningView: View {
             .pickerStyle(.segmented)
             .labelsHidden()
             .fixedSize()
-            .help("Group the timeline by month or week")
+            .help("Group by")
             .accessibilityLabel("Group timeline by")
 
             Picker("Order", selection: $newestFirst) {
@@ -260,14 +255,14 @@ struct LearningView: View {
             .pickerStyle(.menu)
             .labelsHidden()
             .fixedSize()
-            .help("Timeline order")
+            .help("Order")
             .accessibilityLabel("Timeline order")
 
             Spacer(minLength: theme.spacingS)
 
             Toggle("Session context", isOn: $showsContext)
                 .toggleStyle(.checkbox)
-                .help("Show each session's “What I learned” text under its points")
+                .help("Show session context")
         }
         .font(theme.calloutFont)
     }
@@ -285,9 +280,9 @@ private struct LearningPageEmptyState: View {
         ScrollView {
             VStack(spacing: theme.spacingL) {
                 EmptyStateView(
-                    title: "Nothing learned… yet",
+                    title: "No learnings yet",
                     systemImage: "lightbulb",
-                    message: "Add learning points when you finish a session. They collect here by tag."
+                    message: "Add learning points when a session ends."
                 )
                 .frame(minHeight: 220)
                 LearningPageHowToSteps()
@@ -308,10 +303,10 @@ private struct LearningPageTaggingHint: View {
     var body: some View {
         Card {
             VStack(alignment: .leading, spacing: theme.spacingS) {
-                Label("No tags on your learnings", systemImage: "number")
+                Label("No tagged learnings", systemImage: "number")
                     .font(theme.headlineFont)
                     .foregroundStyle(theme.textPrimary)
-                Text("Tag learning points to follow how a topic develops.")
+                Text("Tag points to follow a topic.")
                     .font(theme.calloutFont)
                     .foregroundStyle(theme.textSecondary)
                 LearningPageHowToSteps()
@@ -326,8 +321,8 @@ private struct LearningPageHowToSteps: View {
 
     private let steps: [String] = [
         "Finish a session, or open one in History.",
-        "Under Learnings, choose “Add learning point” and write what you learned.",
-        "Use “Add tag” on the point (and rate your mastery 1–5 if you like). Each tag gets its own timeline here.",
+        "Under Learnings, add a learning point.",
+        "Tag the point to give it a timeline here.",
     ]
 
     var body: some View {

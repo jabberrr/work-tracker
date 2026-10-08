@@ -5,8 +5,9 @@ import SwiftUI
 /// title, primary label, session tags and the "takeaway for next time" up front; the segment review is one
 /// proportion bar with the rows behind a disclosure; notes and learnings (B's `LearningsEditor`) are disclosures.
 ///
-/// Save (⌘↩, also Esc = save as-is) → `engine.completeReview()`; Resume → `engine.resumePendingSession()`;
-/// Discard (confirmed) → `engine.discardPendingSession()`.
+/// Save (the customizable "Save Session Review" shortcut, default ⌘↩; Esc = save as-is, fixed) →
+/// `engine.completeReview()`; Resume → `engine.resumePendingSession()`; Discard (trash icon, confirmed) →
+/// `engine.discardPendingSession()`.
 ///
 /// Discard is two-phase: `discardPendingSession()` only clears `pendingEndSession` (the sheet starts closing while
 /// the session is still alive, so nothing here reads a destroyed model); RootView's sheet `onDismiss` then calls
@@ -47,6 +48,7 @@ struct EndSessionSheet: View {
 @MainActor
 private struct EndSessionForm: View {
     @Environment(SessionEngine.self) private var engine
+    @Environment(ShortcutStore.self) private var shortcuts
     @Environment(\.modelContext) private var modelContext
     @Environment(\.theme) private var theme
 
@@ -75,7 +77,7 @@ private struct EndSessionForm: View {
                 VStack(alignment: .leading, spacing: theme.spacingL) {
                     header
                     if session.activeDuration() < 60 {
-                        InlineBanner("This session was under a minute.",
+                        InlineBanner("Under a minute long.",
                                      style: .warning,
                                      actionTitle: "Discard",
                                      action: { confirmDiscard = true })
@@ -104,7 +106,7 @@ private struct EndSessionForm: View {
             Button("Discard", role: .destructive, action: onDiscard)
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Its notes, images, learnings and time will be deleted. This can’t be undone.")
+            Text("Its notes, images, learnings and time will be deleted.")
         }
         .onAppear {
             // Reopen what the user already filled in (e.g. a resumed-then-stopped session).
@@ -183,7 +185,7 @@ private struct EndSessionForm: View {
             fieldRow("Label") {
                 LabelPicker(selection: primaryLabelBinding, includeNone: true, title: "Label")
                     .labelsHidden()
-                    .fixedSize()
+                    .frame(minWidth: 0, maxWidth: 260, alignment: .leading)
             }
             fieldRow("Tags") {
                 TagPicker(selection: sessionTagsBinding, scopeLabel: session.label)
@@ -201,7 +203,7 @@ private struct EndSessionForm: View {
         let limit = Self.takeawayGuidanceLength
         return VStack(alignment: .leading, spacing: theme.spacingXS) {
             TextField("Takeaway", text: $session.overlaySummary,
-                      prompt: Text("One line to see when you start your next session"))
+                      prompt: Text("One line for next time"))
                 .textFieldStyle(.plain)
                 .font(theme.bodyFont)
                 .focused($takeawayFocused)
@@ -218,13 +220,12 @@ private struct EndSessionForm: View {
                     .toggleStyle(.checkbox)
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textSecondary)
-                    .help("Show this takeaway in the overlay and menu bar during your next session.")
                 Spacer(minLength: theme.spacingS)
                 if count > 0 {
                     Text("\(count)/\(limit)")
                         .font(theme.captionFont.monospacedDigit())
                         .foregroundStyle(count > limit ? theme.warning : theme.textTertiary)
-                        .help(count > limit ? "Shorter takeaways fit the overlay better." : "Suggested length: up to \(limit) characters.")
+                        .help("Suggested length")
                         .accessibilityLabel("\(count) of \(limit) suggested characters")
                 }
             }
@@ -298,7 +299,7 @@ private struct EndSessionForm: View {
                     ForEach(segments) { segment in
                         EndSessionSegmentRow(segment: segment)
                     }
-                    Text("You can split, merge and retime segments later in History.")
+                    Text("Split, merge and retime segments later in History.")
                         .font(theme.captionFont)
                         .foregroundStyle(theme.textTertiary)
                         .padding(.top, theme.spacingXS)
@@ -351,10 +352,12 @@ private struct EndSessionForm: View {
             Button {
                 confirmDiscard = true
             } label: {
-                Label("Discard…", systemImage: "trash")
+                Label("Discard", systemImage: "trash")
+                    .labelStyle(.iconOnly)
             }
             .buttonStyle(DestructiveButtonStyle())
-            .help("Delete this session")
+            .help("Discard")
+            .accessibilityLabel("Discard session")
 
             Spacer(minLength: theme.spacingM)
 
@@ -365,14 +368,14 @@ private struct EndSessionForm: View {
             }
             .buttonStyle(QuietButtonStyle())
             .disabled(engine.isActive)
-            .help(engine.isActive ? "Another session is running" : "Keep tracking; the time since you stopped counts as a pause")
+            .help(engine.isActive ? "Another session is running" : "Resume session")
 
             Button(action: save) {
                 Text("Save")
             }
             .buttonStyle(PrimaryButtonStyle())
-            .keyboardShortcut(.return, modifiers: .command)
-            .help("Save session (⌘↩)")
+            .keyboardShortcut(shortcuts.shortcut(for: .saveReview))
+            .help("Save")
 
             // Esc = save as-is (also applies the suggested title when the title is empty).
             Button("Save as is", action: save)

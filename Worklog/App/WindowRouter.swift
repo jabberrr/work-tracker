@@ -20,15 +20,14 @@ final class WindowRouter {
     private(set) var isMainWindowOpen = false
 
     @ObservationIgnored private var openWindowAction: OpenWindowAction?
-    @ObservationIgnored private var openSettingsAction: OpenSettingsAction?
 
     init() {}
 
-    /// Called by RootView, MenuBarLabelView and MenuBarPanelView in .onAppear with @Environment(\.openWindow) and
-    /// @Environment(\.openSettings). A nil `openSettings` keeps a previously registered one.
+    /// Called by RootView, MenuBarLabelView and MenuBarPanelView in .onAppear with @Environment(\.openWindow).
+    /// - Parameter openSettings: Deprecated and ignored. Settings is a page of the main window now (there is no
+    ///   Settings scene); the parameter remains only so older call sites still compile.
     func register(openWindow: OpenWindowAction, openSettings: OpenSettingsAction? = nil) {
         openWindowAction = openWindow
-        if let openSettings { openSettingsAction = openSettings }
     }
 
     /// NSApp.activate() + openWindow(id: WindowID.main) (brings an existing Window to front).
@@ -48,15 +47,11 @@ final class WindowRouter {
         }
     }
 
-    /// Activates the app and opens the Settings scene via the registered `OpenSettingsAction` (macOS 14); falls back
-    /// to the responder-chain actions when no SwiftUI scene has registered one yet.
+    /// selection = .settings; showMainWindow(). Settings is a page in the main window's detail column; this also
+    /// reopens the main window when it was closed.
     func showSettings() {
-        NSApp.activate()
-        if let openSettingsAction {
-            openSettingsAction()
-        } else if !NSApp.sendAction(Selector(("showSettingsWindow:")), to: nil, from: nil) {
-            _ = NSApp.sendAction(Selector(("showPreferencesWindow:")), to: nil, from: nil)
-        }
+        selection = .settings
+        showMainWindow()
     }
 
     /// settingsTabRequest = tab; showSettings(). `tab` is a SettingsTab rawValue ("data", "account", …).

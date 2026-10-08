@@ -11,11 +11,11 @@ enum SessionEditError: LocalizedError {
         case .segmentTooShort:
             "Segments must be at least \(Int(SessionEditor.minimumSegmentLength)) second long."
         case .noAdjacentSegment:
-            "There is no following segment to merge with."
+            "No following segment to merge with."
         case .lastSegment:
             "A session needs at least one segment."
         case .sessionIsActive:
-            "This session is still running. Stop it first."
+            "Stop the session first."
         }
     }
 }

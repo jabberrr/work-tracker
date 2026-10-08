@@ -4,6 +4,9 @@
 > **A** (live session, end-session sheet, menu bar, overlay), **B** (history, session detail, learnings
 > editor) and **C** (learning, stats, settings, welcome). The API contract is `docs/ARCHITECTURE.md` §4;
 > this document says **how to use it**. Where the two disagree on a signature, ARCHITECTURE.md wins.
+>
+> **Round 2** is folded in: Settings lives in the main window (§10.1, §10.11), app shortcuts are customizable
+> (§11.1), the overlay has an editable layout (§10.6), and all copy follows the guideline in §12.0.
 
 Code lives in `Worklog/DesignSystem/**` and `Worklog/Shared/**`. Read the theme with
 `@Environment(\.theme) private var theme`. **Never hard-code a color, font, radius or spacing.** The only
@@ -33,7 +36,7 @@ exception is a label's or tag's own color, which you get from `label.color` / `t
 
 ## 2. Themes
 
-Selected in Settings → Appearance (`ThemeManager.themeID`) or on the Welcome screen (`ThemeSwatchRow`),
+Selected in Settings ▸ Appearance (`ThemeManager.themeID`) or on the Welcome screen (`ThemeSwatchRow`),
 combined with appearance mode (System / Light / Dark) and an accent override (`AccentChoice`).
 Default: **Graphite** (`ThemeID.default`), System, Theme Default accent. Pickers list themes in
 `ThemeID.allCases` order: Graphite, Paper, Meadow.
@@ -194,19 +197,19 @@ symbol (`label.symbolName`). Standard symbols — use these so the app speaks on
 | iCloud on / off | `icloud` / `icloud.slash` | Backup | `externaldrive` |
 | Export / Import | `square.and.arrow.up` / `square.and.arrow.down` | Account | `person.crop.circle` |
 | Mastery (rated) | `circle.fill` ×1–5 | Mastery (empty) | `circle` |
+| Shortcuts | `keyboard` | Reset to default | `arrow.counterclockwise` |
+| Remove (edit mode) | `minus` on a `danger` badge | Add (edit mode) | `plus` on an accent badge |
+| Settings (active) | `gearshape.fill` (accent) | Live session in History | `timer` |
 
 Menu bar label (A): `timer` idle, `record.circle` running, `pause.circle` paused (contract §5.3).
 
-### 6.1 App icon (`Assets.xcassets/AppIcon.appiconset`)
+### 6.1 App icon (`Worklog/Resources/Assets.xcassets/AppIcon.appiconset`)
 
-A **segmented session dial**: a flat graphite tile (`#1A1D21`, standard macOS 824/1024 rounded-square grid,
-hairline inner edge, soft system-style drop shadow, no gradient) carrying a ring track (`#2A2E34`) with
-three work segments separated by gaps — teal `#35C6D4` (the Graphite accent, leading from 12 o'clock),
-off-white `#E6E8EB`, amber `#D9A441` — a short stopwatch crown above 12 o'clock and a teal live dot in the
-centre. It reads as "a timer split into segments", the app's core idea, and stays legible at 16 px (the
-16/32 px renders use 25 % heavier strokes). PNGs for all ten mac slots (16–512 @1x/@2x) are rendered
-programmatically at 4× supersampling (Pillow) and downscaled with Lanczos; to change the icon, regenerate
-all ten sizes together rather than editing single PNGs by hand.
+A **green clothbound notebook** (user-supplied): a flat sage-green cover with a darker spine line, a cream page
+block along the bottom edge and a vertical red-orange elastic band on the right, centred on a deep forest-green
+ground. Flat shapes, no gradient or texture, so it stays legible at 16 px. It reads as "a log book", the app's
+name. The ten mac slots (16–512 @1x/@2x) are the supplied PNGs; to change the icon, replace all ten together,
+never a single size by hand.
 
 ---
 
@@ -215,6 +218,12 @@ all ten sizes together rather than editing single PNGs by hand.
 - Default: **none or very short**. Hover fades 120 ms ease-out; press 80 ms. Sheets/popovers: system.
 - Allowed: `LiveDot` breathing (1.6 s ease-in-out, opacity 1 → 0.45), cross-fade when switching
   idle ⇄ active on Today (`.transition(.opacity)`, 200 ms), expanding a note (no animation needed).
+- **Edit-mode wiggle** (`View.wiggle(_:seed:)`, Settings ▸ Overlay layout editor) is the *only* looping
+  motion besides `LiveDot`: ±1.2° rotation, 0.28 s period, a per-item phase (`seed`), only while editing.
+  It is driven by `TimelineView(.animation(paused:))`, never by a `repeatForever` animation (those leak into
+  unrelated transitions). Under Reduce Motion there is no rotation: a 1 pt dashed accent outline (`radiusS`)
+  marks the editable items instead. Removing/reordering items animates 150 ms ease-out (`nil` under
+  Reduce Motion).
 - Not allowed: counting/rolling digits on the timer, bouncing, springy scale, confetti, parallax.
 - **Reduce Motion:** read `@Environment(\.accessibilityReduceMotion)`; pass `nil` animation when true.
   Design-system components already do.
@@ -230,7 +239,7 @@ All inits are exactly as in ARCHITECTURE.md §4.6. Usage is explicit: `.buttonSt
 | `Card(padding:) { … }` | Groups related content; fills width, leading-aligned. `cardStyle()` for an existing view. Don't nest cards. |
 | `SectionHeader(_:systemImage:trailing:)` | One per section. Trailing: a count (`Text("3")`), an `IconButtonStyle` button or a small `Menu`. Themes render it differently (rule / uppercase). |
 | `LabelBadge(label:size:)` | Anywhere a label is shown. `.small` in rows, `.regular` default, `.large` for the Today active header. |
-| `TagChip(tag:isSelected:onRemove:)` | Single tag. Dot appears only for tags with a non-default color. |
+| `TagChip(tag:isSelected:onRemove:)` | Single tag. Dot appears only for tags with a non-default color. Remove (×) help "Remove", a11y "Remove tag *name*". Not a filter: use `FilterChip`. |
 | `ColorDot(hex:size:)` | Decorative dot; pair with text. |
 | `TimerText(_:style:isPaused:)` | Pure display. Wrap in `TimelineView(.periodic(from: .now, by: 1))` when running; render statically when paused. |
 | `PrimaryButtonStyle` | The one primary action (Start, Save, Create). Add `.keyboardShortcut(.defaultAction)` where it's the default. |
@@ -238,11 +247,11 @@ All inits are exactly as in ARCHITECTURE.md §4.6. Usage is explicit: `.buttonSt
 | `DestructiveButtonStyle` | Discard / Delete. Always followed by a confirmation (`confirmationDialog`). |
 | `IconButtonStyle(size:)` | Icon-only (toolbar-like) buttons; 28 default, 22 in dense rows, 20 in banners. Always `.accessibilityLabel` + `.help`. |
 | `EmptyStateView(…)` | Whole-pane empty states (copy in §12). |
-| `SearchField(text:prompt:)` | History, Learning, popovers. ⌘F → use the extra `init(text:prompt:isFocused:)`. |
+| `SearchField(text:prompt:)` | History, Learning, popovers. To focus it from a shortcut (Find in History) use the extra `init(text:prompt:isFocused:)`. Help on the field: "Search". |
 | `StatTile(…)` | Stats and Today totals, in an adaptive grid (min 150). |
 | `FlowLayout(spacing:lineSpacing:)` | Wrapping chips and swatches. |
 | `InlineBanner(…)` | Top-of-pane notices (storage mode, auto-pause, long session, errors). Max two stacked. |
-| `ThemePreviewSwatch(themeID:isSelected:compact:)` | Appearance tab (`compact: false`, default: light + dark halves, name + summary, 196 pt); Welcome (`compact: true`: one preview in the current appearance, name only, summary as tooltip, 124 pt). Wrap in a `.plain` Button — or use `ThemeSwatchRow`. |
+| `ThemePreviewSwatch(themeID:isSelected:compact:)` | Appearance tab (`compact: false`, default: light + dark halves, name + summary, 196 pt); Welcome (`compact: true`: one preview in the current appearance, name only, 124 pt; no tooltip, VoiceOver reads the summary as the value). Wrap in a `.plain` Button — or use `ThemeSwatchRow`. |
 | `ThemeSwatchRow(compact:)` | Extra. One swatch per `ThemeID` that sets `ThemeManager.themeID` on click (reads `ThemeManager` from the environment; renders nothing without it). Default `compact: true` ≈ 396 pt wide — Welcome screen. |
 
 **Extras (beyond the contract) — available to all features:**
@@ -263,14 +272,35 @@ All inits are exactly as in ARCHITECTURE.md §4.6. Usage is explicit: `.buttonSt
 | `LabelMenuIcon.image(symbol:hex:pointSize:)` / `.dot(color:diameter:)` | Colored non-template `NSImage`s for native menus (`Image(nsImage:)`), e.g. A's Split menu. |
 | `DesignSystemDurationSpeech.spoken(_:)` | "1 hour, 5 minutes" for `.accessibilityValue` on custom duration displays. |
 
+### 8.1 Round 2 components
+
+All use theme tokens only, honour Reduce Motion (hover fades and selection changes are `nil`-animated) and
+need no Reduce Transparency handling (no materials). Signatures are final (ARCHITECTURE §11).
+
+| Component | Signature | Look and behaviour |
+|---|---|---|
+| `FilterChip` | `FilterChip(_ title: String, colorHex: String?, isSelected: Bool, action: () -> Void)` | The chip *is* the button. At Standard text size: `calloutFont` medium, padding 11 × 5, min height 26 (× `textScale`), `chipShape`, 8 pt `ColorDot` when `colorHex != nil`. Selected: accent tint fill + 1 pt accent stroke + accent text. Unselected: `insetSurface` + `separator` stroke + `textPrimary`. Hover `textPrimary.opacity(0.05)`. a11y label = title + `.isSelected`. The caller adds `.help(title)`. Use in a horizontal `ScrollView(showsIndicators: false)` with `HStack(spacing: 6)`. |
+| `PillTabBar` | `PillTabBar(items: [Item], selection: Binding<Item>, title: (Item) -> String, systemImage: (Item) -> String?)` (`Item: Hashable & Identifiable`) | Settings section switcher. Icon + title, `calloutFont` medium, padding 10 × 5, `radiusS`. Selected: accent tint fill + accent text; unselected `textSecondary`, hover fill `textPrimary.opacity(0.06)`. Natural width when it fits, otherwise scrolls horizontally (`ViewThatFits`). Buttons carry `.isSelected`; the container is "Sections". |
+| `ValueSentence` | `ValueSentence(_ prefix: String, value: String, suffix: String = "")` | "Keep the latest **10 backups**": one concatenated `Text`; the value is bold + `accent`, prefix/suffix `textPrimary`, all in the inherited font, so it shares the baseline and wraps like a sentence. |
+| `ValueStepper` | `ValueStepper(_:value:in:step:suffix:format:)` for `Binding<Double>` and `Binding<Int>` | `ValueSentence` … native `Stepper` (labels hidden) trailing, row centred vertically. a11y: one adjustable element, label = prefix + suffix, value = the formatted value. |
+| `ValueSlider` | `ValueSlider(_:value:in:step:suffix:format:)` (`Binding<Double>`) | `ValueSentence` … native `Slider` (labels hidden, width 200) trailing. Same a11y as the stepper. |
+| `ValuePicker` | `ValuePicker(_:selection:options:suffix:title:)` (`Option: Hashable`) | "Week starts on **Monday ⌄**": the bold accent value + a small chevron is a plain button that opens a popover list (checkmark on the selected option; click, Return or Space picks and closes; ↑/↓ move; Esc closes). First-text-baseline aligned with the prefix, same font. For short option lists (≤ ~6) inside sentences; use native pickers elsewhere. |
+| `ShortcutRecorder` | `ShortcutRecorder(shortcut: StoredShortcut?, accessibilityName: String, onRecord: (StoredShortcut) -> Void, onClear: () -> Void)` | Key-cap field; see §11.1. It never validates: pass the result to `ShortcutStore.set(_:for:)` and show its message under the row. |
+| `ResetToDefaultButton` | `ResetToDefaultButton(isDefault: Bool, accessibilityLabel: String, action: () -> Void)` | `arrow.counterclockwise` in `IconButtonStyle(size: 22)`, disabled at the default, help "Reset". |
+| `RemoveBadgeButton` | `RemoveBadgeButton(accessibilityLabel: String, action: () -> Void)` | Edit-mode (−): 18 pt `danger` circle, white `minus` (9 pt bold), 1.5 pt `elevatedSurface` ring, 24 pt hit area, help "Remove". Place at the item's top-leading corner, offset (−6, −6). |
+| `AddBadgeButton` | `AddBadgeButton(accessibilityLabel: String, action: () -> Void)` | Edit-mode (+): 28 pt accent circle, `onAccent` `plus` (12 pt bold), help "Add" (dropped while disabled so the caller's reason shows, e.g. "All elements shown"). |
+| `View.wiggle(_:seed:)` | `func wiggle(_ isActive: Bool, seed: Int = 0) -> some View` | Edit-mode wiggle (§7). The view keeps its identity when edit mode toggles. |
+
 ## 9. Shared data-bound controls (`Worklog/Shared`)
 
 | Control | Behavior |
 |---|---|
 | `LabelPicker(selection:includeNone:title:)` | Native pop-up `Picker` (`.menu`): "None", divider, non-archived labels by `sortIndex` with colored symbol; an archived current selection is listed as "Name (archived)". Shows its `title` on the left; use `.labelsHidden()` in compact places. |
-| `TagPicker(selection:scopeLabel:allowsCreate:)` | Selected tags as removable chips + a dashed "+ Add tag" chip that opens a popover: search field (focused), **scope label's tags**, **Global**, and while searching **Other labels**; rows toggle (multi-select, popover stays open); "Create “x” ⏎" creates a *global* tag via `TaxonomyOps.createTag(name:in:)` and selects it. Return = toggle exact/only match or create. Bind with `$session.tagList`, `$segment.tagList`, `$point.tagList`. The picker does not call `touch()`. |
+| `TagPicker(selection:scopeLabel:allowsCreate:)` | Selected tags as removable chips + a dashed "+ Add tag" chip that opens a popover: search field (focused), **scope label's tags**, **Global**, and while searching **Other labels**; rows toggle (multi-select, popover stays open); "Create “x”" creates a *global* tag via `TaxonomyOps.createTag(name:in:)` and selects it. Return = toggle exact/only match or create. Bind with `$session.tagList`, `$segment.tagList`, `$point.tagList`. The picker does not call `touch()`. |
 | `TagChipsRow(tags:)` | Read-only chips; renders nothing when empty. |
 | `NoteRow(note:showsSegment:)` | `10:42` (caption, tabular, tertiary) · selectable body text (6 lines + "Show more") · optional segment caption (dot + focus) · "Edited". Read-only; add `.contextMenu` (Edit / Change time / Delete) in your feature. |
+| `LabelColorPicker(hex:)` | 15 swatches (wrapping) + system color well for custom; selected ring. |
+| `SymbolPicker(symbolName:)` | Adaptive grid (30 pt cells) of `LabelPalette.symbols`; current custom symbol shown first. Put it in a popover or a fixed-height area (~240 pt). |
 
 **Deleted models.** A label or tag can be deleted or merged in Settings while another view still holds it
 (Today's start label in `@State`, the menu bar picker, an open editor). Reading such a model traps, so:
@@ -279,8 +309,6 @@ never offer them, and write the cleaned value back to the binding (on appear and
 list changes). `TagChipsRow`, `TagChip`, `LabelBadge` (→ "Unlabeled") and `NoteRow` (renders nothing for a
 deleted note; skips a deleted segment/label) also guard. Feature code that reads a held model outside these
 controls checks `ModelLiveness.isLive(_:)` first.
-| `LabelColorPicker(hex:)` | 15 swatches (wrapping) + system color well for custom; selected ring. |
-| `SymbolPicker(symbolName:)` | Adaptive grid (30 pt cells) of `LabelPalette.symbols`; current custom symbol shown first. Put it in a popover or a fixed-height area (~240 pt). |
 
 ---
 
@@ -289,24 +317,40 @@ controls checks `ModelLiveness.isLive(_:)` first.
 Wireframes are schematic (not to scale). `[ Primary ]` = PrimaryButtonStyle, `( Quiet )` = QuietButtonStyle,
 `{!Danger}` = DestructiveButtonStyle, `⊡` = IconButtonStyle, `▾` = native pop-up/menu, `◉` = LabelBadge,
 `#tag` = TagChip, `●` = LiveDot. Every pane: `themedBackground()` on the root, padding `spacingXL`,
-content column `maxWidth ≈ 760` centered unless stated.
+content column `maxWidth ≈ 760` centered unless stated. A pane's minimum size must never depend on its data:
+any flexible container that wraps data-dependent content declares `minWidth: 0` / `minHeight: 0`, and user
+text truncates (`lineLimit(1)` + tail) instead of using a horizontal `.fixedSize()`.
 
 ### 10.1 Main window shell (CORE, for reference)
 
 ```
 ┌──────────────┬──────────────────────────────────────────────────────────────┐
-│ ◷ Today      │  [InlineBanner: Saving to this Mac only …              ✕]    │
+│ ◷ Today      │  [InlineBanner: iCloud sync problem. …    (Details…)   ✕]    │
 │ ↺ History    │                                                              │
-│ ✧ Learning   │                    (detail pane — §10.2…)                    │
+│ ✧ Learning   │            (detail pane — §10.2… or Settings §10.11)         │
 │ ▥ Stats      │                                                              │
 │              │                                                              │
-│ ● 1:12:40    │                                                              │
-│   Deep work  │                                                              │
-│──────────────│                                                              │
-│ Guest     ⚙  │                                                              │
+│              │                                                              │
+│ ● 1:12:40    │  ┐                                                           │
+│   Deep work  │  │ pinned footer: .safeAreaInset(edge: .bottom) on the List, │
+│──────────────│  │ filled with sidebarBackground                             │
+│ ◯ Guest   ⚙  │  ┘                                                           │
 └──────────────┴──────────────────────────────────────────────────────────────┘
 ```
-Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont`, `textSecondary`).
+- **Sidebar rows** are `SidebarItem.primaryItems` (Today, History, Learning, Stats) in a `.sidebar` List.
+- **Footer (pinned):** mini status row (`LiveDot` + `TimerText(.compact)` + label name in `captionFont`
+  `textSecondary`; help "Show session"), a hairline, then the account icon + name (one plain button → Settings ▸
+  Account, help "Account") and the **Settings gear**. The footer is a `.safeAreaInset(edge: .bottom, spacing: 0)`
+  of the List, not a VStack sibling, so nothing in the detail can push it off-screen.
+- **Settings is a detail destination** (`SidebarItem.settings`), not a window. The gear is
+  `IconButtonStyle(size: 24)`: `gearshape` in `textSecondary`, or `gearshape.fill` in `accent` with the
+  `.isSelected` trait while Settings shows (then no List row is selected); help and a11y label "Settings".
+  ⌘, , the app menu "Settings…", the menu bar "Settings…" and banner actions ("Details…", "Restore…") all
+  open it (to the right section), reopening the main window if it was closed.
+- **Size barrier:** the detail column is `frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight:
+  .infinity).clipped()`, so a page's content can never raise the window's minimum size. The window keeps
+  min 900 × 600 (`.windowResizability(.contentMinSize)`), default 1100 × 720.
+
 (Glyphs in diagrams stand for SF Symbols; the UI never uses emoji.)
 
 ### 10.2 Today — idle (A: `LiveSessionView`)
@@ -337,10 +381,10 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
   `Label("Start session", systemImage: "play.fill")`.
 - Today's sessions: plain rows (no cards), hover highlight `textPrimary.opacity(0.05)`, click →
   `router.showSession`. Times `captionFont` tabular; duration `timerCompactFont`.
-- No sessions today: a single `textTertiary` line "Nothing logged yet today." (not a full EmptyStateView).
+- No sessions today: a single `textTertiary` line "Nothing logged today." (not a full EmptyStateView).
 - **Takeaway (`LiveTakeawayView`)**: the meta line ("Refactor parser · Yesterday") is a plain button that
   opens the source session in History. A trailing **Done** control (`checkmark`, `IconButtonStyle`, 24; 20 in
-  compact places, `textTertiary`, help "Done: stop showing this takeaway") calls `engine.dismissTakeaway()`,
+  compact places, `textTertiary`, help "Done") calls `engine.dismissTakeaway()`,
   which clears the source session's "Show in overlay & menu bar" — so it disappears everywhere (Today, menu
   bar, overlay), not just in this view. The same control appears in the menu bar panel and the overlay.
   Lifetime: by default a takeaway shows during the **next session only** (Settings ▸ General ▸ "Show takeaway
@@ -349,8 +393,8 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
 ### 10.3 Today — active (A)
 
 ```
-  [InlineBanner warning: Paused automatically when your Mac went to sleep.  (Resume) ✕]
-  [InlineBanner warning: Still working? This session has run for 10 hours.
+  [InlineBanner warning: Paused while your Mac slept.                      (Resume) ✕]
+  [InlineBanner warning: Running for 10 hours. Still working?
                           (Stop at last activity) (Stop now) (Keep going)]
 
   ◉ Deep work (large)                                   Started 09:02 · 3 segments
@@ -374,12 +418,14 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
 ```
 - Paused: hero digits use `timerPaused` (TimerText does), LiveDot shows the pause glyph, the caption
   reads "Paused" (never color only), and Pause becomes `( ▶ Resume )`.
-- Stop is the only `PrimaryButtonStyle` while active. Discard is an icon button (trash) → confirm
-  "Discard this session? Its notes and time will be deleted." `{!Discard}` / Cancel when
-  `settings.confirmBeforeDiscard`.
+- Stop is the only `PrimaryButtonStyle` while active. Discard is an icon button (trash, help "Discard",
+  a11y "Discard session") → confirm "Discard this session?" (message "Its notes and time will be deleted.")
+  `{!Discard}` / Cancel when `settings.confirmBeforeDiscard`.
+- Tooltips: "Pause" / "Resume", "Split segment", "Stop", "Discard". No shortcut glyphs in tooltips: the menus
+  show the user's current shortcuts.
 - Label/focus/tags of the *current segment*: clicking the badge or focus opens a popover (LabelPicker,
   TagPicker, focus field, Save) → `engine.updateCurrentSegment`.
-- Split popover (also opened by `router.splitRequest`, ⌘⇧D):
+- Split popover (also opened by `router.splitRequest`, i.e. the Split Segment shortcut):
 ```
   ┌ Split segment ───────────────────────┐
   │ New focus  [__________________]      │
@@ -398,8 +444,8 @@ Sidebar status row: `LiveDot` + `TimerText(.compact)` + label name (`captionFont
 - **"Running on another Mac"**: when the active session was started or last changed on another Mac
   (synced via iCloud; `engine.isActiveSessionOnAnotherMac`), a quiet `Label("Running on another Mac",
   systemImage: "laptopcomputer")` in `captionFont` / `textTertiary` sits under the title (also in the menu
-  bar panel and the regular overlay). Help: "This session was started or last changed on another Mac.
-  Pausing, splitting or stopping it here takes it over." No color, no banner — it is information, not a
+  bar panel and the regular overlay). Help: "Running on another Mac" (pausing, splitting or stopping it
+  here takes it over). No color, no banner — it is information, not a
   warning. Controls stay enabled; using one takes the session over. If both Macs edited it, RootView shows
   `engine.handoffNotice` once as an info `InlineBanner`.
 
@@ -410,7 +456,7 @@ Built to be finished in about ten seconds: the essentials up front, everything e
   ┌───────────────────────────────────────────────────────────────┐
   │  Session complete                                 ← titleFont │
   │  1h 12m active · 6m paused · 3 segments · 4 notes ← callout    │
-  │  [Short session — discard it?]  (warning banner if < 60 s)     │
+  │  [Under a minute long.  (Discard)]  (warning banner if < 60 s) │
   │                                                               │
   │  Title     [ Refactor parser___________________________ ]     │
   │  Label     ▾ ◉ Deep work                                      │
@@ -422,9 +468,13 @@ Built to be finished in about ten seconds: the essentials up front, everything e
   │  ▸ 4 notes                                     ← disclosures   │
   │  ▸ Add learning points  (LearningsEditor .compact, B)          │
   │                                                               │
-  │  {!Discard}            ( Resume session )   [ Save  ⌘↩ ]      │
+  │  {!trash}              ( Resume session )   [ Save ]          │
   └───────────────────────────────────────────────────────────────┘
 ```
+- **Discard is icon-only**: `Label("Discard", systemImage: "trash").labelStyle(.iconOnly)` in
+  `DestructiveButtonStyle`, help "Discard", a11y "Discard session", still confirmed ("Discard this session?").
+- Save: `PrimaryButtonStyle`, help "Save", shortcut = `ShortcutStore` "Save Session Review" (default ⌘↩,
+  shown in no label or tooltip). "Resume session" (Quiet) keeps tracking; the stopped time counts as a pause.
 - Discard is two-phase: the sheet closes first (`engine.discardPendingSession()`), and RootView's sheet
   `onDismiss` deletes the session (`engine.finishPendingDiscard()`), so nothing on screen reads a deleted model.
 - Use `Form { … }.formStyle(.grouped)` *or* a plain VStack with leading labels column (width 64,
@@ -445,7 +495,7 @@ Built to be finished in about ten seconds: the essentials up front, everything e
   │ “ Batch review comments before replying│   takeaway (if setting on), 3 lines max
   │ Today 2h 15m of 4h  ▓▓▓▓▓▓░░░░          │   ProportionBar(total: goal)
   │────────────────────────────────────────│
-  │ ☐ Show overlay                    ⌘⇧O  │   Toggle(.checkbox) or menu-like row
+  │ ☐ Show overlay                    ⇧⌘O  │   hint = ShortcutStore.displayString(for: .toggleOverlay)
   │ Open Worklog                           │   menu-like rows: full-width, hover fill
   │ Settings…                          ⌘,  │
   │ Quit Worklog                       ⌘Q  │
@@ -457,58 +507,115 @@ Built to be finished in about ten seconds: the essentials up front, everything e
 - Takeaway row has the same Done control (`checkmark`, 20) as Today; "Running on another Mac" hint under
   the timer when it applies.
 - Bottom rows are menu-like: `Button` with a private full-width row style (hover
-  `textPrimary.opacity(0.06)`, radiusS), keyboard hints in `monoFont` `textTertiary`.
+  `textPrimary.opacity(0.06)`, radiusS), keyboard hints in `monoFont` `textTertiary`. The overlay hint reads
+  `ShortcutStore.displayString(for: .toggleOverlay)` and is hidden when unassigned; "⌘," and "⌘Q" are fixed
+  and stay literal. This hint column is one of the three places shortcut glyphs may appear (§12.0).
 - Padding `spacingL`; sections separated by 1 pt `separator` rules with `spacingM` around them.
 - With `theme.usesMaterials` the system already gives the window vibrancy; `themedPanelBackground()` keeps
   it consistent for Graphite (solid).
 
-### 10.6 Floating overlay (A: `OverlayView`) — width 300 (220 compact)
+### 10.6 Floating overlay (F2: `OverlayView`, `OverlayContent`) — width 300 (220 compact)
 
 ```
   Regular (300)                              Compact (220)
   ╭──────────────────────────────────╮       ╭─────────────────────────╮
   │ ● ◉ Deep work                  ✕ │       │ ● 1:12:40   ⏸  ■      ✕ │
   │ 1:12:40                          │       │ Refactor parser         │
-  │ Refactor parser · seg 0:24:10    │       ╰─────────────────────────╯
-  │ ⊡⏸  ⊡✂  ⊡■            Today 2h15 │
-  │ [ Note…                     ⏎ ]  │
+  │ Refactor parser · seg 24:10      │       ╰─────────────────────────╯
+  │ ⊡⏸  ⊡■  ⊡✂           Today 2h 15m │
+  │ [ Note…                        ] │
   │ “ Batch review comments…         │
   ╰──────────────────────────────────╯
 ```
+**Layout model.** The overlay shows an ordered list of elements, `AppSettings.overlayLayout: [OverlayElement]`
+(persisted as raw values under `settings.overlayLayout`; the old `overlayShow…` toggles were migrated once).
+Elements: Label, Timer, Segment focus, Controls, Split, Today’s total, Quick note, Takeaway. Default (fresh
+install and "Reset Layout"): Label, Timer, Segment focus, Controls, Split, Quick note, Takeaway. An empty layout
+is allowed: only the header shows.
+
+**Rendering** (one renderer, `OverlayContent`, for the live overlay, the preview and the editor):
 - Background: `themedPanelBackground(cornerRadius: theme.radiusL)`; padding `spacingM` (compact `spacingS`).
-- Timer: `TimerText(.large)` regular, `.compact` in compact mode. Controls: `IconButtonStyle(size: 26)`
-  (22 compact) with labels + help. Close `xmark` top-trailing, `IconButtonStyle(size: 18)`, `textTertiary`.
-- Every section obeys its `overlayShow…` setting. Idle: takeaway (with Done ✓) + `[ ▶ Start · Deep work ]`
-  (small). "Running on another Mac" hint in the regular layout only.
+- **Header chrome** (always there, not an element, can't be removed): `LiveDot` (idle: `timer` glyph), then the
+  leading run of inline elements if the layout starts with one, otherwise a status word ("Running" / "Paused" /
+  "Not tracking"); close `xmark` top-trailing, `IconButtonStyle(size: 18)`, help "Hide overlay".
+- **Inline elements** (Label, Controls, Split, Today’s total; Timer when compact) — consecutive ones share a
+  wrapping row (`FlowLayout`); Today’s total is trailing when it ends a row. **Full-width elements:** Timer
+  (`TimerText(.large)`), Segment focus ("focus · seg 24:10"), Quick note (`insetField`), Takeaway.
+- Controls: pause/resume + stop, `IconButtonStyle(size: 26)` (22 compact), help "Pause"/"Resume", "Stop".
+  Split: `scissors`, help "Split segment".
+- Idle: Takeaway (with Done ✓), Today’s total and Controls (as "Review…" when a review is pending, plus
+  `[ ▶ Start · Deep work ]`, help "Start session") render in layout order; the rest is hidden.
+- "Running on another Mac" is chrome under the header, live only.
 - Whole panel is draggable (window background); don't put drag-sensitive gestures on it.
 
-### 10.7 History (B: `HistoryView`)
+#### 10.6.1 Layout editor (Settings ▸ Overlay ▸ Layout, F2: `OverlayLayoutEditor`)
+
+Direct manipulation, in the spirit of iPhone Control Center: what you see is the overlay, at real size.
+```
+  ┌ Layout ───────────────────────────────────────────────────────────────┐
+  │ [ Running | Idle ]                                           ( Edit ) │  ← header row
+  │ ┌ stage: insetSurface, radiusM, padding spacingXL, min height 200 ──┐ │
+  │ │            ╭────────────────────────────╮                          │ │
+  │ │            │ ● ⊖◉ Deep work           ✕ │   ← live preview, current │ │
+  │ │            │ ⊖1:12:40                   │     theme, compact and    │ │
+  │ │            │ ⊖Refactor parser · seg …   │     opacity settings      │ │
+  │ │            ╰────────────────────────────╯                          │ │
+  │ │                         (+)                ← AddBadgeButton        │ │
+  │ └────────────────────────────────────────────────────────────────────┘ │
+  └───────────────────────────────────────────────────────────────────────┘
+```
+- **At rest:** a non-interactive preview (`allowsHitTesting(false)`, nothing touches the engine) with a
+  segmented "Running / Idle" preview switch (small) and an "Edit" button (`QuietButtonStyle`).
+- **Edit** → the preview always shows the running sample with every layout element; the header row shows
+  "Reset Layout" (Quiet, disabled at the default) and "Done" (`PrimaryButtonStyle`) instead.
+  - Each element **wiggles** (`.wiggle(true, seed: index)`; dashed outline under Reduce Motion) and gets a
+    **(−)** `RemoveBadgeButton` at its top-leading corner (offset −6, −6; a11y "Remove *Element*").
+  - **Drag to reorder**, live: neighbours make room as you drag (150 ms ease-out, none under Reduce Motion);
+    the drag preview is not rotated. The header chrome doesn't wiggle and can't be removed or moved.
+  - **(+)** `AddBadgeButton` (a11y "Add element") under the preview opens a popover listing the hidden
+    elements (icon + title); clicking one appends it; the popover closes when none are left. With everything
+    shown the button is disabled with help "All elements shown".
+  - Keyboard / VoiceOver: each element has a context menu and accessibility actions "Move Up", "Move Down",
+    "Remove".
+- Every change writes `settings.overlayLayout` immediately; the real overlay updates live. "Done" only leaves
+  edit mode (there is nothing to save or cancel).
+
+### 10.7 History (F1: `HistoryView`)
 
 ```
-┌───────────────────────────────┬──────────────────────────────────────────────┐
-│ [⌕ Search sessions      ]  ↕▾│                                              │
-│ ◉ All  ◉ Deep work  ◉ Meetings│          SessionDetailView (10.8)            │
-│───────────────────────────────│                                              │
-│ ● Live session · 1:12:40   ›  │                                              │
-│ TODAY                         │                                              │
-│ Code review sweep      1h 12m │                                              │
-│ ◉ Deep work  #review          │                                              │
-│ ███▌██████                    │                                              │
-│ …“found the off-by-one…”      │  ← search snippet, caption, match in accent  │
-│ YESTERDAY                     │                                              │
-│ Standup                  18m  │                                              │
-└───────────────────────────────┴──────────────────────────────────────────────┘
-   list min 300 / ideal 340                     detail min 480
+┌───────────────────────────────┬┬─────────────────────────────────────────────┐
+│ [⌕ Search               ]  ↕▾ ││                                             │
+│ (All) (● Deep work) (● Meet…  ││          SessionDetailView (10.8)           │
+│───────────────────────────────││                                             │
+│ ● Live session · 1:12:40   ›  ││                                             │
+│ TODAY                         ││                                             │
+│ Code review sweep      1h 12m ││                                             │
+│ ◉ Deep work  #review          ││                                             │
+│ ███▌██████                    ││                                             │
+│ …“found the off-by-one…”      ││  ← search snippet, caption, match in accent │
+│ YESTERDAY                     ││                                             │
+│ Standup                  18m  ││                                             │
+└───────────────────────────────┴┴─────────────────────────────────────────────┘
+   list 340 (280–460), drag the divider    detail: everything else, min 0
 ```
+- **Columns:** a plain `HStack`, never `HSplitView` (it leaks its panes' minimum sizes into the window). The
+  list has an explicit width, default 340, clamped to 280 … min(460, total − 420), persisted in
+  `history.listWidth`. The divider is a 1 pt `separator` line with an invisible 7 pt drag handle (resize
+  cursor on hover, double-click resets to 340, hidden from VoiceOver). The detail takes the rest with
+  `minWidth: 0` and is clipped, so **switching sessions never changes either width**.
 - Day group headers: `relativeDayTitle`, `captionFont` semibold `textTertiary` (uppercase in Graphite via
   `theme.sectionHeaderUppercased`). Keep them sticky (`Section` in `List`).
 - Row: title `headlineFont` (1 line) + duration `timerCompactFont` trailing; second line `LabelBadge(.small)`
   + up to 3 `TagChip`s + "+2"; optional `ProportionBar(height: 3)` of segments; search snippet
   `captionFont` `textSecondary`, 2 lines.
 - Sort menu (`IconButtonStyle`, `arrow.up.arrow.down`) with checkmarked options: Newest first, Oldest
-  first, Longest, Shortest, Label A–Z. Label filter chips: `TagChip(name:colorHex:isSelected:)` in a
-  horizontal `ScrollView`.
-- Selection uses the native List highlight (tinted by accent). ⌫ deletes with confirm. ⌘F focuses search.
+  first, Longest, Shortest, Label A–Z.
+- **Label filter:** `FilterChip`s ("All" without a dot, then one per label with its color dot), `.help(title)`,
+  `HStack(spacing: 6)` in a horizontal `ScrollView(showsIndicators: false)`, vertical padding 2.
+- Selection uses the native List highlight (tinted by accent). ⌫ deletes with confirm ("Delete this
+  session?" / "This can’t be undone."). The Find in History shortcut (default ⌘F) focuses search; the
+  search field's help is "Search".
+- Empty states: §12.
 
 ### 10.8 Session detail (B: `SessionDetailView`)
 
@@ -540,11 +647,19 @@ Built to be finished in about ten seconds: the essentials up front, everything e
 - **LearningsEditor (`.full`)**: "What I learned" `TextEditor` (min height 100, `insetSurface`,
   radiusS, `bodyFont`); "Takeaway for next time" single-line field + counter `n/140` (`captionFont`,
   `textTertiary`, `warning` past 140) + `Toggle("Show in overlay & menu bar")`; learning points as rows:
-  drag handle (`line.3.horizontal`, tertiary), text field, `TagPicker`, mastery control (five 8 pt
-  circles, filled up to rating in `accent`, click same value to clear), delete `IconButtonStyle(22)`.
+  drag handle (`line.3.horizontal`, tertiary), text field, `TagPicker`, mastery control, delete
+  `IconButtonStyle(22)`.
+- **Mastery** is the user's own rating of how well they know a learning point: 1 = just met it, 5 = could
+  teach it; 0 = not rated. It feeds the mastery line on the Learning page. The control is a "Mastery" caption
+  (`captionFont`, `textTertiary`) followed by five 8 pt circles filled up to the rating in `accent`. Each
+  dot's tooltip names its value, "Mastery 3 of 5"; the current one reads "Clear mastery" (clicking it clears
+  the rating). VoiceOver: one adjustable element "Mastery". Read-only places show "Mastery 3/5".
   "+ Add learning point" `QuietButtonStyle` small. `.compact` hides learning-point tags/mastery behind a
   disclosure and caps the editor at 3 points visible.
-- Detail column `maxWidth 760`, sections separated by `spacingXL`.
+- Detail column: `.frame(minWidth: 0, maxWidth: 760, alignment: .topLeading)`, then padding, then
+  `.frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)`: leading-aligned so it never re-centres
+  between sessions. Sections separated by `spacingXL`. No horizontal `.fixedSize()` on user text (titles,
+  labels, focus): truncate with `lineLimit(1)` + tail + `layoutPriority(1)` instead.
 
 ### 10.9 Learning (C: `LearningView`)
 
@@ -596,22 +711,76 @@ Chart styling (C):
 - Durations on axes in hours (`formattedHoursDecimal`); tooltips/selection via `chartOverlay` optional.
 - Chart height 220 (main), 180 (secondary). Not enough data → `EmptyStateView` in the pane (§12).
 
-### 10.11 Settings (C: `SettingsView`) — 680 × 520, TabView
+### 10.11 Settings (F3: `SettingsView`) — in the main window
 
-Use native `Form { }.formStyle(.grouped)` in every tab, `themedBackground()` on the tab content.
+Settings is a page in the main window's detail column (§10.1), not a separate window or a `TabView`.
 ```
-  [General] [Appearance] [Overlay] [Labels & Tags] [Account] [Data]
+  ┌ detail column ──────────────────────────────────────────────────────────────┐
+  │ [⚙ General] [◐ Appearance] [▭ Overlay] [⌨ Shortcuts] [# Labels & Tags] …    │ ← PillTabBar, padding
+  │─────────────────────────────────────────────────────────────────────────────│   XL h · L top · M bottom
+  │            ┌ SettingsPage(maxWidth: 720), centred, top-aligned ┐            │ ← 1 pt separator
+  │            │  Form { … }.formStyle(.grouped)                   │            │
+  │            │                                                   │            │
+  │            │  Automatic pausing                                │            │
+  │            │  Pause when the Mac sleeps                  [on]  │            │
+  │            │  Ask “Still working?” after 10 hours        [-|+] │ ← ValueStepper
+  │            │                                                   │            │
+  │            │  Goals & calendar                                 │            │
+  │            │  Daily goal 4h                              [-|+] │            │
+  │            │  Week starts on Monday ⌄                          │ ← ValuePicker
+  │            └───────────────────────────────────────────────────┘            │
+  └─────────────────────────────────────────────────────────────────────────────┘
+```
+(The icons in the bar are SF Symbols: `gearshape`, `paintpalette`, `rectangle.inset.topright.filled`,
+`keyboard`, `tag`, `person.crop.circle`, `externaldrive`.)
+- **Sections:** General, Appearance, Overlay, Shortcuts, Labels & Tags, Account, Data, switched by a
+  `PillTabBar` (scrolls horizontally when the column is narrow). The selection persists
+  (`settingsWindow.selectedTab`); `router.showSettings(tab:)` opens a given section.
+- **Width:** each section is wrapped in `SettingsPage(maxWidth:)`: 720 for General, Appearance, Shortcuts,
+  Account and Data; 760 for Overlay (room for the layout editor); full width (`nil`) for Labels & Tags (two
+  columns). Forms fill that width; the page is centred and top-aligned on `themedBackground()`.
+- **Value sentences:** a setting whose value is a number or a short choice reads as a sentence with the value
+  **bold in the accent color**, in the same font and on the same baseline as the words around it, never
+  monospaced: "Keep the latest **10 backups**", "Ask “Still working?” after **10 hours**", "Daily goal **4h**"
+  (or **Off**), "Week starts on **Monday**", "Back up **hourly**", "Opacity **95%**". Steppers and sliders
+  stay native and sit trailing (`ValueStepper`, `ValueSlider`); short choices open a small list from the value
+  itself (`ValuePicker`). Never put `LabeledContent` or monospaced digits inside a `Stepper` label: that splits
+  the sentence into two columns and breaks the baseline.
+- **Native controls stay** where they are clearer: segmented pickers (appearance mode, text size, Labels/Tags),
+  toggles, `LabelPicker` (default label) and pickers inside sheets.
+- **Footnotes** (`SettingsFootnote`) only where the effect isn't obvious: ≤ 1 sentence, ≤ ~15 words, no
+  shortcut glyphs (§12.0).
 
-  Appearance
-  ┌ Theme ────────────────────────────────────────────────────────────┐
-  │ [Graphite swatch ✓]   [Paper swatch]   [Meadow swatch]            │ ← ThemePreviewSwatch in HStack
-  └───────────────────────────────────────────────────────────────────┘
-  Appearance      [ System | Light | Dark ]                    ← segmented, with systemImage
-  Accent          ● ● ● ● ● ● ● ● ●   Theme Default             ← 16 pt circles, ring on selected;
-                                                                  first = theme accent with "A" mark
-  Text size       [ Small | Standard | Large | Extra Large ]    ← ThemeManager.textSize (extra)
-                  (Reset Appearance)
+**General:** New sessions (default label) · Takeaway · Automatic pausing · Goals & calendar · Menu bar
+("Show in menu bar", "Show timer", "Show takeaway"; the last two disabled while the first is off) · Dock.
+
+**Overlay** (F2): "Overlay" (Show overlay + a one-line status footnote "Showing" / "Hidden" / "Appears when a
+session starts"; Hide when idle) · "Layout" (the editor, §10.6.1) · "Window" (Compact, `ValueSlider`
+"Opacity", Keep on top, Show on all Spaces, "Restore Defaults").
+
+**Shortcuts** (F3, `SettingsShortcutsTab`):
 ```
+  Session
+  Start / Stop Session                       [  ⇧⌘S  ]  ↺
+  Pause / Resume                             [  ⇧⌘P  ]  ↺
+  Discard Session                            [  None  ]  ↺ (disabled: default)
+                                    Used by Start / Stop Session.   ← danger caption, trailing, 4 s
+  Navigation
+  Show Today                                 [  ⌘1   ]  ↺
+  …
+  Editing
+  Find in History                            [  ⌘F   ]  ↺
+  Save Session Review                        [  ⌘↩   ]  ↺
+
+  ( Reset All )
+  ⌘, ⌘Q, ⌘W, Esc, Return and ⌫ are fixed.
+```
+- One grouped `Section` per `ShortcutGroup`; rows are the action title, a `ShortcutRecorder` and a
+  `ResetToDefaultButton` (a11y "Reset *Action*"). A rejected recording shows the store's message under the row
+  in `captionFont` `danger` ("Include ⌘ or ⌃." / "Reserved by macOS." / "Used by *Action*."); it clears after
+  4 s or at the next attempt. "Reset All" (Quiet, disabled without customizations) confirms "Reset all
+  shortcuts?". Changes apply immediately to menus, in-view shortcuts and the menu bar hint.
+
 - Labels & Tags: two-column: label list (drag to reorder, `ColorDot` + symbol + name + usage count) /
   editor (name field, `LabelColorPicker`, `SymbolPicker` in a 240 pt area, Archive / Delete…). Tags below:
   `Table` or List with name, parent label `LabelPicker(includeNone:true, title:"Parent")`, color, usage, ⋯.
@@ -620,8 +789,10 @@ Use native `Form { }.formStyle(.grouped)` in every tab, `themedBackground()` on 
   "reason · N sessions · pinned", size in `monoFont`, Restore…, ⋯ menu with Pin/Unpin · Show in Finder · Delete…)
   / Danger zone (`DestructiveButtonStyle`, double confirm). Importing a file and restoring a backup both go
   through `BackupService` (`importArchive(_:mode:)` / `restore(from:mode:)`), which makes the safety backup first.
+- Data: "Back up **hourly**" (`ValuePicker` over `BackupInterval`, values lowercased) and "Keep the latest
+  **10 backups**" (`ValueStepper`).
 - **Data ▸ Recovery** (only while the store couldn't be opened, i.e. in-memory mode): a first section with an
-  error `InlineBanner` "Worklog couldn’t open its data store, so nothing you change now is saved." and the
+  error `InlineBanner` "Your data couldn’t be opened. Changes won’t be saved." and the
   action **Recover…**, plus a footnote. Recover… opens a sheet (`SettingsRecoverySheet`, width 540):
   "After relaunching" picker — restore a backup (from the list or a file) or start fresh (re-downloads from
   iCloud when sync is on); a consequence line ("Worklog moves the damaged store into the Recovered folder,
@@ -648,19 +819,18 @@ Use native `Form { }.formStyle(.grouped)` in every tab, `themedBackground()` on 
                    [  Sign in with Apple  ]           ← SignInWithAppleButton 260×36
                    ( Continue without signing in )   ← QuietButtonStyle
 
-     Your data syncs with iCloud on this Mac's Apple Account either way.   ← captionFont tertiary
+     Your data syncs with iCloud either way.           ← captionFont tertiary
                                                        (only when CloudKit is in use; see below)
      [InlineBanner error …]                            (if auth.lastError)
 
                         Pick a look                  ← sectionHeaderFont, textSecondary
          [Graphite ✓]     [Paper]     [Meadow]       ← ThemeSwatchRow() (compact swatches, 124 pt)
-          You can change it any time in Settings ▸ Appearance.   ← captionFont tertiary
 ```
 Full-window `themedBackground()`, content vertically centered, no illustration, no gradients.
 - The storage line is truthful: it mentions iCloud sync only when this launch actually uses CloudKit;
   otherwise "Your data is saved on this Mac." (+ where to turn sync on, or why iCloud isn't available).
 - Theme picker: `ThemeSwatchRow()` — compact swatches show the theme in the current appearance with the
-  name below; the summary is the tooltip. Clicking applies the theme immediately (the Welcome screen
+  name below (no tooltip; VoiceOver reads the summary). Clicking applies the theme immediately (the Welcome screen
   re-themes live), so the choice is self-explanatory. Graphite is preselected.
 
 ---
@@ -671,45 +841,161 @@ Full-window `themedBackground()`, content vertically centered, no illustration, 
   the design system already react. No hover-only information (anything in a tooltip is also reachable).
 - **Focus:** native focus rings for native controls; DS buttons draw an accent ring when focused; inset
   fields turn their border accent (`insetField(isFocused:)`). Use `@FocusState` for: Today note composer
-  (router.noteFocusRequest), History search (⌘F), EndSessionSheet title, popover search fields.
-- **Keyboard:** Return submits single-line fields; ⌘↩ = sheet default action; Esc cancels/closes
-  (EndSessionSheet: Esc = Save as-is); ⌫ deletes selected History row (confirm); arrow keys move list
-  selection; Space toggles focused checkbox/toggle. Every icon-only button has `.help` *and*
-  `.accessibilityLabel`.
+  (router.noteFocusRequest), History search (Find in History), EndSessionSheet title, popover search fields.
+- **Keyboard:** Return submits single-line fields; Esc cancels/closes (EndSessionSheet: Esc = Save as-is);
+  ⌫ deletes selected History row (confirm); arrow keys move list selection; Space toggles focused
+  checkbox/toggle. Every icon-only button has `.help` *and* `.accessibilityLabel`. App shortcuts are
+  customizable (§11.1).
 - **Context menus:** rows (History sessions, notes, segments, learning points, images) have a context menu
   that mirrors their ⋯ menu. Destructive items last, with `role: .destructive`.
 - **Confirmations:** `confirmationDialog` for Discard / Delete / Replace import / Delete all (double).
   Titles state the consequence: "Delete this session? This can’t be undone."
-- **Tooltips:** `.help` on truncated titles, timestamps ("Edited Oct 7, 10:42"), chart segments.
+- **Tooltips:** the action's name (§12.0); also on truncated titles (full text), timestamps ("Edited Oct 7,
+  10:42") and chart segments.
 - **Drag & drop:** image drop zones highlight with an accent dashed border (`StrokeStyle(dash: [5, 4])`)
-  and `accent.opacity(0.06)` fill while targeted.
+  and `accent.opacity(0.06)` fill while targeted. Reordering (overlay layout editor) is live: items move
+  while you drag, with an unrotated drag preview.
 
-## 12. Empty states and copy
+### 11.1 Shortcuts
 
-Voice: plain, short, sentence case, no exclamation marks, no emoji. Name the next step.
+**Customizable** (`ShortcutAction`, stored by `ShortcutStore` under `shortcuts.overrides`; Settings ▸ Shortcuts):
+
+| Group | Action | Default |
+|---|---|---|
+| Session | Start / Stop Session · Pause / Resume · Add Note · Split Segment · Discard Session · Toggle Overlay | ⇧⌘S · ⇧⌘P · ⇧⌘N · ⇧⌘D · none · ⇧⌘O |
+| Navigation | Show Today · Show History · Show Learning · Show Stats | ⌘1 · ⌘2 · ⌘3 · ⌘4 |
+| Editing | Find in History · Save Session Review | ⌘F · ⌘↩ |
+
+**Fixed** (HIG/system conventions that users and VoiceOver rely on; mostly scoped to focus or a dialog, several
+owned by AppKit): ⌘, Settings · ⌘Q, ⌘H, ⌥⌘H, ⌘W, ⌘M, full screen (⌃⌘F), ⌃⌘S Toggle Sidebar · the Edit menu
+(⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A) · Help (⇧⌘/) · Return (`.defaultAction`) and Esc (`.cancelAction`) in sheets and popovers
+· Return in text fields · ⌫ in the History list · ←/→ in the image viewer. These combinations are reserved:
+recording one gives "Reserved by macOS.".
+
+**Rules for a recorded shortcut:** it must include ⌘ or ⌃ ("Include ⌘ or ⌃."), must not be reserved, and
+must not duplicate another action ("Used by *Action*."). Letters are stored lowercase; ⇧ is an explicit
+modifier. Glyph order is ⌃⌥⇧⌘ + key.
+
+**`ShortcutRecorder`** (the key-cap field):
+- **Idle:** the shortcut in a key-cap pill (`insetSurface`, `separator` border, `radiusS`, `bodyFont` medium,
+  min width 96, height 24), or "None" in `textTertiary`. Help "Record shortcut".
+- **Click → recording:** 1.5 pt accent border, "Type shortcut…" in `textSecondary`; held modifiers show live
+  ("⌥⌘") while you hold them. Help "Esc cancels, ⌫ clears". The pill keeps its width, so the row doesn't
+  shift.
+- While recording, a local `NSEvent` monitor swallows every key (including ⌘Q): **Esc** (no modifiers)
+  cancels; **⌫ / ⌦** (no modifiers) clears the shortcut; any other supported key combination is handed to
+  `onRecord` and validated by the store; unsupported keys (F-keys, keypad-only) beep and keep recording.
+- Recording ends on a second click, a click anywhere else (the click goes through), the window resigning
+  key, the field disappearing, or another recorder starting (one at a time). The monitor is removed on
+  every exit path.
+- VoiceOver: label = the action's title, value = the shortcut ("None" / "Recording"), hint "Records a new
+  shortcut."
+
+**Where glyphs appear:** only in menus (automatic), the menu bar panel's hint column and Settings ▸ Shortcuts.
+Never in tooltips, button titles, footnotes or empty states (§12.0).
+
+## 12. Copy
+
+### 12.0 Copy guideline
+
+Voice: plain, short, sentence case, no exclamation marks, no emoji. Name the next step. Every string in the app
+follows these rules.
+
+1. **Tooltips (`.help`)**
+   - Use the action's name: 1–3 words, sentence case, no trailing period, no colon explanations, no shortcut glyphs.
+     - "Split segment", "Pause", "Resume", "Stop", "Discard", "Hide overlay", "Add images", "More", "Reset", "Search".
+   - Only exception: a disabled control may say why, in ≤ 6 words ("Stop the session first").
+   - Tooltips on truncated text may show the full text.
+2. **Button titles**
+   - A verb, or verb + noun, ≤ 3 words.
+   - Add "…" only when more input or confirmation follows ("Restore…", "Delete…").
+3. **Helper text / footnotes (`SettingsFootnote`, captions)**
+   - Only when the effect isn't obvious from the label.
+   - ≤ 1 sentence and ≤ ~15 words.
+   - Delete footnotes that restate their label or list where else a feature appears.
+4. **Empty states**
+   - Title ≤ 4 words.
+   - Message optional, ≤ 1 sentence and ≤ 10 words.
+   - Action ≤ 3 words.
+5. **Banners:** ≤ 1 short sentence + an action.
+6. **Confirmation dialogs**
+   - Title states the consequence in ≤ 8 words.
+   - Message optional, ≤ 1 sentence.
+7. **Accessibility labels:** the control's name; it may be slightly more specific than the tooltip ("Discard session").
+8. **Accessibility hints:** only when the result isn't implied by the label; ≤ 1 short sentence.
+9. **Shortcut glyphs**
+   - Never hard-code a shortcut glyph anywhere except fixed system ones (⌘, and ⌘Q).
+   - Glyphs appear only in:
+     - menus (automatic)
+     - the menu bar panel's hint column, which reads `ShortcutStore.displayString(for:)`
+     - Settings ▸ Shortcuts
+10. **Section headers:** 1–2 words.
+
+**Canonical rewrites.** Use these exact strings; the same pattern applies elsewhere.
+
+| Before | After |
+|---|---|
+| `Split segment: start a new one now` (OverlayView) | `Split segment` |
+| `Close the current segment and start a new one now` (LiveSegmentForm) | `Split segment` |
+| `Start a new segment when your focus changes (⌘⇧D)` | `Split segment` |
+| `Stop and review the session (⌘⇧S)` | `Stop` |
+| `Resume the session (⌘⇧P)` / `Pause the session (⌘⇧P)` | `Resume` / `Pause` |
+| `Start a session with this label, tags and focus (⌘⇧S starts with the default label)` | `Start session` |
+| `Start a session with the chosen label (⌘⇧S)` | `Start session` |
+| `Start a session with “X” (the default label)` | `Start session` |
+| `Hide overlay (⌘⇧O)` | `Hide overlay` |
+| `Attach images to this session (you can also drop or paste them here)` | `Add images` |
+| `Attach images from your Mac. You can also paste or drop images on Images below.` | `Add images` |
+| `Done: stop showing this takeaway` | `Done` |
+| `Keep tracking; the time since you stopped counts as a pause` | `Resume session` |
+| `Save session (⌘↩)` | `Save` |
+| `Search titles, notes, labels, tags, focus and learnings (⌘F)` | `Search` |
+| `This session was started or last changed on another Mac. Pausing, splitting or stopping it here takes it over.` | `Running on another Mac` |
+| `Primary label (segments that used the old label follow)` | `Label` |
+| `Showing X` / `Show X` (History chips) | `X` (chip help) |
+| Footnote `Used when you start from the menu bar, the overlay or ⌘⇧S. “None” uses the first label in your list.` | `“None” uses your first label.` |
+| Footnote (Import) `Import a Worklog JSON export or backup. “Merge” adds …` | `Replace deletes current data first. A backup is made either way.` |
+| Footnote (Takeaway) | `Shown until the next session’s review.` / `Shown until replaced or marked done.` |
+| Footnote (Automatic pausing) | `Worklog never resumes on its own.` |
+| Overlay status `Hidden. Turn it on here, from the menu bar panel or with ⌘⇧O.` | `Hidden` / `Showing` / `Appears when a session starts` |
+
+**Sweep** (run over your files before handing off; fix every hit that breaks the rules):
+```
+grep -n '\.help(\|Text("\|Label("\|Button("\|SettingsFootnote(\|EmptyStateView(\|InlineBanner(\|accessibilityHint(\|confirmationDialog(\|message:\|⌘' <your files>
+```
+
+### 12.1 Empty states
 
 | Where | `EmptyStateView` title / systemImage / message / action |
 |---|---|
-| History, no sessions | "No sessions yet" / `clock` / "Sessions you finish appear here, grouped by day." / "Start a session" → `router.show(.today)` |
-| History, no results | "No matches" / `magnifyingglass` / "Nothing matches “\(query)”. Try fewer words or a tag name." / — |
-| History, nothing selected | "Select a session" / `sidebar.left` / "Choose a session to see its notes, segments and learnings." / — |
-| Learning, no learnings | "Nothing learned… yet" / `lightbulb` / "Add learning points when you finish a session. They collect here by tag." / — |
-| Learning, no tags | "No tags on your learnings" / `number` / "Tag learning points to follow how a topic develops." / — |
-| Learning, no search results | "No matches" / `magnifyingglass` / "No learning points match “\(query)”." / — |
-| Stats, not enough data | "Not enough data" / `chart.bar.xaxis` / "Finish a session in this range to see stats." / — |
-| Labels, none | "No labels" / `tag` / "Labels sort your time into kinds of work." / "Restore defaults" |
+| History, no sessions | "No sessions yet" / `clock` / "Finished sessions appear here." / "Start session" → Today |
+| History, no results | "No matches" / `magnifyingglass` / "Nothing matches “\(q)”." / "Clear filters" (only with chip filters) |
+| History, nothing selected | "Select a session" / `sidebar.left` / – / – |
+| History, live session selected | "Session in progress" / `timer` / – / "Go to Today" |
+| Learning, no learnings | "No learnings yet" / `lightbulb` / "Add learning points when a session ends." / – |
+| Learning, no tags | "No tagged learnings" / `number` / "Tag points to follow a topic." / – |
+| Learning, no search results | "No matches" / `magnifyingglass` / – / – |
+| Stats, not enough data | "Not enough data" / `chart.bar.xaxis` / "Finish a session in this range." / – |
+| Labels, none | "No labels" / `tag` / – / "Restore defaults" |
 | Session detail, no notes | inline `textTertiary`: "No notes." |
-| Session detail, no images | inline: "Drop images here, paste, or use ＋." |
-| Today, nothing logged | inline: "Nothing logged yet today." |
+| Session detail, no images | inline: "Drop, paste or add images." |
+| Today, nothing logged | inline: "Nothing logged today." |
 | Overlay / menu, no takeaway | omit the section entirely |
 
-Banner copy (InlineBanner):
-- local only (info): "Saving to this Mac only — \(reason)." dismissible.
-- in-memory (error): "Your data couldn’t be opened. Changes in this session won’t be saved." action "Restore from backup…".
-- auto-pause sleep (warning): "Paused when your Mac went to sleep." action "Resume".
-- auto-pause quit (warning): "Paused when Worklog quit." action "Resume".
-- long session (warning): "Still working? This session has been running for \(n) hours." actions per §7.3.
-- short session in end sheet (warning): "This session was under a minute." action "Discard".
+### 12.2 Banners and dialogs
+
+Banners (`InlineBanner`, ≤ 1 short sentence + an action):
+- in-memory store (error): "Your data couldn’t be opened. Changes won’t be saved." · "Restore…"
+- iCloud sync error (warning): "iCloud sync problem. Changes are saved on this Mac." · "Details…"
+- auto-pause (warning): "Paused while your Mac slept." / "Paused when Worklog quit." · "Resume"
+- long session (warning): "Running for \(n) hours. Still working?" · "Stop at last activity" / "Stop now" /
+  "Keep going"
+- short session, end sheet (warning): "Under a minute long." · "Discard"
+
+Confirmation dialogs (title = the consequence, ≤ 8 words; message optional, ≤ 1 sentence):
+- "Delete this session?" · "This can’t be undone."
+- "Discard this session?" · "Its notes and time will be deleted."
+- "Reset all shortcuts?"
 
 ## 13. Accessibility
 
@@ -720,13 +1006,17 @@ Banner copy (InlineBanner):
   have a border; the selected swatch has a ring and the `.isSelected` trait.
 - **VoiceOver:** TimerText → label "Elapsed time", value "1 hour, 12 minutes, 40 seconds[, paused]".
   LiveDot → "Running"/"Paused". LabelBadge → "Label: Deep work". TagChip → "Tag: coding" (+ "Remove tag
-  coding" button). SectionHeader has the header trait. Charts: add `.accessibilityLabel` per mark
+  coding" button). SectionHeader has the header trait. FilterChip / PillTabBar buttons carry `.isSelected`.
+  Value rows (`ValueStepper`/`ValueSlider`) are one adjustable element ("Keep the latest backups", value "10
+  backups"). Edit-mode badges are labelled with the element ("Remove Timer", "Add element") and every
+  drag-reorder has "Move Up"/"Move Down" actions. Charts: add `.accessibilityLabel` per mark
   ("Monday, Deep work, 2 hours") and a summary label on the chart.
-- **Text size:** Settings → Appearance → Text size scales every theme font (0.92–1.25). Layouts must not
+- **Text size:** Settings ▸ Appearance ▸ Text size scales every theme font (0.92–1.25). Layouts must not
   clip at Extra Large: use `fixedSize(horizontal: false, vertical: true)` for wrapping text, avoid fixed
   heights on text containers (the overlay/menu panel have fixed *widths* only).
 - **Keyboard:** everything reachable without a mouse (see §11). Custom buttons are real `Button`s.
-- **Reduce Motion / Transparency:** honor `accessibilityReduceMotion` (DS components already do).
+- **Reduce Motion / Transparency:** honor `accessibilityReduceMotion` (DS components already do; the
+  edit-mode wiggle becomes a dashed outline).
   `themedPanelBackground` switches from the material to solid `elevatedSurface` when Reduce Transparency
   is on; if you fill a panel yourself, check `@Environment(\.accessibilityReduceTransparency)` too.
 
@@ -737,7 +1027,9 @@ Banner copy (InlineBanner):
 - Do wrap running timers in `TimelineView(.periodic(from: .now, by: 1))`; don't use `engine.tick` (menu bar label only).
 - Do use one `PrimaryButtonStyle` per region; don't make destructive buttons filled.
 - Do use native `Form`, `Picker`, `Toggle`, `DatePicker`, `List`; don't re-skin them.
-- Do give icon-only buttons `.help` + `.accessibilityLabel`.
+- Do give icon-only buttons `.help` + `.accessibilityLabel`; keep tooltips to the action's name (§12.0).
+- Don't hard-code shortcut glyphs (read `ShortcutStore`); don't nest `HSplitView` in the main split view;
+  don't let data-dependent content set a pane's minimum size.
 - Don't add shadows, gradients, emoji or decorative illustrations.
 
 ## 15. Adding a theme

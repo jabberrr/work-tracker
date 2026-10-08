@@ -25,10 +25,10 @@ struct SettingsAccountTab: View {
                     InlineBanner(error, style: .error, onDismiss: { auth.lastError = nil })
                 }
                 accountActions
-                SettingsFootnote("Sign in with Apple identifies you in Worklog. It doesn’t move or upload your data, and signing out never deletes anything.")
+                SettingsFootnote("Signing in doesn’t move your data, and signing out deletes nothing.")
             }
 
-            Section("Sync and storage") {
+            Section("Storage") {
                 storageStatusRow
                 if persistence.storeMode == .cloudKit {
                     syncActivityRow
@@ -41,7 +41,7 @@ struct SettingsAccountTab: View {
                 if needsRelaunch {
                     // Quit (not relaunch): a second instance must not open the same store while this one
                     // is still saving and backing up on its way out.
-                    InlineBanner("Quit and reopen Worklog to apply this change.",
+                    InlineBanner("Reopen Worklog to apply this change.",
                                  systemImage: "arrow.clockwise", style: .warning,
                                  actionTitle: "Quit Worklog", action: { NSApp.terminate(nil) })
                 }
@@ -53,7 +53,7 @@ struct SettingsAccountTab: View {
             Button("Sign Out", role: .destructive) { auth.signOut() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Your sessions stay on this Mac and in iCloud. You can sign in again or continue as a guest.")
+            Text("Your data stays on this Mac and in iCloud.")
         }
     }
 
@@ -70,9 +70,9 @@ struct SettingsAccountTab: View {
 
     private var accountDetail: String {
         switch auth.state {
-        case .signedIn: return auth.email ?? "Your Apple ID is connected to Worklog."
-        case .guest: return "Using Worklog without an account. Everything works the same."
-        case .signedOut: return "Sign in with Apple or continue as a guest."
+        case .signedIn: return auth.email ?? "Signed in with Apple."
+        case .guest: return "Using Worklog without an account."
+        case .signedOut: return "Sign in or continue as a guest."
         case .unknown: return ""
         }
     }
@@ -117,7 +117,7 @@ struct SettingsAccountTab: View {
                     .frame(width: 220, height: 32)
                     .accessibilityLabel("Sign in with Apple")
                 if !Entitlements.hasSignInWithApple {
-                    SettingsFootnote("Sign in with Apple isn’t configured for this build. You can keep using Worklog as a guest.")
+                    SettingsFootnote("Sign in with Apple isn’t available in this build.")
                 }
             }
         }
@@ -144,13 +144,13 @@ struct SettingsAccountTab: View {
     private var storageDetail: String {
         switch persistence.storeMode {
         case .cloudKit:
-            return "Sessions sync through the iCloud account this Mac is signed in to (your private iCloud database)."
+            return "Synced through your private iCloud database."
         case .localOnly(let reason):
-            return "\(reason). Your data is safe on this Mac and in local backups."
+            return "\(reason)."
         case .inMemory(let reason):
             return reason == "Preview"
                 ? "Nothing is written to disk."
-                : "\(reason) Changes made now are lost when Worklog quits. Use Recover… in the Data tab."
+                : "\(reason) Changes won’t be saved."
         }
     }
 
@@ -193,21 +193,21 @@ struct SettingsAccountTab: View {
     /// useful to say (sync off for this launch, status not checked).
     private var iCloudAccountLine: String? {
         if !Entitlements.hasCloudKit {
-            return "This build isn’t set up for iCloud (no CloudKit entitlement)."
+            return "iCloud isn’t available in this build."
         }
         switch sync.accountStatus {
         case .unknown:
-            return persistence.storeMode == .cloudKit ? "Checking the iCloud account…" : nil
+            return persistence.storeMode == .cloudKit ? "Checking iCloud…" : nil
         case .available:
             return "This Mac is signed in to iCloud."
         case .noAccount:
-            return "This Mac isn’t signed in to iCloud (System Settings ▸ Apple Account)."
+            return "This Mac isn’t signed in to iCloud."
         case .restricted:
-            return "iCloud is restricted on this Mac (for example by Screen Time or a device profile)."
+            return "iCloud is restricted on this Mac."
         case .temporarilyUnavailable:
-            return "iCloud is temporarily unavailable. Check System Settings ▸ Apple Account."
+            return "iCloud is temporarily unavailable."
         case .couldNotDetermine:
-            return "Worklog couldn’t check the iCloud account."
+            return "Couldn’t check the iCloud account."
         }
     }
 
@@ -259,8 +259,6 @@ struct SettingsAccountTab: View {
     }
 
     private var syncExplanation: String {
-        "iCloud sync uses this Mac’s iCloud account whether or not you sign in with Apple. "
-            + "When iCloud isn’t available, Worklog keeps everything on this Mac and syncs nothing. "
-            + "The setting applies the next time Worklog opens."
+        "Uses this Mac’s iCloud account and applies the next time Worklog opens."
     }
 }

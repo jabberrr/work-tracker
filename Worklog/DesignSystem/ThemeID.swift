@@ -25,9 +25,9 @@ enum ThemeID: String, CaseIterable, Identifiable, Codable {
     /// One-line description for Settings.
     var summary: String {
         switch self {
-        case .paper: return "Ink on paper. Serif headings, hairline rules, no shadows."
-        case .graphite: return "Crisp and neutral. Clean sans type, mono readouts, a teal signal."
-        case .meadow: return "Soft greens and rounded type. Gentle depth for long days."
+        case .paper: return "Serif headings and hairline rules, like ink on paper."
+        case .graphite: return "Crisp, neutral sans type with mono readouts."
+        case .meadow: return "Soft greens, rounded type and gentle depth."
         }
     }
 

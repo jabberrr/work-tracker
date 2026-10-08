@@ -157,15 +157,15 @@ struct StatsView: View {
                 EmptyStateView(
                     title: "Not enough data",
                     systemImage: "chart.bar.xaxis",
-                    message: "Finish a session in this range to see stats."
+                    message: "Finish a session in this range."
                 )
                 .frame(minHeight: 320)
             } else if result.isEmpty {
                 EmptyStateView(
                     title: "Not enough data",
                     systemImage: "chart.bar.xaxis",
-                    message: "Finish a session to see stats. Time, labels, tags and your working hours collect here.",
-                    actionTitle: "Start a session",
+                    message: "Finish a session to see stats.",
+                    actionTitle: "Start session",
                     action: { router.show(.today) }
                 )
                 .frame(minHeight: 320)

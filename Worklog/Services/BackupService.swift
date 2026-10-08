@@ -189,7 +189,7 @@ final class BackupService {
     private func makeSafetyBackup(protecting: URL?) throws {
         guard !exporter.isEphemeralStore else { return }
         guard performBackup(reason: .beforeRestore, protecting: protecting) != nil else {
-            throw DataTransferError.writeFailed("Couldn't create a safety backup first. " + (lastError ?? ""))
+            throw DataTransferError.writeFailed("no safety backup could be made first")
         }
     }
 

@@ -45,13 +45,13 @@ struct DetailAttachmentsSection: View {
                     }
                     .buttonStyle(IconButtonStyle(size: 22))
                     .accessibilityLabel("Paste image")
-                    .help("Paste image from the clipboard")
+                    .help("Paste image")
                     Button(action: chooseImages) {
                         Image(systemName: "photo.badge.plus")
                     }
                     .buttonStyle(IconButtonStyle(size: 22))
-                    .accessibilityLabel("Attach images")
-                    .help("Attach images…")
+                    .accessibilityLabel("Add images")
+                    .help("Add images")
                 }
             }
 
@@ -98,7 +98,7 @@ struct DetailAttachmentsSection: View {
                         .font(theme.titleFont)
                         .foregroundStyle(theme.textTertiary)
                         .accessibilityHidden(true)
-                    Text("Drop images here, paste, or use ＋.")
+                    Text("Drop, paste or add images.")
                         .font(theme.calloutFont)
                         .foregroundStyle(theme.textTertiary)
                 }
@@ -142,7 +142,7 @@ struct DetailAttachmentsSection: View {
         }
         .animation(reduceMotion ? nil : .easeOut(duration: 0.12), value: isDropTargeted)
         .contextMenu {
-            Button("Attach Images…", action: chooseImages)
+            Button("Add Images…", action: chooseImages)
             Button("Paste Image", action: pasteImages)
         }
         .accessibilityElement(children: .contain)
@@ -268,7 +268,7 @@ private struct DetailAttachmentCell: View {
             .onHover { isHovering = $0 }
             .help("View larger")
             .accessibilityLabel("Image: \(name)")
-            .accessibilityHint("Opens the image viewer")
+            .accessibilityHint("Opens the viewer.")
 
             TextField("Caption", text: $attachment.caption, axis: .vertical)
                 .textFieldStyle(.plain)
@@ -365,7 +365,7 @@ private struct DetailImageViewer: View {
                     .keyboardShortcut(.leftArrow, modifiers: [])
                     .disabled(index == 0)
                     .accessibilityLabel("Previous image")
-                    .help("Previous image (←)")
+                    .help("Previous image")
                     Button {
                         step(1, in: items)
                     } label: {
@@ -375,7 +375,7 @@ private struct DetailImageViewer: View {
                     .keyboardShortcut(.rightArrow, modifiers: [])
                     .disabled(index == items.count - 1)
                     .accessibilityLabel("Next image")
-                    .help("Next image (→)")
+                    .help("Next image")
                 }
             }
 

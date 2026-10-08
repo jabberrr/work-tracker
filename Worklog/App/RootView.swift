@@ -1,7 +1,8 @@
 import SwiftData
 import SwiftUI
 
-/// Main window content: Welcome gate, sidebar navigation, storage/sync banners and the end-of-session sheet.
+/// Main window content: Welcome gate, sidebar navigation (Settings is a detail page reached from the footer gear),
+/// storage/sync banners and the end-of-session sheet.
 @MainActor
 struct RootView: View {
     @Environment(AuthService.self) private var auth
@@ -11,7 +12,6 @@ struct RootView: View {
     @Environment(AppSettings.self) private var settings
     @Environment(SyncMonitor.self) private var sync
     @Environment(\.openWindow) private var openWindow
-    @Environment(\.openSettings) private var openSettings
     @Environment(\.theme) private var theme
 
     /// The sync error text the user dismissed (or that timed out); a different error shows again.
@@ -43,7 +43,7 @@ struct RootView: View {
             Text(engine.lastError ?? "")
         }
         .onAppear {
-            router.register(openWindow: openWindow, openSettings: openSettings)
+            router.register(openWindow: openWindow)
             router.mainWindowDidOpen(hideDockIconWhenClosed: settings.hideDockIconWhenClosed)
         }
         .onDisappear {
@@ -65,18 +65,23 @@ struct RootView: View {
             sidebar
                 .navigationSplitViewColumnWidth(min: 190, ideal: 220, max: 300)
         } detail: {
+            // Min-size barrier: every frame here has an explicit 0 minimum, so no page's (data-dependent) minimum
+            // size can propagate to the split view and grow or move the window.
             VStack(spacing: 0) {
                 bannerStack
                 detail
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
             }
+            .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+            .clipped()
             .themedBackground(.background)
         }
     }
 
+    /// The List's selection. nil while Settings (not a List row) is shown, so no row stays highlighted.
     private var sidebarSelection: Binding<SidebarItem?> {
         Binding(
-            get: { router.selection },
+            get: { router.selection == .settings ? nil : router.selection },
             set: { newValue in
                 if let newValue { router.selection = newValue }
             }
@@ -84,25 +89,27 @@ struct RootView: View {
     }
 
     private var sidebar: some View {
-        VStack(spacing: 0) {
-            List(selection: sidebarSelection) {
-                ForEach(SidebarItem.allCases) { item in
-                    Label(item.title, systemImage: item.systemImage)
-                        .tag(item)
+        List(selection: sidebarSelection) {
+            ForEach(SidebarItem.primaryItems) { item in
+                Label(item.title, systemImage: item.systemImage)
+                    .tag(item)
+            }
+        }
+        .listStyle(.sidebar)
+        // Pinned to the bottom of the sidebar column (not a VStack sibling), so it can't be pushed off-screen.
+        .safeAreaInset(edge: .bottom, spacing: 0) {
+            VStack(spacing: 0) {
+                if engine.isActive {
+                    miniStatusRow
+                        .padding(.horizontal, theme.spacingS)
+                        .padding(.vertical, theme.spacingS)
                 }
+                Divider()
+                sidebarFooter
+                    .padding(.horizontal, theme.spacingM)
+                    .padding(.vertical, theme.spacingS)
             }
-            .listStyle(.sidebar)
-
-            if engine.isActive {
-                miniStatusRow
-                    .padding(.horizontal, theme.spacingS)
-                    .padding(.bottom, theme.spacingS)
-            }
-
-            Divider()
-            sidebarFooter
-                .padding(.horizontal, theme.spacingM)
-                .padding(.vertical, theme.spacingS)
+            .background(theme.color(for: .sidebar))
         }
         .themedBackground(.sidebar)
     }
@@ -137,9 +144,9 @@ struct RootView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
-        .help("Show the running session")
+        .help("Show session")
         .accessibilityLabel(engine.isPaused ? "Session paused" : "Session running")
-        .accessibilityHint("Shows the Today page")
+        .accessibilityHint("Shows Today.")
     }
 
     @ViewBuilder
@@ -163,23 +170,44 @@ struct RootView: View {
     // MARK: - Footer
 
     private var sidebarFooter: some View {
-        HStack(spacing: theme.spacingS) {
-            Image(systemName: auth.isSignedIn ? "person.crop.circle.fill" : "person.crop.circle")
-                .foregroundStyle(theme.textSecondary)
-                .accessibilityHidden(true)
-            Text(accountName)
-                .font(theme.captionFont)
-                .foregroundStyle(theme.textSecondary)
-                .lineLimit(1)
-                .truncationMode(.tail)
-            Spacer(minLength: 0)
-            SettingsLink {
-                Image(systemName: "gearshape")
+        let isShowingSettings = router.selection == .settings
+        return HStack(spacing: theme.spacingS) {
+            Button {
+                router.showSettings(tab: "account")
+            } label: {
+                HStack(spacing: theme.spacingS) {
+                    Image(systemName: auth.isSignedIn ? "person.crop.circle.fill" : "person.crop.circle")
+                        .foregroundStyle(theme.textSecondary)
+                        .accessibilityHidden(true)
+                    Text(accountName)
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                }
+                .contentShape(Rectangle())
             }
             .buttonStyle(.plain)
-            .foregroundStyle(theme.textSecondary)
+            .help("Account")
+            .accessibilityLabel("Account")
+            .accessibilityValue(accountName)
+
+            Spacer(minLength: 0)
+
+            Button {
+                router.selection = .settings
+            } label: {
+                if isShowingSettings {
+                    Image(systemName: "gearshape.fill")
+                        .foregroundStyle(theme.accent)
+                } else {
+                    Image(systemName: "gearshape")      // IconButtonStyle: textSecondary, textPrimary on hover
+                }
+            }
+            .buttonStyle(IconButtonStyle(size: 24))
             .help("Settings")
             .accessibilityLabel("Settings")
+            .accessibilityAddTraits(isShowingSettings ? .isSelected : [])
         }
     }
 
@@ -201,6 +229,7 @@ struct RootView: View {
         case .history: HistoryView()
         case .learning: LearningView()
         case .stats: StatsView()
+        case .settings: SettingsView()
         }
     }
 
@@ -242,11 +271,11 @@ struct RootView: View {
         if case .inMemory(let reason) = persistence.storeMode, reason != "Preview" {
             items.append(BannerItem(
                 id: "inMemory",
-                message: "Your data couldn\u{2019}t be opened. Changes in this session won\u{2019}t be saved.",
+                message: "Your data couldn\u{2019}t be opened. Changes won\u{2019}t be saved.",
                 systemImage: "exclamationmark.triangle.fill",
                 style: .error,
                 help: reason,
-                actionTitle: "Restore from backup\u{2026}",
+                actionTitle: "Restore\u{2026}",
                 action: { router.showSettings(tab: "data") }
             ))
         }
@@ -254,7 +283,7 @@ struct RootView: View {
         if let error = sync.lastErrorDescription, error != dismissedSyncError {
             items.append(BannerItem(
                 id: "syncError",
-                message: "iCloud sync ran into a problem. Your changes are still saved on this Mac.",
+                message: "iCloud sync problem. Changes are saved on this Mac.",
                 systemImage: "exclamationmark.icloud",
                 style: .warning,
                 help: error,

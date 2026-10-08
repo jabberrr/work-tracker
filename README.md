@@ -15,21 +15,27 @@ optional floating overlay give quick access while you work.
 - **Learning page**: learning points per tag over time.
 - **Stats**: Swift Charts views by label and tag, daily goal and streaks.
 - **Menu bar extra**: shows the live timer and gives you controls, a quick note field and the last takeaway.
-- **Floating overlay**: a non-activating `NSPanel` that stays above other apps. Each section, the opacity, the level and the Spaces behaviour can be configured.
+- **Floating overlay**: a non-activating `NSPanel` that stays above other apps. Its layout is editable: in Settings ▸ Overlay you choose which elements it shows (label, timer, segment focus, controls, split, today's total, quick note, takeaway) and drag them into order on a live, real-size preview. Opacity, compact mode, the window level and the Spaces behaviour are configurable too.
 - **Themes**: Graphite (the default, a neutral sans-serif look) plus the optional Paper and Meadow themes, light/dark/system appearance and an accent colour.
 - **Images**: add them by picking files, pasting or dragging. They are downscaled to 2048 px and compressed, and sync through iCloud.
 - **Account**: Sign in with Apple, or continue without signing in.
 - **Data**: JSON export and import (merge or replace), CSV export (sessions and segments), rolling local backups with restore, and a recovery flow if the data store can't be opened.
-- **Keyboard**:
+- **Settings in the main window**: Settings is a page of the main window (the gear in the sidebar footer, ⌘, or the app menu's "Settings…"), not a separate window. Sections: General, Appearance, Overlay, Shortcuts, Labels & Tags, Account, Data.
+- **Customizable keyboard shortcuts**: every app shortcut can be re-recorded, cleared or reset in Settings ▸ Shortcuts. Conflicts, combos reserved by macOS and shortcuts without ⌘ or ⌃ are rejected; changes apply immediately and survive relaunch. Defaults:
 
-  | Action | Shortcut |
+  | Action | Default |
   |---|---|
-  | Start/stop | ⌘⇧S |
-  | Pause/resume | ⌘⇧P |
-  | Add note | ⌘⇧N |
-  | Split | ⌘⇧D |
-  | Toggle overlay | ⌘⇧O |
+  | Start / stop session | ⇧⌘S |
+  | Pause / resume | ⇧⌘P |
+  | Add note | ⇧⌘N |
+  | Split segment | ⇧⌘D |
+  | Discard session | – |
+  | Toggle overlay | ⇧⌘O |
   | Today, History, Learning, Stats | ⌘1–⌘4 |
+  | Find in History | ⌘F |
+  | Save session review | ⌘↩ |
+
+  Fixed (system conventions): ⌘, Settings, ⌘Q, ⌘W, ⌘H, ⌘M, ⌃⌘S Toggle Sidebar, the Edit menu, Return/Esc in sheets, ⌫ in the History list.
 
 ## Requirements
 
@@ -89,6 +95,8 @@ The unit tests run in in-memory SwiftData containers. Under XCTest, `AppServices
 - `SessionEditor` split, merge, delete and move-boundary invariants
 - a JSON export → import round trip, merge never overwriting newer data, CSV quoting and the formula-injection guard
 - duplicate-row tie-breaking and the backup retention policy
+- the overlay layout migration from the old per-element toggles, and resetting it
+- shortcut defaults, display strings, validation (conflicts, reserved combos, missing ⌘/⌃), clearing, reset and persistence
 
 ## Architecture
 
@@ -96,13 +104,14 @@ The full contract (names, signatures, ownership) is in [`docs/ARCHITECTURE.md`](
 
 ```
 Worklog/
-  App/            @main WorklogApp (Window + Settings + MenuBarExtra scenes), AppDelegate, AppServices
-                  (service container + View.withAppServices), RootView, WindowRouter, commands
+  App/            @main WorklogApp (Window + MenuBarExtra scenes; Settings is a page of the window), AppDelegate,
+                  AppServices (service container + View.withAppServices), RootView, WindowRouter, commands
   Models/         SwiftData @Model types: WorkSession, Segment, Note, Attachment, WorkLabel, WorkTag, LearningPoint
   Persistence/    PersistenceController (CloudKit → local → in-memory fallback), SeedData, PreviewData
   Services/       SessionEngine (live state machine), SessionEditor (after-the-fact edits), TaxonomyOps,
                   AuthService + KeychainStore, ExportService + DTOs, BackupService, SearchService,
-                  AttachmentImporter, AppSettings, OverlayPanelController, SyncMonitor (iCloud status)
+                  AttachmentImporter, AppSettings, OverlayLayout (overlay elements), ShortcutStore (customizable
+                  shortcuts), OverlayPanelController, SyncMonitor (iCloud status)
   Utilities/      Formatting helpers, Log
   DesignSystem/   Theme, ThemeManager, components (designer-owned)
   Shared/         Data-bound pickers shared by features
@@ -139,7 +148,7 @@ This makes several things straightforward:
 
 1. **CloudKit** (private database): used when iCloud sync is on in Settings and the build has the iCloud entitlement. Sync uses the Mac's iCloud account and is independent of Sign in with Apple. If the Mac isn't signed in to iCloud, CloudKit simply waits; Settings ▸ Account shows the account state, the last sync time and any sync error (`SyncMonitor`, from CloudKit's account status and the store's sync events).
 2. **Local only**: the same file without CloudKit, used when sync is off, the build has no iCloud entitlement, or CloudKit fails to load. Worklog shows a dismissible banner explaining why (not when you turned sync off yourself).
-3. **In memory**: used only if the store file can't be opened at all. Worklog shows a persistent error banner with **Recover…** (see below). Nothing is written to disk in this mode except, on quit, a copy of anything you changed (`Recovered/Unsaved-<date>.json`, importable via Settings ▸ Data ▸ Import).
+3. **In memory**: used only if the store file can't be opened at all. Worklog shows a persistent error banner whose **Restore…** button opens Settings ▸ Data, where **Recover…** starts the recovery (see below). Nothing is written to disk in this mode except, on quit, a copy of anything you changed (`Recovered/Unsaved-<date>.json`, importable via Settings ▸ Data ▸ Import).
 
 Changing the iCloud sync toggle takes effect at the next launch.
 

@@ -42,7 +42,7 @@ struct SessionDetailView: View {
             ScrollView {
                 VStack(alignment: .leading, spacing: theme.spacingXL) {
                     if session.isActive {
-                        InlineBanner("This session is still running. Times can be changed after you stop it.",
+                        InlineBanner("This session is still running.",
                                      systemImage: "record.circle",
                                      style: .info,
                                      actionTitle: "Go to Today",
@@ -59,12 +59,15 @@ struct SessionDetailView: View {
                         LearningsEditor(session: session, style: .full)
                     }
                 }
-                .frame(maxWidth: 760, alignment: .leading)
+                // Width depends only on the proposed width (never on content): capped at 760,
+                // leading-aligned so a scroller appearing doesn't re-centre it.
+                .frame(minWidth: 0, maxWidth: 760, alignment: .topLeading)
                 .padding(.horizontal, theme.spacingXL)
                 .padding(.vertical, theme.spacingXL)
-                .frame(maxWidth: .infinity, alignment: .top)
+                .frame(minWidth: 0, maxWidth: .infinity, alignment: .topLeading)
             }
         }
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .themedBackground()
         .onChange(of: session.title) { _, _ in markEdited() }
         .onChange(of: session.tagList) { _, _ in
@@ -72,13 +75,13 @@ struct SessionDetailView: View {
             save()
         }
         .onDisappear { save() }
-        .confirmationDialog("Delete this session? This can’t be undone.",
+        .confirmationDialog("Delete this session?",
                             isPresented: $confirmDelete,
                             titleVisibility: .visible) {
             Button("Delete Session", role: .destructive) { deleteSession() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Its notes, images and learnings are deleted too.")
+            Text("This can’t be undone.")
         }
         .alert("Couldn’t change the session",
                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
@@ -104,7 +107,9 @@ struct SessionDetailView: View {
                     }
                     .modifier(DetailTitleFieldStyle(isFocused: titleFocused))
                     .accessibilityLabel("Session title")
-                    .help("Click to rename")
+                    .help("Rename")
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+                    .layoutPriority(1)
                     .onChange(of: titleFocused) { _, focused in
                         if !focused { save() }
                     }
@@ -114,12 +119,13 @@ struct SessionDetailView: View {
             metaLine
 
             HStack(alignment: .center, spacing: theme.spacingM) {
+                // Constant cap instead of `.fixedSize()`, so a long label name can't widen the column.
                 LabelPicker(selection: labelBinding, includeNone: true, title: "Label")
                     .labelsHidden()
-                    .fixedSize()
-                    .help("Primary label (segments that used the old label follow)")
+                    .frame(minWidth: 0, maxWidth: 220, alignment: .leading)
+                    .help("Label")
                 TagPicker(selection: $session.tagList, scopeLabel: session.label)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
             }
 
             actionBar(proxy)
@@ -134,14 +140,14 @@ struct SessionDetailView: View {
             } label: {
                 Label("Add Note", systemImage: "square.and.pencil")
             }
-            .help("Add a note at a chosen time")
+            .help("Add note")
 
             Button {
                 addImages(proxy)
             } label: {
                 Label("Add Image…", systemImage: "photo.badge.plus")
             }
-            .help("Attach images from your Mac. You can also paste or drop images on Images below.")
+            .help("Add images")
 
             Spacer(minLength: 0)
         }
@@ -164,7 +170,7 @@ struct SessionDetailView: View {
         .buttonStyle(.borderless)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("More actions")
+        .help("More")
         .accessibilityLabel("More actions")
     }
 
@@ -180,7 +186,7 @@ struct SessionDetailView: View {
             .buttonStyle(IconButtonStyle(size: 22))
             .disabled(session.isActive)
             .accessibilityLabel("Edit start and end time")
-            .help(session.isActive ? "Stop the session to edit its times" : "Edit start and end time")
+            .help(session.isActive ? "Stop the session first" : "Edit times")
             .popover(isPresented: $isEditingTimes, arrowEdge: .bottom) {
                 DetailTimesEditor(session: session) { isEditingTimes = false }
                     .environment(\.theme, theme)
@@ -392,7 +398,7 @@ struct DetailTimesEditor: View {
             }
 
             Text(end > start
-                 ? "Wall time \(end.timeIntervalSince(start).formattedShort). Segments and pauses are adjusted to fit."
+                 ? "Wall time \(end.timeIntervalSince(start).formattedShort); segments and pauses adjust to fit."
                  : "The end must be after the start.")
                 .font(theme.captionFont)
                 .foregroundStyle(end > start ? theme.textTertiary : theme.danger)

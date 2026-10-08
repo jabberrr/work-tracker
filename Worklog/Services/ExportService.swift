@@ -33,11 +33,11 @@ enum DataTransferError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedVersion(let version):
-            "This file was made by a newer version of Worklog (format \(version)). Update the app to import it."
+            "This file needs a newer version of Worklog (format \(version))."
         case .decodingFailed(let reason):
             "The file couldn't be read as a Worklog export: \(reason)"
         case .sessionActive:
-            "Stop the running session first. Replacing or deleting all data isn't possible while a session is active."
+            "Stop the running session first."
         case .writeFailed(let reason):
             "The data couldn't be saved: \(reason)"
         }

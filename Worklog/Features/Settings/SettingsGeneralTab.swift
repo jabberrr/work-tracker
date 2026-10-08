@@ -2,7 +2,7 @@ import SwiftData
 import SwiftUI
 
 /// General: session defaults, takeaway lifetime, automatic pausing, the "still working?" warning, daily goal,
-/// week start and the Dock icon.
+/// week start, the menu bar item and the Dock icon.
 @MainActor
 struct SettingsGeneralTab: View {
     @Environment(AppSettings.self) private var settings
@@ -25,55 +25,55 @@ struct SettingsGeneralTab: View {
         Form {
             Section("New sessions") {
                 LabelPicker(selection: defaultLabel, includeNone: true, title: "Default label")
-                SettingsFootnote("Used when you start from the menu bar, the overlay or ⌘⇧S. “None” uses the first label in your list.")
-                Toggle("Show the review sheet when a session ends", isOn: $settings.showEndSessionSheet)
-                Toggle("Ask before discarding a running session", isOn: $settings.confirmBeforeDiscard)
+                SettingsFootnote("“None” uses your first label.")
+                Toggle("Review when a session ends", isOn: $settings.showEndSessionSheet)
+                Toggle("Ask before discarding", isOn: $settings.confirmBeforeDiscard)
             }
 
             Section("Takeaway") {
-                Toggle("Show takeaway for the next session only", isOn: $settings.takeawayNextSessionOnly)
+                Toggle("Show only in the next session", isOn: $settings.takeawayNextSessionOnly)
                 SettingsFootnote(settings.takeawayNextSessionOnly
-                                 ? "A takeaway shows in Today, the overlay and the menu bar until the next session’s review is done."
-                                 : "A takeaway stays in Today, the overlay and the menu bar until you write a new one or mark it done.")
+                                 ? "Shown until the next session’s review."
+                                 : "Shown until replaced or marked done.")
             }
 
             Section("Automatic pausing") {
-                Toggle("Pause when the Mac goes to sleep", isOn: $settings.pauseOnSleep)
+                Toggle("Pause when the Mac sleeps", isOn: $settings.pauseOnSleep)
                 Toggle("Pause when Worklog quits", isOn: $settings.pauseOnQuit)
-                SettingsFootnote("A running session keeps counting while Worklog is closed unless it is paused when you quit. Worklog never resumes on its own.")
-                Stepper(value: $settings.longSessionWarningHours, in: 1...24, step: 1) {
-                    LabeledContent("Ask “Still working?” after") {
-                        Text(Self.hoursPhrase(settings.longSessionWarningHours))
-                            .monospacedDigit()
-                    }
-                }
+                SettingsFootnote("Worklog never resumes on its own.")
+                ValueStepper("Ask “Still working?” after", value: $settings.longSessionWarningHours,
+                             in: 1...24, step: 1, format: Self.hoursPhrase)
             }
 
-            Section("Goals and calendar") {
-                Stepper(value: $settings.dailyGoalHours, in: 0...16, step: 0.5) {
-                    LabeledContent("Daily goal") {
-                        Text(settings.dailyGoalHours > 0 ? StatsView.hoursText(settings.dailyGoalHours) : "Off")
-                            .monospacedDigit()
-                    }
-                }
-                Picker("Week starts on", selection: $settings.weekStartsOnMonday) {
-                    Text("Monday").tag(true)
-                    Text("Sunday").tag(false)
-                }
-                SettingsFootnote("Used by Today, Stats and the Learning page.")
+            Section("Goals & calendar") {
+                ValueStepper("Daily goal", value: $settings.dailyGoalHours, in: 0...16, step: 0.5,
+                             format: { $0 > 0 ? StatsView.hoursText($0) : "Off" })
+                ValuePicker("Week starts on", selection: $settings.weekStartsOnMonday, options: [true, false],
+                            title: { $0 ? "Monday" : "Sunday" })
+            }
+
+            Section("Menu bar") {
+                Toggle("Show in menu bar", isOn: $settings.showMenuBarExtra)
+                Toggle("Show timer", isOn: $settings.menuBarShowsTimer)
+                    .disabled(!settings.showMenuBarExtra)
+                Toggle("Show takeaway", isOn: $settings.menuBarShowLastTakeaway)
+                    .disabled(!settings.showMenuBarExtra)
             }
 
             Section("Dock") {
-                Toggle("Hide the Dock icon when the main window is closed", isOn: $settings.hideDockIconWhenClosed)
-                SettingsFootnote(settings.showMenuBarExtra
-                                 ? "Worklog keeps running in the menu bar. Open the main window from the menu bar panel."
-                                 : "The menu bar item is off, so reopen Worklog from the Applications folder or Spotlight to get the window back.")
+                Toggle("Hide Dock icon when the window closes", isOn: $settings.hideDockIconWhenClosed)
+                if settings.hideDockIconWhenClosed {
+                    SettingsFootnote(settings.showMenuBarExtra
+                                     ? "Reopen the window from the menu bar."
+                                     : "Reopen Worklog from Applications or Spotlight.")
+                }
             }
         }
         .formStyle(.grouped)
     }
 
-    private static func hoursPhrase(_ hours: Double) -> String {
+    /// "10 hours". Nonisolated so it can be passed as `ValueStepper`'s format.
+    nonisolated private static func hoursPhrase(_ hours: Double) -> String {
         let whole = Int(hours.rounded())
         return "\(whole) \(whole == 1 ? "hour" : "hours")"
     }

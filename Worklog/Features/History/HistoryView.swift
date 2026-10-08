@@ -1,9 +1,15 @@
+import AppKit
 import SwiftUI
 import SwiftData
 import Combine
 
 /// History: a searchable, sortable, filterable list of ended sessions (left) and the selected session's
-/// `SessionDetailView` (right), in an `HSplitView`.
+/// `SessionDetailView` (right), side by side in a plain `HStack`.
+///
+/// Layout: the list column has an explicit width (`history.listWidth`, 280…460, default 340) that only
+/// changes by dragging the divider, and the detail fills the remaining space with `minWidth: 0` and
+/// clipping, so neither column's content can change the other's width or push a minimum size up to the
+/// window. (An `HSplitView` here re-measured its panes on every selection and leaked their minimums.)
 ///
 /// Performance: the `@Query` fetch is the only work tied to the store; filtering (label, tag, search),
 /// sorting and grouping run in `recompute()` when an input changes (search debounced 150 ms, store saves
@@ -14,6 +20,7 @@ struct HistoryView: View {
     @Environment(\.theme) private var theme
     @Environment(WindowRouter.self) private var router
     @Environment(SessionEngine.self) private var engine
+    @Environment(ShortcutStore.self) private var shortcuts
 
     @Query(filter: #Predicate<WorkSession> { $0.endedAt != nil },
            sort: \WorkSession.startedAt, order: .reverse)
@@ -22,6 +29,7 @@ struct HistoryView: View {
     @Query(sort: \WorkTag.name) private var tags: [WorkTag]
 
     @AppStorage("history.sort") private var sort: HistorySort = .dateNewest
+    @AppStorage("history.listWidth") private var storedListWidth: Double = HistoryColumnLayout.defaultListWidth
     @State private var query = ""
     @State private var appliedQuery = ""
     @State private var labelFilter: PersistentIdentifier?
@@ -40,20 +48,15 @@ struct HistoryView: View {
             if sessions.isEmpty && !engine.isActive {
                 EmptyStateView(title: "No sessions yet",
                                systemImage: "clock",
-                               message: "Sessions you finish appear here, grouped by day.",
-                               actionTitle: "Start a session") {
+                               message: "Finished sessions appear here.",
+                               actionTitle: "Start session") {
                     router.show(.today)
                 }
             } else {
-                HSplitView {
-                    listColumn
-                        .frame(minWidth: 280, idealWidth: 340, maxWidth: 520, maxHeight: .infinity)
-                    detailColumn
-                        .frame(minWidth: 400, maxWidth: .infinity, maxHeight: .infinity)
-                }
+                columns
             }
         }
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
         .themedBackground()
         .background { findShortcut }
         // Search: debounce typing, apply clearing immediately. Also runs the first computation on appear.
@@ -79,21 +82,42 @@ struct HistoryView: View {
         .onChange(of: sort) { _, _ in recompute() }
         .onChange(of: labelFilter) { _, _ in recompute() }
         .onChange(of: tagFilter) { _, _ in recompute() }
-        .confirmationDialog("Delete this session? This can’t be undone.",
+        .confirmationDialog("Delete this session?",
                             isPresented: Binding(get: { pendingDelete != nil },
                                                  set: { if !$0 { pendingDelete = nil } }),
                             titleVisibility: .visible,
                             presenting: pendingDelete) { session in
             Button("Delete Session", role: .destructive) { delete(session) }
             Button("Cancel", role: .cancel) { pendingDelete = nil }
-        } message: { session in
-            Text("“\(session.isDeleted ? "This session" : session.displayTitle)” and its notes, images and learnings will be deleted.")
+        } message: { _ in
+            Text("This can’t be undone.")
         }
         .alert("Couldn’t delete the session",
                isPresented: Binding(get: { errorMessage != nil }, set: { if !$0 { errorMessage = nil } })) {
             Button("OK", role: .cancel) { errorMessage = nil }
         } message: {
             Text(errorMessage ?? "")
+        }
+    }
+
+    // MARK: - Columns
+
+    /// List (explicit width) | 1 pt divider with a drag handle | detail (fills the rest, never drives size).
+    private var columns: some View {
+        GeometryReader { proxy in
+            let total = Double(proxy.size.width)
+            let width = HistoryColumnLayout.clampedListWidth(storedListWidth, total: total)
+            HStack(spacing: 0) {
+                listColumn
+                    .frame(width: CGFloat(width))
+                    .frame(minHeight: 0, maxHeight: .infinity)
+                HistoryColumnDivider(width: $storedListWidth, currentWidth: width, total: total)
+                    .zIndex(1)
+                detailColumn
+                    .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+                    .clipped()
+            }
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: .topLeading)
         }
     }
 
@@ -104,7 +128,7 @@ struct HistoryView: View {
             VStack(alignment: .leading, spacing: theme.spacingS) {
                 HStack(spacing: theme.spacingXS) {
                     SearchField(text: $query, prompt: "Search sessions", isFocused: $searchFocused)
-                        .help("Search titles, notes, labels, tags, focus and learnings (⌘F)")
+                        .help("Search")
                     filterMenu
                     sortMenu
                 }
@@ -198,7 +222,7 @@ struct HistoryView: View {
         let trimmed = query.trimmed
         let message = trimmed.isEmpty
             ? "No sessions match these filters."
-            : "Nothing matches “\(trimmed)”. Try fewer words or a tag name."
+            : "Nothing matches “\(trimmed)”."
         let hasChipFilters = labelFilter != nil || tagFilter != nil
         let clear: (() -> Void)? = hasChipFilters ? { clearFilters() } : nil
         return EmptyStateView(title: "No matches",
@@ -224,7 +248,7 @@ struct HistoryView: View {
         .buttonStyle(.borderless)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("Sort: \(sort.title)")
+        .help("Sort")
         .accessibilityLabel("Sort sessions")
         .accessibilityValue(sort.title)
     }
@@ -258,31 +282,24 @@ struct HistoryView: View {
     private var labelChips: some View {
         let visibleLabels = ModelLiveness.live(labels).filter { !$0.isArchived || $0.persistentModelID == labelFilter }
         return ScrollView(.horizontal, showsIndicators: false) {
-            HStack(spacing: theme.spacingXS + 2) {
-                chipButton(title: "All", hex: LabelPalette.defaultTagHex, isSelected: labelFilter == nil) {
+            HStack(spacing: 6) {
+                FilterChip("All", colorHex: nil, isSelected: labelFilter == nil) {
                     labelFilter = nil
                 }
+                .help("All")
                 ForEach(visibleLabels) { label in
                     let selected = labelFilter == label.persistentModelID
-                    chipButton(title: label.name, hex: label.colorHex, isSelected: selected) {
+                    let title = label.name.isBlank ? "Untitled label" : label.name
+                    FilterChip(title, colorHex: label.colorHex, isSelected: selected) {
                         labelFilter = selected ? nil : label.persistentModelID
                     }
+                    .help(title)
                 }
             }
-            .padding(.vertical, 1)
+            .padding(.vertical, 2)
         }
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Filter by label")
-    }
-
-    private func chipButton(title: String, hex: String, isSelected: Bool, action: @escaping () -> Void) -> some View {
-        Button(action: action) {
-            TagChip(name: title, colorHex: hex, isSelected: isSelected)
-        }
-        .buttonStyle(.plain)
-        .help(isSelected ? "Showing \(title)" : "Show \(title)")
-        .accessibilityLabel(title)
-        .accessibilityAddTraits(isSelected ? .isSelected : [])
     }
 
     // MARK: - Detail column
@@ -296,21 +313,19 @@ struct HistoryView: View {
                   active.persistentModelID == id {
             EmptyStateView(title: "Session in progress",
                            systemImage: "timer",
-                           message: "This session is still running. Follow and edit it on Today.",
                            actionTitle: "Go to Today") {
                 router.selection = .today
             }
         } else {
             EmptyStateView(title: "Select a session",
-                           systemImage: "sidebar.left",
-                           message: "Choose a session to see its notes, segments and learnings.")
+                           systemImage: "sidebar.left")
         }
     }
 
-    /// Hidden ⌘F target that focuses the search field.
+    /// Hidden "Find in History" target (customizable, default ⌘F) that focuses the search field.
     private var findShortcut: some View {
         Button("Find") { searchFocused = true }
-            .keyboardShortcut("f", modifiers: .command)
+            .keyboardShortcut(shortcuts.shortcut(for: .findInHistory))
             .frame(width: 0, height: 0)
             .opacity(0)
             .accessibilityHidden(true)
@@ -391,6 +406,110 @@ struct HistoryView: View {
                 errorMessage = error.localizedDescription
                 recompute()
             }
+        }
+    }
+}
+
+// MARK: - Column layout
+
+/// List-column width rules (also used by the divider while dragging).
+fileprivate enum HistoryColumnLayout {
+    static let defaultListWidth: Double = 340
+    static let minListWidth: Double = 280
+    static let maxListWidth: Double = 460
+    /// Space always left for the detail column (when the window allows it).
+    static let minDetailWidth: Double = 420
+
+    /// `stored` clamped to 280 … min(460, total − 420); never below 280.
+    static func clampedListWidth(_ stored: Double, total: Double) -> Double {
+        let upper = max(minListWidth, min(maxListWidth, total - minDetailWidth))
+        let value = stored.isFinite ? stored : defaultListWidth
+        return min(max(value, minListWidth), upper)
+    }
+}
+
+/// 1 pt separator between the list and the detail with a 7 pt invisible drag handle. Dragging resizes the
+/// list live (no animation), double-click resets it to 340. Shows the resize cursor while hovered or dragged.
+fileprivate struct HistoryColumnDivider: View {
+    @Environment(\.theme) private var theme
+    @Binding var width: Double
+    /// The list width currently laid out (already clamped).
+    let currentWidth: Double
+    /// Width of the whole History page, for clamping.
+    let total: Double
+
+    @State private var dragStartWidth: Double?
+    @State private var isHovering = false
+    @State private var cursorPushed = false
+
+    init(width: Binding<Double>, currentWidth: Double, total: Double) {
+        self._width = width
+        self.currentWidth = currentWidth
+        self.total = total
+    }
+
+    var body: some View {
+        Rectangle()
+            .fill(theme.separator)
+            .frame(width: 1)
+            .frame(maxHeight: .infinity)
+            .overlay {
+                Color.clear
+                    .frame(width: 7)
+                    .frame(maxHeight: .infinity)
+                    .contentShape(Rectangle())
+                    .onHover { inside in
+                        isHovering = inside
+                        updateCursor()
+                    }
+                    .onTapGesture(count: 2) {
+                        setWidth(HistoryColumnLayout.defaultListWidth)
+                    }
+                    .gesture(drag)
+            }
+            .onDisappear {
+                isHovering = false
+                dragStartWidth = nil
+                updateCursor()
+            }
+            .accessibilityHidden(true)
+    }
+
+    private var drag: some Gesture {
+        // Global space: the handle moves with the drag, so local translations would feed back.
+        DragGesture(minimumDistance: 1, coordinateSpace: .global)
+            .onChanged { value in
+                let start = dragStartWidth ?? currentWidth
+                if dragStartWidth == nil {
+                    dragStartWidth = start
+                    updateCursor()
+                }
+                let proposed = start + Double(value.translation.width)
+                setWidth(HistoryColumnLayout.clampedListWidth(proposed, total: total))
+            }
+            .onEnded { _ in
+                dragStartWidth = nil
+                updateCursor()
+            }
+    }
+
+    private func setWidth(_ value: Double) {
+        var transaction = Transaction()
+        transaction.disablesAnimations = true
+        withTransaction(transaction) {
+            width = value
+        }
+    }
+
+    /// Keeps `NSCursor` push/pop balanced: one push while hovered or dragging, one pop when neither.
+    private func updateCursor() {
+        let wantsCursor = isHovering || dragStartWidth != nil
+        if wantsCursor && !cursorPushed {
+            NSCursor.resizeLeftRight.push()
+            cursorPushed = true
+        } else if !wantsCursor && cursorPushed {
+            NSCursor.pop()
+            cursorPushed = false
         }
     }
 }

@@ -75,11 +75,11 @@ struct SettingsRecoverySheet: View {
     var body: some View {
         VStack(alignment: .leading, spacing: theme.spacingL) {
             VStack(alignment: .leading, spacing: theme.spacingS) {
-                Text("Recover Worklog’s data")
+                Text("Recover data")
                     .font(theme.titleFont)
                     .foregroundStyle(theme.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text("Worklog couldn’t open its data store, so it’s running on a temporary store and nothing you change now is saved.")
+                Text("Your data couldn’t be opened. Changes won’t be saved.")
                     .font(theme.bodyFont)
                     .foregroundStyle(theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -93,14 +93,14 @@ struct SettingsRecoverySheet: View {
                 }
             }
 
-            Text("Worklog moves the damaged store into a “Recovered” folder (nothing is deleted), relaunches, and then:")
+            Text("Worklog moves the damaged data aside, relaunches and then:")
                 .font(theme.calloutFont)
                 .foregroundStyle(theme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
 
             Picker("After relaunching", selection: $choice) {
                 Text("Restores a backup").tag(Choice.backup)
-                Text(nextLaunchSyncs ? "Starts fresh and downloads your data from iCloud" : "Starts with empty data")
+                Text(nextLaunchSyncs ? "Starts fresh and downloads from iCloud" : "Starts with empty data")
                     .tag(Choice.fresh)
             }
             .pickerStyle(.radioGroup)
@@ -114,7 +114,7 @@ struct SettingsRecoverySheet: View {
             }
             .padding(.leading, theme.spacingL)
 
-            SettingsFootnote("Changes made since Worklog opened this time aren’t kept. Export them as JSON first if you need them.")
+            SettingsFootnote("Changes since launch are lost, so export JSON first to keep them.")
 
             if let errorText {
                 InlineBanner(errorText, style: .error, onDismiss: { self.errorText = nil })
@@ -131,13 +131,12 @@ struct SettingsRecoverySheet: View {
                 .menuStyle(.button)
                 .buttonStyle(.borderless)
                 .fixedSize()
-                .help("The damaged store stays where it is until you continue. Moved stores are kept in the Recovered folder.")
 
                 Spacer()
                 Button("Cancel") { dismiss() }
                     .buttonStyle(QuietButtonStyle())
                     .keyboardShortcut(.cancelAction)
-                Button("Move Aside and Relaunch…") { confirms = true }
+                Button("Relaunch…") { confirms = true }
                     .buttonStyle(PrimaryButtonStyle())
                     .keyboardShortcut(.defaultAction)
                     .disabled(!canConfirm)
@@ -156,9 +155,9 @@ struct SettingsRecoverySheet: View {
             }
             if selectedBackupURL == nil { choice = .fresh }
         }
-        .confirmationDialog("Move the damaged store aside and relaunch?", isPresented: $confirms,
+        .confirmationDialog("Move damaged data aside and relaunch?", isPresented: $confirms,
                             titleVisibility: .visible) {
-            Button("Move Aside and Relaunch") { perform() }
+            Button("Relaunch") { perform() }
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(confirmationText)
@@ -181,12 +180,12 @@ struct SettingsRecoverySheet: View {
                         .lineLimit(1)
                         .truncationMode(.middle)
                     Spacer()
-                    Button("Use a Backup Instead") { self.chosenFile = nil }
+                    Button("Use Backup") { self.chosenFile = nil }
                         .buttonStyle(QuietButtonStyle())
                         .controlSize(.small)
                 }
             } else if backups.backups.isEmpty {
-                Text("There are no backups in Worklog’s Backups folder.")
+                Text("No backups found.")
                     .font(theme.calloutFont)
                     .foregroundStyle(theme.textSecondary)
             } else {
@@ -198,10 +197,9 @@ struct SettingsRecoverySheet: View {
                 .frame(maxWidth: 420)
             }
             HStack(spacing: theme.spacingS) {
-                Button("Choose a File…", action: chooseFile)
+                Button("Choose File…", action: chooseFile)
                     .buttonStyle(QuietButtonStyle())
                     .controlSize(.small)
-                    .help("Use a Worklog JSON export or a backup from another folder")
                 Spacer()
             }
             SettingsFootnote(nextLaunchSyncs
@@ -212,8 +210,8 @@ struct SettingsRecoverySheet: View {
 
     private var freshExplanation: some View {
         SettingsFootnote(nextLaunchSyncs
-                         ? "Worklog opens a new, empty store and downloads your sessions from iCloud again. This can take a few minutes."
-                         : "Worklog opens a new, empty store. You can still restore a backup later in Settings ▸ Data.")
+                         ? "Worklog starts empty and downloads your sessions from iCloud again."
+                         : "Worklog starts empty, and you can restore a backup later.")
     }
 
     private var confirmationText: String {
@@ -224,7 +222,7 @@ struct SettingsRecoverySheet: View {
         case .fresh:
             restore = nextLaunchSyncs ? "downloads your data from iCloud again" : "starts with empty data"
         }
-        return "Worklog moves the damaged store into the Recovered folder, quits, opens again and \(restore). Unsaved changes from this session are lost."
+        return "Worklog relaunches and \(restore), and unsaved changes are lost."
     }
 
     static func backupTitle(_ backup: BackupFile) -> String {
@@ -250,7 +248,7 @@ struct SettingsRecoverySheet: View {
         if FileManager.default.fileExists(atPath: folder.path(percentEncoded: false)) {
             NSWorkspace.shared.activateFileViewerSelecting([folder])
         } else {
-            errorText = "Nothing has been moved to the Recovered folder yet."
+            errorText = "The Recovered folder is empty."
         }
     }
 
@@ -268,7 +266,7 @@ struct SettingsRecoverySheet: View {
                 _ = try exporter.decodeArchive(from: source)
             } catch {
                 Log.ui.error("Recovery: the backup can't be read: \(error.localizedDescription, privacy: .public)")
-                errorText = "“\(source.lastPathComponent)” can’t be restored: \(error.localizedDescription) Nothing was changed."
+                errorText = "Couldn’t read “\(source.lastPathComponent)”, so nothing changed."
                 return
             }
             if chosenFile != nil, !Self.isInsideAppSupport(source) {
@@ -276,7 +274,7 @@ struct SettingsRecoverySheet: View {
                     restoreURL = try copyIntoContainer(source)
                 } catch {
                     Log.ui.error("Recovery: copying the chosen file failed: \(error.localizedDescription, privacy: .public)")
-                    errorText = "Couldn’t copy “\(source.lastPathComponent)” into Worklog’s folder: \(error.localizedDescription) Nothing was changed."
+                    errorText = "Couldn’t copy “\(source.lastPathComponent)”, so nothing changed."
                     return
                 }
             } else {
@@ -292,7 +290,7 @@ struct SettingsRecoverySheet: View {
             movedTo = nil
         } catch {
             Log.ui.error("Recovery: moving the store aside failed: \(error.localizedDescription, privacy: .public)")
-            errorText = "The damaged store couldn’t be moved aside, so nothing was changed. \(error.localizedDescription)"
+            errorText = "Couldn’t move the damaged data aside, so nothing changed."
             return
         }
 
@@ -300,9 +298,10 @@ struct SettingsRecoverySheet: View {
             try PersistenceController.scheduleRecovery(backupURL: restoreURL)
         } catch {
             Log.ui.error("Recovery: scheduling the restore failed: \(error.localizedDescription, privacy: .public)")
-            let moved = movedTo.map { "The damaged store was moved to “\($0.lastPathComponent)” in the Recovered folder, but the" }
-                ?? "The"
-            errorText = "\(moved) restore couldn’t be scheduled (\(error.localizedDescription)). Relaunch Worklog and restore the backup from Settings ▸ Data."
+            if let movedTo {
+                Log.ui.error("Recovery: the damaged store is in \(movedTo.lastPathComponent, privacy: .public)")
+            }
+            errorText = "Couldn’t schedule the restore. Relaunch, then restore from Data."
             return
         }
 

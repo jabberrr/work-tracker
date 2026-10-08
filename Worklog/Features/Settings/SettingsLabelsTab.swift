@@ -60,7 +60,6 @@ struct SettingsLabelsPane: View {
         if labels.isEmpty {
             VStack(spacing: theme.spacingM) {
                 EmptyStateView(title: "No labels", systemImage: "tag",
-                               message: "Labels sort your time into kinds of work.",
                                actionTitle: "Restore defaults", action: restoreDefaults)
                 Button("New Label", action: addLabel)
                     .buttonStyle(QuietButtonStyle())
@@ -77,8 +76,7 @@ struct SettingsLabelsPane: View {
                                             onMerged: { target in selectedID = target.persistentModelID })
                             .id(label.persistentModelID)
                     } else {
-                        EmptyStateView(title: "Select a label", systemImage: "tag",
-                                       message: "Choose a label to rename it, change its color and symbol, or archive it.")
+                        EmptyStateView(title: "Select a label", systemImage: "tag")
                     }
                 }
                 .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -151,7 +149,7 @@ struct SettingsLabelsPane: View {
                 .font(theme.captionFont)
                 .monospacedDigit()
                 .foregroundStyle(theme.textTertiary)
-                .help("Sessions and segments using this label")
+                .help("Times used")
         }
         .accessibilityElement(children: .combine)
         .accessibilityValue("\(label.usageCount) uses\(label.isArchived ? ", archived" : "")")
@@ -241,7 +239,7 @@ private struct SettingsLabelEditor: View {
                 LabeledContent("Preview") {
                     LabelBadge(label: label)
                 }
-                Toggle("Default label for new sessions", isOn: isDefault)
+                Toggle("Default label", isOn: isDefault)
                     .disabled(label.isArchived)
             }
 
@@ -265,9 +263,6 @@ private struct SettingsLabelEditor: View {
                 HStack(spacing: theme.spacingS) {
                     Button(label.isArchived ? "Unarchive" : "Archive", action: toggleArchive)
                         .buttonStyle(QuietButtonStyle())
-                        .help(label.isArchived
-                              ? "Show this label in pickers again"
-                              : "Hide from pickers. Past sessions keep the label.")
                     Menu("Merge Into") {
                         ForEach(otherLabels) { other in
                             Button(other.isArchived ? "\(other.name) (archived)" : other.name) {
@@ -277,7 +272,7 @@ private struct SettingsLabelEditor: View {
                     }
                     .fixedSize()
                     .disabled(otherLabels.isEmpty)
-                    .help("Move everything to another label and remove this one")
+                    .help("Merge label")
                     Spacer()
                     Button("Delete…") { showsDeleteSheet = true }
                         .buttonStyle(DestructiveButtonStyle())
@@ -319,7 +314,7 @@ private struct SettingsLabelEditor: View {
             }
             Button("Cancel", role: .cancel) { mergeTarget = nil }
         } message: {
-            Text("Every session and segment labeled “\(label.name)” moves to “\(mergeTarget?.name ?? "")”, and “\(label.name)” is deleted. This can’t be undone.")
+            Text("Its sessions move to “\(mergeTarget?.name ?? "")”, and this can’t be undone.")
         }
     }
 
@@ -327,12 +322,14 @@ private struct SettingsLabelEditor: View {
         let sessions = label.sessions?.count ?? 0
         let segments = label.segments?.count ?? 0
         let tags = label.tags?.count ?? 0
-        var text = "Primary label of \(sessions) \(sessions == 1 ? "session" : "sessions"); "
-            + "focus label of \(segments) \(segments == 1 ? "segment" : "segments")."
+        var parts = [
+            "\(sessions) \(sessions == 1 ? "session" : "sessions")",
+            "\(segments) \(segments == 1 ? "segment" : "segments")",
+        ]
         if tags > 0 {
-            text += " \(tags) \(tags == 1 ? "tag belongs" : "tags belong") to it."
+            parts.append("\(tags) \(tags == 1 ? "tag" : "tags")")
         }
-        return text
+        return parts.joined(separator: " · ")
     }
 
     private func commitName() {
@@ -400,7 +397,7 @@ private struct SettingsDeleteLabelSheet: View {
                 .foregroundStyle(theme.textPrimary)
             Text(sessions + segments == 0
                  ? "No sessions use this label."
-                 : "\(sessions) \(sessions == 1 ? "session uses" : "sessions use") it as the primary label and \(segments) \(segments == 1 ? "segment uses" : "segments use") it as focus. Choose where they go.")
+                 : "\(sessions) \(sessions == 1 ? "session" : "sessions") and \(segments) \(segments == 1 ? "segment" : "segments") use it.")
                 .font(theme.calloutFont)
                 .foregroundStyle(theme.textSecondary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -415,9 +412,9 @@ private struct SettingsDeleteLabelSheet: View {
             }
 
             if (label.tags?.count ?? 0) > 0 {
-                SettingsFootnote("Tags that belong to this label move along (or become global tags).")
+                SettingsFootnote("Its tags move along, or become global.")
             }
-            SettingsFootnote("Archiving keeps past sessions as they are and only hides the label from pickers.")
+            SettingsFootnote("Archiving only hides it from pickers.")
 
             HStack(spacing: theme.spacingS) {
                 Button("Cancel", role: .cancel) { dismiss() }

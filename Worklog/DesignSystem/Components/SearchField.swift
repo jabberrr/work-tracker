@@ -2,7 +2,7 @@ import SwiftUI
 
 /// Inset search field: magnifier, plain text field, clear (×) button when non-empty.
 /// Esc clears the text (when empty, Esc passes through to close a popover/sheet). The border turns accent while focused.
-/// To focus it from outside (⌘F), use the extra `init(text:prompt:isFocused:)` with your own @FocusState.
+/// To focus it from outside (the Find in History shortcut), use the extra `init(text:prompt:isFocused:)` with your own @FocusState.
 struct SearchField: View {
     @Environment(\.theme) private var theme
     @Binding private var text: String

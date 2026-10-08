@@ -6,6 +6,7 @@ enum BannerStyle {
 
 /// A one-line (wrapping) message bar placed at the top of a pane: status icon, message,
 /// optional action button, optional dismiss (×). Tinted with the status color at low opacity.
+/// Copy: one short sentence + an action (DESIGN §12).
 struct InlineBanner: View {
     @Environment(\.theme) private var theme
     private let message: String
@@ -96,11 +97,12 @@ struct InlineBanner: View {
 
 #Preview("InlineBanner") {
     VStack(spacing: 10) {
-        InlineBanner("Saving to this Mac only — iCloud is not signed in.", onDismiss: {})
-        InlineBanner("Paused automatically when your Mac went to sleep.", style: .warning,
+        InlineBanner("iCloud sync problem. Changes are saved on this Mac.", actionTitle: "Details…",
+                     action: {}, onDismiss: {})
+        InlineBanner("Paused while your Mac slept.", style: .warning,
                      actionTitle: "Resume", action: {}, onDismiss: {})
-        InlineBanner("Data couldn’t be opened. Changes won’t be saved.", style: .error,
-                     actionTitle: "Restore from backup…", action: {})
+        InlineBanner("Your data couldn’t be opened. Changes won’t be saved.", style: .error,
+                     actionTitle: "Restore…", action: {})
     }
     .padding(24)
     .frame(width: 560)

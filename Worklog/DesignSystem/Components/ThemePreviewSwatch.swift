@@ -4,7 +4,8 @@ import SwiftUI
 /// sidebar strip, a display-face "Aa", a timer readout in the theme's timer face and an accent pill;
 /// below, the theme name and summary. Selected → accent ring + checkmark.
 ///
-/// `compact: true` (Welcome screen): 124 pt wide, one preview in the current appearance, name only.
+/// `compact: true` (Welcome screen): 124 pt wide, one preview in the current appearance, name only
+/// (VoiceOver still reads the summary as the value).
 ///
 /// Not interactive by itself: wrap it in `Button { manager.themeID = id } label: { ThemePreviewSwatch(…) }
 /// .buttonStyle(.plain)` — or use `ThemeSwatchRow`, which does that for every theme.
@@ -70,7 +71,6 @@ struct ThemePreviewSwatch: View {
             }
         }
         .frame(width: compact ? 124 : 196)
-        .help(compact ? themeID.summary : "")
         .contentShape(Rectangle())
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("\(themeID.displayName) theme")

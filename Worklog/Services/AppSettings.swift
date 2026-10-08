@@ -62,14 +62,9 @@ final class AppSettings {
     // MARK: Overlay
     /// Source of truth for overlay visibility.
     var overlayEnabled: Bool { didSet { write(overlayEnabled, "overlayEnabled") } }
-    var overlayShowTimer: Bool { didSet { write(overlayShowTimer, "overlayShowTimer") } }
-    var overlayShowLabel: Bool { didSet { write(overlayShowLabel, "overlayShowLabel") } }
-    var overlayShowSegmentFocus: Bool { didSet { write(overlayShowSegmentFocus, "overlayShowSegmentFocus") } }
-    var overlayShowControls: Bool { didSet { write(overlayShowControls, "overlayShowControls") } }
-    var overlayShowSplitButton: Bool { didSet { write(overlayShowSplitButton, "overlayShowSplitButton") } }
-    var overlayShowNoteField: Bool { didSet { write(overlayShowNoteField, "overlayShowNoteField") } }
-    var overlayShowLastTakeaway: Bool { didSet { write(overlayShowLastTakeaway, "overlayShowLastTakeaway") } }
-    var overlayShowTodayTotal: Bool { didSet { write(overlayShowTodayTotal, "overlayShowTodayTotal") } }
+    /// Ordered elements the overlay shows. Persisted as [String] (raw values) under "settings.overlayLayout".
+    /// Replaces the round-1 `overlayShow…` booleans (migrated once in `init`; the legacy keys are left untouched).
+    var overlayLayout: [OverlayElement] { didSet { write(overlayLayout.map(\.rawValue), "overlayLayout") } }
     var overlayCompact: Bool { didSet { write(overlayCompact, "overlayCompact") } }
     /// Clamped to 0.4…1.0 on every write.
     var overlayOpacity: Double {
@@ -117,14 +112,7 @@ final class AppSettings {
         dismissedLocalOnlyBannerReason = defaults.string(forKey: Self.key("dismissedLocalOnlyBannerReason")) ?? ""
 
         overlayEnabled = Self.bool(defaults, "overlayEnabled", false)
-        overlayShowTimer = Self.bool(defaults, "overlayShowTimer", true)
-        overlayShowLabel = Self.bool(defaults, "overlayShowLabel", true)
-        overlayShowSegmentFocus = Self.bool(defaults, "overlayShowSegmentFocus", true)
-        overlayShowControls = Self.bool(defaults, "overlayShowControls", true)
-        overlayShowSplitButton = Self.bool(defaults, "overlayShowSplitButton", true)
-        overlayShowNoteField = Self.bool(defaults, "overlayShowNoteField", true)
-        overlayShowLastTakeaway = Self.bool(defaults, "overlayShowLastTakeaway", true)
-        overlayShowTodayTotal = Self.bool(defaults, "overlayShowTodayTotal", false)
+        overlayLayout = Self.loadOverlayLayout(defaults)
         overlayCompact = Self.bool(defaults, "overlayCompact", false)
         storedOverlayOpacity = Self.clampOpacity(Self.double(defaults, "overlayOpacity", 0.95))
         overlayAlwaysOnTop = Self.bool(defaults, "overlayAlwaysOnTop", true)
@@ -136,18 +124,23 @@ final class AppSettings {
         backupIncludesAttachments = Self.bool(defaults, "backupIncludesAttachments", true)
         // Has an initial value, so it is assigned last (after every other stored property is initialized).
         defaultLabelID = defaults.string(forKey: Self.key("defaultLabelID")).flatMap(UUID.init(uuidString:))
+        // Persist the (possibly migrated) layout right away so the legacy booleans are read only once.
+        write(overlayLayout.map(\.rawValue), "overlayLayout")
+    }
+
+    /// overlayLayout.contains(element)
+    func overlayShows(_ element: OverlayElement) -> Bool {
+        overlayLayout.contains(element)
+    }
+
+    /// overlayLayout = OverlayElement.defaultLayout
+    func resetOverlayLayout() {
+        overlayLayout = OverlayElement.defaultLayout
     }
 
     /// Restores every overlay content/appearance option to its default. Visibility (`overlayEnabled`) is unchanged.
     func resetOverlayDefaults() {
-        overlayShowTimer = true
-        overlayShowLabel = true
-        overlayShowSegmentFocus = true
-        overlayShowControls = true
-        overlayShowSplitButton = true
-        overlayShowNoteField = true
-        overlayShowLastTakeaway = true
-        overlayShowTodayTotal = false
+        overlayLayout = OverlayElement.defaultLayout
         overlayCompact = false
         overlayOpacity = 0.95
         overlayAlwaysOnTop = true
@@ -158,6 +151,33 @@ final class AppSettings {
     // MARK: - Private helpers
 
     private static func key(_ property: String) -> String { "settings." + property }
+
+    /// "settings.overlayLayout" when present (sanitized); otherwise built once from the round-1 booleans, in
+    /// `OverlayElement.migrationOrder`, keeping each element whose legacy key is true (absent = its old default:
+    /// on, except Today’s total). With untouched legacy defaults this is exactly `OverlayElement.defaultLayout`.
+    private static func loadOverlayLayout(_ defaults: UserDefaults) -> [OverlayElement] {
+        if let stored = defaults.array(forKey: key("overlayLayout")) as? [String] {
+            return OverlayElement.sanitized(stored)
+        }
+        return OverlayElement.migrationOrder.filter { element in
+            let legacy = legacyOverlayKey(element)
+            return bool(defaults, legacy.property, legacy.fallback)
+        }
+    }
+
+    /// The round-1 `overlayShow…` property name for an element and its default value.
+    private static func legacyOverlayKey(_ element: OverlayElement) -> (property: String, fallback: Bool) {
+        switch element {
+        case .label: return ("overlayShowLabel", true)
+        case .timer: return ("overlayShowTimer", true)
+        case .segmentFocus: return ("overlayShowSegmentFocus", true)
+        case .controls: return ("overlayShowControls", true)
+        case .split: return ("overlayShowSplitButton", true)
+        case .todayTotal: return ("overlayShowTodayTotal", false)
+        case .note: return ("overlayShowNoteField", true)
+        case .takeaway: return ("overlayShowLastTakeaway", true)
+        }
+    }
 
     private func write(_ value: Any, _ property: String) {
         defaults.set(value, forKey: Self.key(property))

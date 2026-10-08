@@ -214,9 +214,6 @@ private struct TagPickerPopover: View {
                             .foregroundStyle(theme.textPrimary)
                             .lineLimit(1)
                         Spacer(minLength: 0)
-                        Image(systemName: "return")
-                            .font(theme.captionFont)
-                            .foregroundStyle(theme.textTertiary)
                     }
                 }
                 .buttonStyle(TagPickerRowStyle())

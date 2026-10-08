@@ -20,7 +20,6 @@ struct SettingsAppearanceTab: View {
                             ThemePreviewSwatch(themeID: id, isSelected: themeManager.themeID == id)
                         }
                         .buttonStyle(.plain)
-                        .help(id.summary)
                     }
                 }
                 .padding(.vertical, theme.spacingXS)
@@ -45,7 +44,6 @@ struct SettingsAppearanceTab: View {
                     }
                 }
                 .pickerStyle(.segmented)
-                SettingsFootnote("Text size scales every font in Worklog, including the overlay and the menu bar panel.")
             }
 
             Section {
@@ -53,7 +51,6 @@ struct SettingsAppearanceTab: View {
                     Spacer()
                     Button("Reset Appearance") { themeManager.resetToDefaults() }
                         .buttonStyle(QuietButtonStyle())
-                        .help("\(ThemeID.default.displayName) theme, system appearance, theme accent, standard text size")
                 }
             }
         }

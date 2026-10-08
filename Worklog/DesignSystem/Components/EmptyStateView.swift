@@ -1,7 +1,7 @@
 import SwiftUI
 
-/// Centered, quiet empty state: a light symbol, a title in the display face, an optional
-/// one- or two-sentence message, and an optional single action (primary style).
+/// Centered, quiet empty state: a light symbol, a title in the display face (≤ 4 words), an optional
+/// one-sentence message (≤ 10 words) and an optional single action (primary style, ≤ 3 words). Copy: DESIGN §12.
 /// Fills the available space; place it as the whole content of an empty pane.
 struct EmptyStateView: View {
     @Environment(\.theme) private var theme
@@ -54,8 +54,8 @@ struct EmptyStateView: View {
 #Preview("EmptyStateView") {
     EmptyStateView(title: "No sessions yet",
                    systemImage: "clock",
-                   message: "Sessions you finish appear here, grouped by day.",
-                   actionTitle: "Start a session") {}
+                   message: "Finished sessions appear here.",
+                   actionTitle: "Start session") {}
         .frame(width: 480, height: 360)
         .themedBackground()
 }
