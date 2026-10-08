@@ -228,29 +228,23 @@ private struct ValuePickerList<Option: Hashable>: View {
         self._highlighted = State(initialValue: options.firstIndex(of: selected) ?? 0)
     }
 
+    /// Longer lists scroll (e.g. many labels); the highlighted row is kept visible.
+    private static var maxVisibleRows: Int { 12 }
+
     var body: some View {
-        VStack(alignment: .leading, spacing: 1) {
-            ForEach(Array(options.enumerated()), id: \.offset) { index, option in
-                let isSelected = option == selected
-                Button {
-                    onSelect(option)
-                } label: {
-                    HStack(spacing: theme.spacingS) {
-                        Image(systemName: "checkmark")
-                            .font(.system(size: 10 * theme.textScale, weight: .bold))
-                            .foregroundStyle(theme.accent)
-                            .opacity(isSelected ? 1 : 0)
-                            .frame(width: 12)
-                            .accessibilityHidden(true)
-                        Text(verbatim: title(option))
-                            .foregroundStyle(theme.textPrimary)
-                            .lineLimit(1)
-                        Spacer(minLength: 0)
+        Group {
+            if options.count > Self.maxVisibleRows {
+                ScrollViewReader { proxy in
+                    ScrollView(.vertical) {
+                        rows
                     }
+                    // Row ≈ body line + 2 × 4 pt padding + 1 pt spacing; a partly visible last row hints at more.
+                    .frame(height: CGFloat(Self.maxVisibleRows) * (17 * theme.textScale + 9))
+                    .onAppear { proxy.scrollTo(highlighted, anchor: .center) }
+                    .onChange(of: highlighted) { _, index in proxy.scrollTo(index) }
                 }
-                .buttonStyle(ValuePickerRowStyle(isHighlighted: index == highlighted))
-                .onHover { if $0 { highlighted = index } }
-                .accessibilityAddTraits(isSelected ? .isSelected : [])
+            } else {
+                rows
             }
         }
         .padding(5)
@@ -280,6 +274,34 @@ private struct ValuePickerList<Option: Hashable>: View {
             Task { @MainActor in
                 try? await Task.sleep(for: .milliseconds(30))
                 isFocused = true
+            }
+        }
+    }
+
+    private var rows: some View {
+        VStack(alignment: .leading, spacing: 1) {
+            ForEach(Array(options.enumerated()), id: \.offset) { index, option in
+                let isSelected = option == selected
+                Button {
+                    onSelect(option)
+                } label: {
+                    HStack(spacing: theme.spacingS) {
+                        Image(systemName: "checkmark")
+                            .font(.system(size: 10 * theme.textScale, weight: .bold))
+                            .foregroundStyle(theme.accent)
+                            .opacity(isSelected ? 1 : 0)
+                            .frame(width: 12)
+                            .accessibilityHidden(true)
+                        Text(verbatim: title(option))
+                            .foregroundStyle(theme.textPrimary)
+                            .lineLimit(1)
+                        Spacer(minLength: 0)
+                    }
+                }
+                .buttonStyle(ValuePickerRowStyle(isHighlighted: index == highlighted))
+                .onHover { if $0 { highlighted = index } }
+                .accessibilityAddTraits(isSelected ? .isSelected : [])
+                .id(index)
             }
         }
     }

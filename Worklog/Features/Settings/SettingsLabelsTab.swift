@@ -314,7 +314,7 @@ private struct SettingsLabelEditor: View {
             }
             Button("Cancel", role: .cancel) { mergeTarget = nil }
         } message: {
-            Text("Its sessions move to “\(mergeTarget?.name ?? "")”, and this can’t be undone.")
+            Text("Moves its sessions to “\(mergeTarget?.name ?? "")” and deletes it.")
         }
     }
 

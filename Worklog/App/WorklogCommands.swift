@@ -51,7 +51,8 @@ struct WorklogCommands: Commands {
             Divider()
 
             ShortcutCommandButton(title: "Discard Session\u{2026}", action: .discardSession, store: services.shortcuts) {
-                services.router.show(.today)
+                guard services.engine.isActive else { return }
+                services.router.requestDiscard()
             }
         }
 

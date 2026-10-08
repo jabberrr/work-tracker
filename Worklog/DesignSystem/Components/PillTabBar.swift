@@ -4,8 +4,9 @@ import SwiftUI
 /// - Buttons: icon + title, calloutFont .medium, padding 10×5, radiusS.
 /// - Selected: accent.opacity(tintOpacity) fill + accent foreground.
 /// - Unselected: textSecondary, hover fill textPrimary.opacity(0.06).
-/// - Scrolls horizontally when it doesn't fit (ViewThatFits).
-/// - Each button has the .isSelected trait; the container's a11y label is "Sections".
+/// - When the titled row doesn't fit (ViewThatFits), unselected pills drop to icon-only (title as tooltip); then
+///   every pill is icon-only; only after that does the row scroll horizontally.
+/// - Each button has the .isSelected trait and keeps its title as the a11y label; the container's a11y label is "Sections".
 ///
 ///     PillTabBar(items: SettingsTab.allCases, selection: $tab, title: { $0.title }, systemImage: { $0.systemImage })
 ///
@@ -26,11 +27,20 @@ struct PillTabBar<Item: Hashable & Identifiable>: View {
         self.systemImage = systemImage
     }
 
+    /// How much of each pill's title is shown.
+    private enum Density {
+        case titled          // icon + title on every pill
+        case selectedTitled  // icon + title on the selected pill, icon only on the rest
+        case iconsOnly       // icon only everywhere (items without an icon keep their title)
+    }
+
     var body: some View {
         ViewThatFits(in: .horizontal) {
-            buttonRow
+            buttonRow(.titled)
+            buttonRow(.selectedTitled)
+            buttonRow(.iconsOnly)
             ScrollView(.horizontal, showsIndicators: false) {
-                buttonRow
+                buttonRow(.iconsOnly)
                     .padding(.vertical, 3)   // keeps the focus ring inside the clip
             }
         }
@@ -38,16 +48,19 @@ struct PillTabBar<Item: Hashable & Identifiable>: View {
         .accessibilityLabel("Sections")
     }
 
-    private var buttonRow: some View {
+    private func buttonRow(_ density: Density) -> some View {
         HStack(spacing: theme.spacingXS) {
             ForEach(items) { item in
                 let isSelected = item == selection
+                let icon = systemImage(item)
+                let showsTitle = icon == nil || density == .titled || (density == .selectedTitled && isSelected)
                 Button {
                     selection = item
                 } label: {
-                    PillTabLabel(title: title(item), systemImage: systemImage(item))
+                    PillTabLabel(title: title(item), systemImage: icon, showsTitle: showsTitle)
                 }
                 .buttonStyle(PillTabButtonStyle(isSelected: isSelected))
+                .help(showsTitle ? "" : title(item))
                 .accessibilityLabel(title(item))
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
@@ -61,6 +74,7 @@ struct PillTabBar<Item: Hashable & Identifiable>: View {
 private struct PillTabLabel: View {
     let title: String
     let systemImage: String?
+    let showsTitle: Bool
 
     var body: some View {
         HStack(spacing: 5) {
@@ -68,8 +82,10 @@ private struct PillTabLabel: View {
                 Image(systemName: systemImage)
                     .accessibilityHidden(true)
             }
-            Text(title)
-                .lineLimit(1)
+            if showsTitle {
+                Text(title)
+                    .lineLimit(1)
+            }
         }
     }
 }

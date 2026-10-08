@@ -13,6 +13,9 @@ final class WindowRouter {
     /// Incremented on each request; LiveSessionView observes with .onChange and focuses the note field / opens split UI.
     private(set) var noteFocusRequest: Int = 0
     private(set) var splitRequest: Int = 0
+    /// Incremented by `requestDiscard()`; the Today page observes it and runs its discard flow (with confirmation
+    /// when Settings asks for it).
+    private(set) var discardRequest: Int = 0
     /// Settings tab to select (a `SettingsTab` rawValue, e.g. "data", "account"). Set by `showSettings(tab:)`;
     /// SettingsView reads it (onAppear / onChange) and sets it back to nil.
     var settingsTabRequest: String? = nil
@@ -109,5 +112,12 @@ final class WindowRouter {
         selection = .today
         showMainWindow()
         splitRequest += 1
+    }
+
+    /// selection = .today; showMainWindow(); discardRequest += 1
+    func requestDiscard() {
+        selection = .today
+        showMainWindow()
+        discardRequest += 1
     }
 }

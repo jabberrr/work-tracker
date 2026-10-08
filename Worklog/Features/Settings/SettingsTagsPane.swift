@@ -185,7 +185,7 @@ private struct SettingsTagEditor: View {
                 LabeledContent("Preview") {
                     TagChip(tag: tag)
                 }
-                LabelPicker(selection: $tag.label, includeNone: true, title: "Parent label")
+                LabelValuePicker("Parent label", selection: $tag.label)
                 SettingsFootnote("Offered first when that label is picked.")
             }
 
@@ -255,7 +255,7 @@ private struct SettingsTagEditor: View {
             }
             Button("Cancel", role: .cancel) { mergeTarget = nil }
         } message: {
-            Text("Everything tagged “\(tag.name)” gets “\(mergeTarget?.name ?? "")”, and this can’t be undone.")
+            Text("Moves its uses to “\(mergeTarget?.name ?? "")” and deletes it.")
         }
         .confirmationDialog("Delete “\(tag.name)”?", isPresented: $confirmsDelete, titleVisibility: .visible) {
             Button("Delete Tag", role: .destructive) {

@@ -1164,6 +1164,8 @@ final class WindowRouter {
     /// Incremented on each request; LiveSessionView observes with .onChange and focuses the note field / opens split UI.
     private(set) var noteFocusRequest: Int = 0
     private(set) var splitRequest: Int = 0
+    /// Incremented by requestDiscard(); the Today page observes it and runs its discard flow.
+    private(set) var discardRequest: Int = 0
 
     /// Settings tab to select (a `SettingsTab` rawValue); SettingsView consumes it and sets it back to nil.
     var settingsTabRequest: String?
@@ -1181,6 +1183,7 @@ final class WindowRouter {
     func showSession(_ session: WorkSession)       // .history + selectedSessionID = session.persistentModelID
     func requestNoteFocus()                        // selection = .today; showMainWindow(); noteFocusRequest += 1
     func requestSplit()                            // selection = .today; showMainWindow(); splitRequest += 1
+    func requestDiscard()                          // selection = .today; showMainWindow(); discardRequest += 1
 }
 
 @MainActor
@@ -1543,6 +1546,8 @@ struct WorklogApp: App {
 
 ### 5.2 `RootView` (CORE)
 - If `auth.needsWelcome`, show `WelcomeView()` full-window. While `.unknown`, show the main UI.
+  - While `auth.needsWelcome` and `router.selection == .settings` (⌘, or Welcome's "Settings…"/"Recover…"), show `SettingsView()` full-window under a "Back" button that sets `selection = .today`. When `needsWelcome` changes while `.settings` is selected, selection goes back to `.today`.
+- **End-of-session sheet:** presented from `engine.pendingEndSession`. If it becomes set while Settings is shown, RootView first selects `.today` (Settings' own sheets would block it) and presents the review ~0.4 s later. Once the review is on screen, navigating to Settings doesn't hide it.
 - Otherwise show a `NavigationSplitView`:
   - **Sidebar:** a `List(selection:)` over `SidebarItem.primaryItems`, `.listStyle(.sidebar)`, using `Label(item.title, systemImage: item.systemImage)`. The selection binding reads `nil` while `router.selection == .settings`.
   - **Pinned bottom inset** (`.safeAreaInset(edge: .bottom, spacing: 0)`, sidebar background), never a VStack sibling of the List:
@@ -1558,7 +1563,7 @@ struct WorklogApp: App {
   - `.settings` → `SettingsView()`
 - **End-of-session sheet:** `.sheet(item: Binding(get: { engine.pendingEndSession }, set: { if $0 == nil { engine.completeReview() } })) { EndSessionSheet(session: $0) }`
 - **On appear:** `.onAppear { router.register(openWindow: openWindow) }`
-- **Storage banner:** if `persistence.storeMode` is `.localOnly`, show a dismissible `InlineBanner` (info) at the top of the detail. If it is `.inMemory`, show a persistent error banner ("Your data couldn’t be opened. Changes won’t be saved.") with "Restore…", which calls `router.showSettings(tab: "data")`. A sync error shows "iCloud sync problem. Changes are saved on this Mac." with "Details…" → `router.showSettings(tab: "account")`.
+- **Storage banner:** if `persistence.storeMode` is `.localOnly`, show a dismissible `InlineBanner` (info) at the top of the detail. If it is `.inMemory`, show a persistent error banner ("Your data couldn’t be opened. Changes won’t be saved.") with "Restore…", which calls `router.showSettings(tab: "data")`. A sync error shows "iCloud sync failed; changes kept on this Mac." with "Details…" → `router.showSettings(tab: "account")`.
 
 ### 5.3 Root views each feature agent MUST define (exact names and inits)
 
@@ -1631,7 +1636,7 @@ Round 2 changed several of these views (in-app Settings, the overlay layout edit
   - sort via a `HistorySort` enum: `dateNewest`, `dateOldest`, `longest`, `shortest`, `labelAZ`. Length sorting uses `storedActiveDuration`; label sorting is done in memory.
   - optional label filter chips
   - rows grouped by `relativeDayTitle` showing title, LabelBadge, duration, tags and a search snippet
-  - **Layout:** an `HSplitView` with the list (selection bound to `router.selectedSessionID`) on the left and `SessionDetailView` on the right (or an EmptyStateView)
+  - **Layout:** an `HStack` with the list (selection bound to `router.selectedSessionID`, user-draggable width) on the left, a 1 pt divider, and `SessionDetailView` on the right (or an EmptyStateView) in a 0-minimum frame (§11.5)
   - Delete uses confirm, then `SessionEditor.deleteSession`
   - a "Live session in progress" row at the top links to `.today` when `engine.isActive`
 - **`SessionDetailView`:**
@@ -1686,7 +1691,7 @@ Round 2 changed several of these views (in-app Settings, the overlay layout edit
 | Add Note… | ⌘⇧N | `router.requestNoteFocus()` |
 | Split Segment… | ⌘⇧D | `router.requestSplit()` |
 | Toggle Overlay | ⌘⇧O | `overlay.toggle()` |
-| Discard Session… | (none) | `router.show(.today)` (confirmation lives in A's UI) |
+| Discard Session… | (none) | when `engine.isActive`: `router.requestDiscard()`; the Today page runs its discard flow (confirmation when `settings.confirmBeforeDiscard`) |
 | Today / History / Learning / Stats | ⌘1 / ⌘2 / ⌘3 / ⌘4 | `router.show(...)` (`CommandGroup(after: .sidebar)`) |
 
 These shortcuts don't collide with anything:
@@ -1990,8 +1995,8 @@ struct StoredShortcut: Codable, Hashable {
 }
 
 enum ShortcutValidation: Equatable {
-    case ok, needsModifier, reserved, conflict(ShortcutAction)
-    var message: String? { get }   // nil, "Include ⌘ or ⌃.", "Reserved by macOS.", "Used by <title>."
+    case ok, needsModifier, reserved, shiftNeedsLetter, conflict(ShortcutAction)
+    var message: String? { get }   // nil, "Include ⌘ or ⌃.", "Reserved by macOS.", "Use ⇧ with a letter.", "Used by <title>."
 }
 
 @MainActor @Observable
@@ -2004,19 +2009,19 @@ final class ShortcutStore {
     var hasCustomizations: Bool { get }
     func validate(_ shortcut: StoredShortcut, for action: ShortcutAction) -> ShortcutValidation
     @discardableResult func set(_ shortcut: StoredShortcut?, for action: ShortcutAction) -> ShortcutValidation
-    func reset(_ action: ShortcutAction)
+    @discardableResult func reset(_ action: ShortcutAction) -> ShortcutAction?   // the action that lost its shortcut
     func resetAll()
-    static let reservedShortcuts: [StoredShortcut]   // ⌘, ⌘Q ⌘W ⌘H ⌥⌘H ⌘M ⌃⌘F ⌃⌘S ⌘` ⌃⌘Q ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⇧⌘/
+    static let reservedShortcuts: [StoredShortcut]   // ⌘, ⌘Q ⌘W ⌥⌘W ⌘H ⌥⌘H ⌘M ⌥⌘M ⌃⌘F ⌃⌘S ⌘` ⌃⌘Q ⌃⌘Space ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A ⇧⌘/
 }
 ```
 
-- **Validation order:** the modifiers must include ⌘ or ⌃ (`.needsModifier`), the combo must not be reserved (`.reserved`), and it must not equal another action's effective shortcut (`.conflict(other)`). Re-assigning an action its current shortcut is `.ok`.
+- **Validation order:** the modifiers must include ⌘ or ⌃ (`.needsModifier`), the combo must not be reserved (`.reserved`), ⇧ may only go with a letter or a special key such as ↩ or an arrow (`.shiftNeedsLetter`; menus match ⇧⌘1 or ⇧⌘= by the shifted character, so they may never fire), and it must not equal another action's effective shortcut (`.conflict(other)`). Re-assigning an action its current shortcut is `.ok`.
 - **`set`:** `nil` or `StoredShortcut.none` clears (always `.ok`). Anything else is validated and written only on `.ok`. A value equal to the default removes the override. Note that in a `StoredShortcut?` context a bare `.none` means `nil`; both clear.
-- **`reset`:** removes the override. If another action has since taken that default, that other action is cleared, so no two actions ever share a shortcut.
-- **Persistence:** UserDefaults key `shortcuts.overrides` holds JSON `[String: StoredShortcut]` keyed by `ShortcutAction.rawValue`. Only overrides are stored; a cleared action with a default stores `StoredShortcut.none` (clearing Discard Session, which has no default, is the default state). Unknown keys and undecodable data are ignored. With no overrides the key is removed.
+- **`reset`:** removes the override. If another action has since taken that default, that other action is cleared, so no two actions ever share a shortcut. Returns that other action (nil if none) so Settings ▸ Shortcuts can say "Removed from <title>."
+- **Persistence:** UserDefaults key `shortcuts.overrides` holds JSON `[String: StoredShortcut]` keyed by `ShortcutAction.rawValue`. Only overrides are stored; a cleared action with a default stores `StoredShortcut.none` (clearing Discard Session, which has no default, is the default state). Unknown keys and undecodable data are ignored. Loading resolves duplicates in `allCases` order: an action whose effective shortcut equals an earlier action's is cleared. With no overrides the key is removed.
 - **Plumbing:** `AppServices.shortcuts` is created right after `settings` with the same `defaults` (the ephemeral suite when `inMemory`). `withAppServices` adds `.environment(services.shortcuts)`, so the main window, the MenuBarExtra (panel and label) and the overlay panel all have it, and sheets/popovers inherit it. Views read it with `@Environment(ShortcutStore.self) private var shortcuts`.
 - **Users:** `WorklogCommands` (every Session and View menu item through a private `ShortcutCommandButton` View), HistoryView (⌘F, `.findInHistory`), EndSessionSheet (Save, `.saveReview`), the menu bar panel's overlay hint (`displayString(for: .toggleOverlay)`) and Settings ▸ Shortcuts.
-- **Fixed, not customizable:** ⌘, Settings; ⌘Q, ⌘H, ⌘W, ⌘M, full screen, ⌃⌘S Toggle Sidebar; the Edit menu; `.defaultAction`/`.cancelAction` in sheets and popovers; Return in text fields; ⌫ in the History list; ←/→ in the image viewer.
+- **Fixed, not customizable:** ⌘, Settings; ⌘Q, ⌘H, ⌘W, ⌥⌘W, ⌘M, ⌥⌘M, full screen, ⌃⌘Space Emoji & Symbols, ⌃⌘S Toggle Sidebar; the Edit menu; `.defaultAction`/`.cancelAction` in sheets and popovers; Return in text fields; ⌫ in the History list; ←/→ in the image viewer.
 
 ### 11.4 In-app Settings and navigation
 
@@ -2024,11 +2029,11 @@ final class ShortcutStore {
 - There is no `Settings` scene. `WorklogCommands` replaces `.appSettings` with "Settings…" (⌘, fixed) → `router.showSettings()`.
 - `WindowRouter.showSettings()` is `selection = .settings; showMainWindow()` (it reopens a closed main window). `showSettings(tab:)` sets `settingsTabRequest` first. `register(openWindow:openSettings:)` ignores `openSettings` (deprecated). There is no `OpenSettingsAction` storage, and no view uses `SettingsLink` or `@Environment(\.openSettings)`.
 - `RootView` shows `SettingsView()` for `.settings`; the footer gear selects it and is highlighted while it is shown (§5.2). The account name opens Settings ▸ Account.
-- While `auth.needsWelcome`, the Welcome screen covers the whole window, so Settings requests only take effect after it.
+- While `auth.needsWelcome`, Settings requests show Settings full-window over Welcome, with a "Back" button (§5.2).
 
 ### 11.5 Window sizing (History layout fix)
 
-- The main `Window` uses `.windowResizability(.contentMinSize)` with the root's `.frame(minWidth: 900, minHeight: 600)` and `.defaultSize(1100, 720)`.
+- The main `Window` uses `.windowResizability(.contentMinSize)` with the root's `.frame(minWidth: 900, minHeight: 600)` and `.defaultSize(1100, 720)`. With `.contentMinSize` the window's minimum follows the content's, so it stays 900 × 600 only because of the 0-minimum barriers below.
 - RootView's detail column is a min-size barrier (explicit `minWidth: 0`/`minHeight: 0` frames + `.clipped()`), and the sidebar's mini status row and footer are pinned with `.safeAreaInset(edge: .bottom)`.
 - Feature side (F1): `HistoryView` no longer nests an `HSplitView` inside the `NavigationSplitView`; it uses an `HStack` with a fixed, user-draggable list width (`history.listWidth`, 280–460, default 340) and a zero-minimum detail.
 

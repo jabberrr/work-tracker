@@ -2,7 +2,8 @@ import SwiftData
 import SwiftUI
 
 /// Main window content: Welcome gate, sidebar navigation (Settings is a detail page reached from the footer gear),
-/// storage/sync banners and the end-of-session sheet.
+/// storage/sync banners and the end-of-session sheet. Before sign-in, Settings (⌘, or Welcome's "Settings…")
+/// replaces Welcome full-window with a Back button.
 @MainActor
 struct RootView: View {
     @Environment(AuthService.self) private var auth
@@ -16,23 +17,53 @@ struct RootView: View {
 
     /// The sync error text the user dismissed (or that timed out); a different error shows again.
     @State private var dismissedSyncError: String?
+    /// True while the end-of-session sheet is on screen (so later navigation to Settings can't hide it).
+    @State private var isEndSheetVisible = false
+    /// Briefly holds back the end-of-session sheet while Settings (and any sheet it presented) is closed for it.
+    @State private var holdEndSheet = false
 
     var body: some View {
-        Group {
+        // Read here (not only inside the Binding) so observation re-renders on pendingEndSession / selection.
+        let endSession = endSheetSession
+        return Group {
             if auth.needsWelcome {
-                WelcomeView()
+                if router.selection == .settings {
+                    welcomeSettings
+                } else {
+                    WelcomeView()
+                }
             } else {
                 mainSplitView
             }
         }
         .sheet(item: Binding(
-            get: { engine.pendingEndSession },
+            get: { endSession },
             set: { if $0 == nil { engine.completeReview() } }
         ), onDismiss: {
+            isEndSheetVisible = false
             // Phase 2 of discarding from the end sheet: delete only once the sheet's views are gone.
             engine.finishPendingDiscard()
         }) { session in
             EndSessionSheet(session: session)
+                .onAppear { isEndSheetVisible = true }
+        }
+        .onChange(of: engine.pendingEndSession?.uuid) { _, newValue in
+            // Settings pages present their own sheets in this window, which would block the review sheet:
+            // leave Settings first and present the review once its sheets are gone.
+            guard newValue != nil, router.selection == .settings, !isEndSheetVisible else { return }
+            holdEndSheet = true
+            router.selection = .today
+            Task { @MainActor in
+                try? await Task.sleep(for: .milliseconds(400))
+                holdEndSheet = false
+            }
+        }
+        .onChange(of: auth.needsWelcome) {
+            // Passing Welcome (signed in / guest) from its Settings starts on Today; signing out from Settings
+            // shows Welcome rather than its Settings page.
+            if router.selection == .settings {
+                router.selection = .today
+            }
         }
         .alert("Something went wrong", isPresented: Binding(
             get: { engine.lastError != nil },
@@ -56,6 +87,38 @@ struct RootView: View {
             guard !Task.isCancelled else { return }
             dismissedSyncError = error
         }
+    }
+
+    /// The review sheet's item. Not presented while Settings is on screen (until the sheet is up, see the
+    /// `pendingEndSession` onChange) or while `holdEndSheet` is set.
+    private var endSheetSession: WorkSession? {
+        guard let session = engine.pendingEndSession else { return nil }
+        if isEndSheetVisible { return session }
+        if holdEndSheet || router.selection == .settings { return nil }
+        return session
+    }
+
+    // MARK: - Welcome ▸ Settings
+
+    /// Settings before sign-in: full-window, with Back to Welcome.
+    private var welcomeSettings: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Button {
+                    router.selection = .today
+                } label: {
+                    Label("Back", systemImage: "chevron.left")
+                }
+                .buttonStyle(QuietButtonStyle())
+                Spacer(minLength: 0)
+            }
+            .padding(.horizontal, theme.spacingXL)
+            .padding(.top, theme.spacingL)
+            SettingsView()
+                .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        }
+        .frame(minWidth: 0, maxWidth: .infinity, minHeight: 0, maxHeight: .infinity)
+        .themedBackground(.background)
     }
 
     // MARK: - Split view
@@ -283,7 +346,7 @@ struct RootView: View {
         if let error = sync.lastErrorDescription, error != dismissedSyncError {
             items.append(BannerItem(
                 id: "syncError",
-                message: "iCloud sync problem. Changes are saved on this Mac.",
+                message: "iCloud sync failed; changes kept on this Mac.",
                 systemImage: "exclamationmark.icloud",
                 style: .warning,
                 help: error,

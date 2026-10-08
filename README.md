@@ -21,7 +21,7 @@ optional floating overlay give quick access while you work.
 - **Account**: Sign in with Apple, or continue without signing in.
 - **Data**: JSON export and import (merge or replace), CSV export (sessions and segments), rolling local backups with restore, and a recovery flow if the data store can't be opened.
 - **Settings in the main window**: Settings is a page of the main window (the gear in the sidebar footer, ⌘, or the app menu's "Settings…"), not a separate window. Sections: General, Appearance, Overlay, Shortcuts, Labels & Tags, Account, Data.
-- **Customizable keyboard shortcuts**: every app shortcut can be re-recorded, cleared or reset in Settings ▸ Shortcuts. Conflicts, combos reserved by macOS and shortcuts without ⌘ or ⌃ are rejected; changes apply immediately and survive relaunch. Defaults:
+- **Customizable keyboard shortcuts**: every app shortcut can be re-recorded, cleared or reset in Settings ▸ Shortcuts. Conflicts, combos reserved by macOS, shortcuts without ⌘ or ⌃ and ⇧ with a digit or symbol are rejected; changes apply immediately and survive relaunch. Defaults:
 
   | Action | Default |
   |---|---|
@@ -35,7 +35,7 @@ optional floating overlay give quick access while you work.
   | Find in History | ⌘F |
   | Save session review | ⌘↩ |
 
-  Fixed (system conventions): ⌘, Settings, ⌘Q, ⌘W, ⌘H, ⌘M, ⌃⌘S Toggle Sidebar, the Edit menu, Return/Esc in sheets, ⌫ in the History list.
+  Fixed (system conventions): ⌘, Settings, ⌘Q, ⌘W, ⌥⌘W, ⌘H, ⌘M, ⌥⌘M, ⌃⌘S Toggle Sidebar, ⌃⌘Space Emoji & Symbols, the Edit menu, Return/Esc in sheets, ⌫ in the History list.
 
 ## Requirements
 
@@ -96,7 +96,7 @@ The unit tests run in in-memory SwiftData containers. Under XCTest, `AppServices
 - a JSON export → import round trip, merge never overwriting newer data, CSV quoting and the formula-injection guard
 - duplicate-row tie-breaking and the backup retention policy
 - the overlay layout migration from the old per-element toggles, and resetting it
-- shortcut defaults, display strings, validation (conflicts, reserved combos, missing ⌘/⌃), clearing, reset and persistence
+- shortcut defaults, display strings, validation (conflicts, reserved combos, missing ⌘/⌃, ⇧ without a letter), clearing, reset (and the action it clears) and persistence (including de-duplicating stored overrides)
 
 ## Architecture
 

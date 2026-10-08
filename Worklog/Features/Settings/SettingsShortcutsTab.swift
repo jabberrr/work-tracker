@@ -7,7 +7,8 @@ struct SettingsShortcutsTab: View {
     @Environment(ShortcutStore.self) private var shortcuts
     @Environment(\.theme) private var theme
 
-    /// The last rejected recording per action. `id` restarts the 4 s auto-clear for a repeated message.
+    /// The last message per action: a rejected recording (error) or "Removed from X." after a reset took that
+    /// action's default from X (notice). `id` restarts the 4 s auto-clear for a repeated message.
     @State private var errors: [ShortcutAction: SettingsShortcutError] = [:]
     @State private var confirmsResetAll = false
 
@@ -54,7 +55,7 @@ struct SettingsShortcutsTab: View {
                     accessibilityName: action.title,
                     onRecord: { recorded in
                         let result = shortcuts.set(recorded, for: action)
-                        errors[action] = result.message.map { SettingsShortcutError(message: $0) }
+                        errors[action] = result.message.map { SettingsShortcutError(message: $0, isError: true) }
                     },
                     onClear: {
                         shortcuts.set(nil, for: action)
@@ -63,14 +64,18 @@ struct SettingsShortcutsTab: View {
                 )
                 ResetToDefaultButton(isDefault: shortcuts.isDefault(action),
                                      accessibilityLabel: "Reset \(action.title)") {
-                    shortcuts.reset(action)
-                    errors[action] = nil
+                    if let other = shortcuts.reset(action) {
+                        errors[other] = nil
+                        errors[action] = SettingsShortcutError(message: "Removed from \(other.title).", isError: false)
+                    } else {
+                        errors[action] = nil
+                    }
                 }
             }
             if let error = errors[action] {
                 Text(error.message)
                     .font(theme.captionFont)
-                    .foregroundStyle(theme.danger)
+                    .foregroundStyle(error.isError ? theme.danger : theme.textSecondary)
                     .fixedSize(horizontal: false, vertical: true)
                     .frame(maxWidth: .infinity, alignment: .trailing)
                     .task(id: error.id) {
@@ -83,8 +88,9 @@ struct SettingsShortcutsTab: View {
     }
 }
 
-/// A rejected recording's message ("Used by Show Today.").
+/// A row's message: a rejected recording ("Used by Show Today.", isError) or a reset notice ("Removed from Show Today.").
 private struct SettingsShortcutError: Equatable {
     let id = UUID()
     let message: String
+    let isError: Bool
 }

@@ -177,7 +177,7 @@ struct SettingsDataTab: View {
                 .buttonStyle(QuietButtonStyle())
                 Spacer()
             }
-            SettingsFootnote("Replace deletes current data first. A backup is made either way.")
+            SettingsFootnote("Replace erases current data; a backup is made first.")
         }
     }
 
@@ -233,9 +233,11 @@ struct SettingsDataTab: View {
                 InlineBanner(error, style: .error, onDismiss: { backups.lastError = nil })
             }
 
-            ValuePicker("Back up", selection: settings.backupInterval, options: BackupInterval.allCases,
-                        title: { $0.displayName.lowercased() })
-            SettingsFootnote("Runs only after changes, and also when Worklog quits.")
+            // "Back up **hourly**", but "Automatic backups **Off**" (not "Back up off").
+            ValuePicker(self.settings.backupInterval == .off ? "Automatic backups" : "Back up",
+                        selection: settings.backupInterval, options: BackupInterval.allCases,
+                        title: { $0 == .off ? $0.displayName : $0.displayName.lowercased() })
+            SettingsFootnote("Runs after changes and when Worklog quits.")
             ValueStepper("Keep the latest", value: settings.backupRetentionCount, in: 1...100,
                          format: { "\($0) \($0 == 1 ? "backup" : "backups")" })
             Toggle("Include images", isOn: settings.backupIncludesAttachments)

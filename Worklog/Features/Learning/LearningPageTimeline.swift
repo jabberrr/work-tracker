@@ -224,6 +224,6 @@ struct LearningPageMasteryDots: View {
         }
         .accessibilityElement(children: .ignore)
         .accessibilityLabel("Mastery \(rating) of 5")
-        .help("Mastery \(rating) of 5")
+        .help("How well you know this: \(rating) of 5")
     }
 }

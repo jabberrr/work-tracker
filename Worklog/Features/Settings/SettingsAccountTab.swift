@@ -10,6 +10,7 @@ struct SettingsAccountTab: View {
     @Environment(AppSettings.self) private var settings
     @Environment(PersistenceController.self) private var persistence
     @Environment(SyncMonitor.self) private var sync
+    @Environment(WindowRouter.self) private var router
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
 
@@ -30,6 +31,13 @@ struct SettingsAccountTab: View {
 
             Section("Storage") {
                 storageStatusRow
+                if SettingsRecovery.isNeeded(persistence) {
+                    HStack {
+                        Spacer()
+                        Button("Recover…") { router.showSettings(tab: SettingsTab.data.rawValue) }
+                            .buttonStyle(QuietButtonStyle())
+                    }
+                }
                 if persistence.storeMode == .cloudKit {
                     syncActivityRow
                     if let error = sync.lastErrorDescription {

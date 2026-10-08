@@ -97,7 +97,7 @@ struct InlineBanner: View {
 
 #Preview("InlineBanner") {
     VStack(spacing: 10) {
-        InlineBanner("iCloud sync problem. Changes are saved on this Mac.", actionTitle: "Details…",
+        InlineBanner("iCloud sync failed; changes kept on this Mac.", actionTitle: "Details…",
                      action: {}, onDismiss: {})
         InlineBanner("Paused while your Mac slept.", style: .warning,
                      actionTitle: "Resume", action: {}, onDismiss: {})

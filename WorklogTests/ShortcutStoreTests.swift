@@ -124,6 +124,21 @@ final class ShortcutStoreTests: XCTestCase {
         XCTAssertEqual(store.set(StoredShortcut(key: "q", modifiers: .command), for: .startStop), .reserved)
         XCTAssertEqual(store.validate(StoredShortcut(key: ",", modifiers: .command), for: .addNote), .reserved)
         XCTAssertEqual(ShortcutValidation.reserved.message, "Reserved by macOS.")
+        XCTAssertEqual(store.validate(StoredShortcut(key: "space", modifiers: [.control, .command]), for: .addNote),
+                       .reserved, "⌃⌘Space opens Emoji & Symbols")
+        XCTAssertEqual(store.validate(StoredShortcut(key: "w", modifiers: [.option, .command]), for: .addNote), .reserved)
+        XCTAssertEqual(store.validate(StoredShortcut(key: "m", modifiers: [.option, .command]), for: .addNote), .reserved)
+
+        // ⇧ only with a letter or a special key.
+        XCTAssertEqual(store.set(StoredShortcut(key: "1", modifiers: [.shift, .command]), for: .startStop),
+                       .shiftNeedsLetter)
+        XCTAssertEqual(store.validate(StoredShortcut(key: "=", modifiers: [.shift, .command]), for: .addNote),
+                       .shiftNeedsLetter)
+        XCTAssertEqual(store.validate(StoredShortcut(key: "k", modifiers: [.shift, .control]), for: .addNote), .ok)
+        XCTAssertEqual(store.validate(StoredShortcut(key: "return", modifiers: [.shift, .command]), for: .addNote), .ok)
+        XCTAssertEqual(store.validate(StoredShortcut(key: "1", modifiers: [.option, .command]), for: .addNote), .ok,
+                       "digits are fine without ⇧")
+        XCTAssertEqual(ShortcutValidation.shiftNeedsLetter.message, "Use \u{21E7} with a letter.")
 
         // Needs ⌘ or ⌃.
         XCTAssertEqual(store.set(StoredShortcut(key: "s", modifiers: []), for: .startStop), .needsModifier)
@@ -214,7 +229,7 @@ final class ShortcutStoreTests: XCTestCase {
         store.set(StoredShortcut(key: "j", modifiers: [.command, .option]), for: .addNote)
         XCTAssertTrue(store.hasCustomizations)
 
-        store.reset(.startStop)
+        XCTAssertNil(store.reset(.startStop), "nobody else held ⇧⌘S")
         XCTAssertTrue(store.isDefault(.startStop))
         XCTAssertEqual(store.stored(for: .startStop), commandShiftS)
         XCTAssertTrue(store.hasCustomizations, "the other overrides remain")
@@ -233,9 +248,26 @@ final class ShortcutStoreTests: XCTestCase {
         store.set(controlOptionK, for: .startStop)
         XCTAssertEqual(store.set(commandShiftS, for: .pauseResume), .ok)
 
-        store.reset(.startStop)
+        XCTAssertEqual(store.reset(.startStop), .pauseResume, "reset reports the action that lost its shortcut")
         XCTAssertEqual(store.stored(for: .startStop), commandShiftS)
         XCTAssertNil(store.stored(for: .pauseResume), "the other action is cleared, so no two actions share a shortcut")
+        XCTAssertFalse(store.isDefault(.pauseResume))
+
+        // An action without a default that took the shortcut goes back to its (empty) default.
+        store.set(controlOptionK, for: .startStop)
+        XCTAssertEqual(store.set(commandShiftS, for: .discardSession), .ok)
+        XCTAssertEqual(store.reset(.startStop), .discardSession)
+        XCTAssertNil(store.stored(for: .discardSession))
+        XCTAssertTrue(store.isDefault(.discardSession))
+    }
+
+    @MainActor
+    func testResetOfActionWithoutDefaultAffectsNobody() {
+        let store = ShortcutStore(defaults: makeDefaults())
+        store.set(controlOptionK, for: .discardSession)
+        XCTAssertNil(store.reset(.discardSession))
+        XCTAssertNil(store.stored(for: .discardSession))
+        XCTAssertEqual(store.stored(for: .startStop), commandShiftS)
     }
 
     // MARK: - Persistence
@@ -270,5 +302,31 @@ final class ShortcutStoreTests: XCTestCase {
         let store = ShortcutStore(defaults: defaults)
         XCTAssertEqual(store.stored(for: .addNote), custom)
         XCTAssertEqual(ShortcutAction.allCases.filter { !store.isDefault($0) }, [.addNote])
+    }
+
+    @MainActor
+    func testLoadDeduplicatesConflictingOverrides() throws {
+        let defaults = makeDefaults()
+        // Two overrides share ⌃⌥K, and Show Stats' override takes Start / Stop's default ⇧⌘S.
+        let payload: [String: StoredShortcut] = [
+            "addNote": controlOptionK,
+            "saveReview": controlOptionK,
+            "showStats": commandShiftS,
+            "discardSession": commandShiftP,
+        ]
+        defaults.set(try JSONEncoder().encode(payload), forKey: Self.overridesKey)
+        let store = ShortcutStore(defaults: defaults)
+
+        // Earlier actions (allCases order) keep their shortcut; later duplicates are cleared.
+        XCTAssertEqual(store.stored(for: .addNote), controlOptionK)
+        XCTAssertNil(store.stored(for: .saveReview))
+        XCTAssertEqual(store.stored(for: .startStop), commandShiftS)
+        XCTAssertNil(store.stored(for: .showStats))
+        XCTAssertEqual(store.stored(for: .pauseResume), commandShiftP)
+        XCTAssertNil(store.stored(for: .discardSession))
+        XCTAssertTrue(store.isDefault(.discardSession), "no default, so cleared means default")
+
+        let effective = ShortcutAction.allCases.compactMap { store.stored(for: $0) }
+        XCTAssertEqual(Set(effective).count, effective.count, "no two actions share a shortcut after loading")
     }
 }

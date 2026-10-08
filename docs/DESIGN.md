@@ -280,11 +280,11 @@ need no Reduce Transparency handling (no materials). Signatures are final (ARCHI
 | Component | Signature | Look and behaviour |
 |---|---|---|
 | `FilterChip` | `FilterChip(_ title: String, colorHex: String?, isSelected: Bool, action: () -> Void)` | The chip *is* the button. At Standard text size: `calloutFont` medium, padding 11 × 5, min height 26 (× `textScale`), `chipShape`, 8 pt `ColorDot` when `colorHex != nil`. Selected: accent tint fill + 1 pt accent stroke + accent text. Unselected: `insetSurface` + `separator` stroke + `textPrimary`. Hover `textPrimary.opacity(0.05)`. a11y label = title + `.isSelected`. The caller adds `.help(title)`. Use in a horizontal `ScrollView(showsIndicators: false)` with `HStack(spacing: 6)`. |
-| `PillTabBar` | `PillTabBar(items: [Item], selection: Binding<Item>, title: (Item) -> String, systemImage: (Item) -> String?)` (`Item: Hashable & Identifiable`) | Settings section switcher. Icon + title, `calloutFont` medium, padding 10 × 5, `radiusS`. Selected: accent tint fill + accent text; unselected `textSecondary`, hover fill `textPrimary.opacity(0.06)`. Natural width when it fits, otherwise scrolls horizontally (`ViewThatFits`). Buttons carry `.isSelected`; the container is "Sections". |
+| `PillTabBar` | `PillTabBar(items: [Item], selection: Binding<Item>, title: (Item) -> String, systemImage: (Item) -> String?)` (`Item: Hashable & Identifiable`) | Settings section switcher. Icon + title, `calloutFont` medium, padding 10 × 5, `radiusS`. Selected: accent tint fill + accent text; unselected `textSecondary`, hover fill `textPrimary.opacity(0.06)`. Natural width when it fits; when it doesn't (`ViewThatFits`), unselected pills drop to icon-only with the title as tooltip, then every pill is icon-only, and only then does the row scroll horizontally. Buttons keep their title as a11y label and carry `.isSelected`; the container is "Sections". |
 | `ValueSentence` | `ValueSentence(_ prefix: String, value: String, suffix: String = "")` | "Keep the latest **10 backups**": one concatenated `Text`; the value is bold + `accent`, prefix/suffix `textPrimary`, all in the inherited font, so it shares the baseline and wraps like a sentence. |
 | `ValueStepper` | `ValueStepper(_:value:in:step:suffix:format:)` for `Binding<Double>` and `Binding<Int>` | `ValueSentence` … native `Stepper` (labels hidden) trailing, row centred vertically. a11y: one adjustable element, label = prefix + suffix, value = the formatted value. |
 | `ValueSlider` | `ValueSlider(_:value:in:step:suffix:format:)` (`Binding<Double>`) | `ValueSentence` … native `Slider` (labels hidden, width 200) trailing. Same a11y as the stepper. |
-| `ValuePicker` | `ValuePicker(_:selection:options:suffix:title:)` (`Option: Hashable`) | "Week starts on **Monday ⌄**": the bold accent value + a small chevron is a plain button that opens a popover list (checkmark on the selected option; click, Return or Space picks and closes; ↑/↓ move; Esc closes). First-text-baseline aligned with the prefix, same font. For short option lists (≤ ~6) inside sentences; use native pickers elsewhere. |
+| `ValuePicker` | `ValuePicker(_:selection:options:suffix:title:)` (`Option: Hashable`) | "Week starts on **Monday ⌄**": the bold accent value + a small chevron is a plain button that opens a popover list (checkmark on the selected option; click, Return or Space picks and closes; ↑/↓ move; Esc closes). First-text-baseline aligned with the prefix, same font. For short option lists inside sentences; lists over 12 options scroll in the popover (highlight kept visible). |
 | `ShortcutRecorder` | `ShortcutRecorder(shortcut: StoredShortcut?, accessibilityName: String, onRecord: (StoredShortcut) -> Void, onClear: () -> Void)` | Key-cap field; see §11.1. It never validates: pass the result to `ShortcutStore.set(_:for:)` and show its message under the row. |
 | `ResetToDefaultButton` | `ResetToDefaultButton(isDefault: Bool, accessibilityLabel: String, action: () -> Void)` | `arrow.counterclockwise` in `IconButtonStyle(size: 22)`, disabled at the default, help "Reset". |
 | `RemoveBadgeButton` | `RemoveBadgeButton(accessibilityLabel: String, action: () -> Void)` | Edit-mode (−): 18 pt `danger` circle, white `minus` (9 pt bold), 1.5 pt `elevatedSurface` ring, 24 pt hit area, help "Remove". Place at the item's top-leading corner, offset (−6, −6). |
@@ -296,6 +296,7 @@ need no Reduce Transparency handling (no materials). Signatures are final (ARCHI
 | Control | Behavior |
 |---|---|
 | `LabelPicker(selection:includeNone:title:)` | Native pop-up `Picker` (`.menu`): "None", divider, non-archived labels by `sortIndex` with colored symbol; an archived current selection is listed as "Name (archived)". Shows its `title` on the left; use `.labelsHidden()` in compact places. |
+| `LabelValuePicker(_:selection:)` | Settings value sentence over labels ("Default label **Work ⌄**", "Parent label **None ⌄**"): a `ValuePicker` with "None" + the same options as `LabelPicker` (archived current selection as "Name (archived)"); a deleted selection reads "None" and nil is written back. |
 | `TagPicker(selection:scopeLabel:allowsCreate:)` | Selected tags as removable chips + a dashed "+ Add tag" chip that opens a popover: search field (focused), **scope label's tags**, **Global**, and while searching **Other labels**; rows toggle (multi-select, popover stays open); "Create “x”" creates a *global* tag via `TaxonomyOps.createTag(name:in:)` and selects it. Return = toggle exact/only match or create. Bind with `$session.tagList`, `$segment.tagList`, `$point.tagList`. The picker does not call `touch()`. |
 | `TagChipsRow(tags:)` | Read-only chips; renders nothing when empty. |
 | `NoteRow(note:showsSegment:)` | `10:42` (caption, tabular, tertiary) · selectable body text (6 lines + "Show more") · optional segment caption (dot + focus) · "Edited". Read-only; add `.contextMenu` (Edit / Change time / Delete) in your feature. |
@@ -325,7 +326,7 @@ text truncates (`lineLimit(1)` + tail) instead of using a horizontal `.fixedSize
 
 ```
 ┌──────────────┬──────────────────────────────────────────────────────────────┐
-│ ◷ Today      │  [InlineBanner: iCloud sync problem. …    (Details…)   ✕]    │
+│ ◷ Today      │  [InlineBanner: iCloud sync failed; …    (Details…)   ✕]    │
 │ ↺ History    │                                                              │
 │ ✧ Learning   │            (detail pane — §10.2… or Settings §10.11)         │
 │ ▥ Stats      │                                                              │
@@ -734,7 +735,7 @@ Settings is a page in the main window's detail column (§10.1), not a separate w
 (The icons in the bar are SF Symbols: `gearshape`, `paintpalette`, `rectangle.inset.topright.filled`,
 `keyboard`, `tag`, `person.crop.circle`, `externaldrive`.)
 - **Sections:** General, Appearance, Overlay, Shortcuts, Labels & Tags, Account, Data, switched by a
-  `PillTabBar` (scrolls horizontally when the column is narrow). The selection persists
+  `PillTabBar` (icon-only pills with tooltips when the column is narrow; scrolls only if even that doesn't fit). The selection persists
   (`settingsWindow.selectedTab`); `router.showSettings(tab:)` opens a given section.
 - **Width:** each section is wrapped in `SettingsPage(maxWidth:)`: 720 for General, Appearance, Shortcuts,
   Account and Data; 760 for Overlay (room for the layout editor); full width (`nil`) for Labels & Tags (two
@@ -742,12 +743,13 @@ Settings is a page in the main window's detail column (§10.1), not a separate w
 - **Value sentences:** a setting whose value is a number or a short choice reads as a sentence with the value
   **bold in the accent color**, in the same font and on the same baseline as the words around it, never
   monospaced: "Keep the latest **10 backups**", "Ask “Still working?” after **10 hours**", "Daily goal **4h**"
-  (or **Off**), "Week starts on **Monday**", "Back up **hourly**", "Opacity **95%**". Steppers and sliders
+  (or **Off**), "Week starts on **Monday**", "Default label **Work**", "Back up **hourly**" (when off: "Automatic
+  backups **Off**"), "Opacity **95%**", and the accent name in Appearance. Steppers and sliders
   stay native and sit trailing (`ValueStepper`, `ValueSlider`); short choices open a small list from the value
   itself (`ValuePicker`). Never put `LabeledContent` or monospaced digits inside a `Stepper` label: that splits
   the sentence into two columns and breaks the baseline.
 - **Native controls stay** where they are clearer: segmented pickers (appearance mode, text size, Labels/Tags),
-  toggles, `LabelPicker` (default label) and pickers inside sheets.
+  toggles and pickers inside sheets. Default label and a tag's parent label use `LabelValuePicker`.
 - **Footnotes** (`SettingsFootnote`) only where the effect isn't obvious: ≤ 1 sentence, ≤ ~15 words, no
   shortcut glyphs (§12.0).
 
@@ -777,19 +779,22 @@ session starts"; Hide when idle) · "Layout" (the editor, §10.6.1) · "Window" 
 ```
 - One grouped `Section` per `ShortcutGroup`; rows are the action title, a `ShortcutRecorder` and a
   `ResetToDefaultButton` (a11y "Reset *Action*"). A rejected recording shows the store's message under the row
-  in `captionFont` `danger` ("Include ⌘ or ⌃." / "Reserved by macOS." / "Used by *Action*."); it clears after
+  in `captionFont` `danger` ("Include ⌘ or ⌃." / "Reserved by macOS." / "Use ⇧ with a letter." / "Used by *Action*.");
+  resetting an action whose default another action had taken clears that other action and shows "Removed from
+  *Action*." under the reset row in `textSecondary`; it clears after
   4 s or at the next attempt. "Reset All" (Quiet, disabled without customizations) confirms "Reset all
   shortcuts?". Changes apply immediately to menus, in-view shortcuts and the menu bar hint.
 
 - Labels & Tags: two-column: label list (drag to reorder, `ColorDot` + symbol + name + usage count) /
   editor (name field, `LabelColorPicker`, `SymbolPicker` in a 240 pt area, Archive / Delete…). Tags below:
-  `Table` or List with name, parent label `LabelPicker(includeNone:true, title:"Parent")`, color, usage, ⋯.
+  `Table` or List with name, parent label `LabelValuePicker("Parent label", selection:)`, color, usage, ⋯.
 - Delete label: sheet "Delete “Meetings”? 42 sessions use it. Move them to: ▾ [Unlabeled]" `{!Delete}`.
 - Data: grouped sections Export / Import / Backups (list rows: date `shortDateTime` + `pin.fill` when pinned,
   "reason · N sessions · pinned", size in `monoFont`, Restore…, ⋯ menu with Pin/Unpin · Show in Finder · Delete…)
   / Danger zone (`DestructiveButtonStyle`, double confirm). Importing a file and restoring a backup both go
   through `BackupService` (`importArchive(_:mode:)` / `restore(from:mode:)`), which makes the safety backup first.
-- Data: "Back up **hourly**" (`ValuePicker` over `BackupInterval`, values lowercased) and "Keep the latest
+- Data: "Back up **hourly**" (`ValuePicker` over `BackupInterval`, values lowercased; when off the sentence reads
+  "Automatic backups **Off**") and "Keep the latest
   **10 backups**" (`ValueStepper`).
 - **Data ▸ Recovery** (only while the store couldn't be opened, i.e. in-memory mode): a first section with an
   error `InlineBanner` "Your data couldn’t be opened. Changes won’t be saved." and the
@@ -813,18 +818,18 @@ session starts"; Hide when idle) · "Layout" (the editor, §10.6.1) · "Window" 
 
 ```
                          Worklog                     ← largeTitleFont (serif in Paper)
-          Track focused work, split it as your attention moves,
-          and keep what you learned.                 ← bodyFont, textSecondary, centered, max 420
+          Track focused work and keep what you learned.   ← bodyFont, textSecondary, centered, max 420
 
                    [  Sign in with Apple  ]           ← SignInWithAppleButton 260×36
-                   ( Continue without signing in )   ← QuietButtonStyle
+                   ( Continue as Guest )             ← QuietButtonStyle
+
+                          Theme                      ← sectionHeaderFont, textSecondary
+         [Graphite ✓]     [Paper]     [Meadow]       ← ThemeSwatchRow() (compact swatches, 124 pt)
 
      Your data syncs with iCloud either way.           ← captionFont tertiary
                                                        (only when CloudKit is in use; see below)
+                ( Recover… )  ( Settings… )           ← QuietButtonStyle; Recover… only in recovery mode
      [InlineBanner error …]                            (if auth.lastError)
-
-                        Pick a look                  ← sectionHeaderFont, textSecondary
-         [Graphite ✓]     [Paper]     [Meadow]       ← ThemeSwatchRow() (compact swatches, 124 pt)
 ```
 Full-window `themedBackground()`, content vertically centered, no illustration, no gradients.
 - The storage line is truthful: it mentions iCloud sync only when this launch actually uses CloudKit;
@@ -832,6 +837,10 @@ Full-window `themedBackground()`, content vertically centered, no illustration, 
 - Theme picker: `ThemeSwatchRow()` — compact swatches show the theme in the current appearance with the
   name below (no tooltip; VoiceOver reads the summary). Clicking applies the theme immediately (the Welcome screen
   re-themes live), so the choice is self-explanatory. Graphite is preselected.
+- Settings is reachable before signing in: **Settings…** calls `router.showSettings()` and RootView shows the
+  Settings page full-window with a Back button. When the store couldn't be opened (`persistence.isRecoveryMode`)
+  the storage line reads "Your data couldn’t be opened. Changes won’t be saved." and **Recover…** opens
+  Settings ▸ Data (`router.showSettings(tab: "data")`).
 
 ---
 
@@ -986,7 +995,7 @@ grep -n '\.help(\|Text("\|Label("\|Button("\|SettingsFootnote(\|EmptyStateView(\
 
 Banners (`InlineBanner`, ≤ 1 short sentence + an action):
 - in-memory store (error): "Your data couldn’t be opened. Changes won’t be saved." · "Restore…"
-- iCloud sync error (warning): "iCloud sync problem. Changes are saved on this Mac." · "Details…"
+- iCloud sync error (warning): "iCloud sync failed; changes kept on this Mac." · "Details…"
 - auto-pause (warning): "Paused while your Mac slept." / "Paused when Worklog quit." · "Resume"
 - long session (warning): "Running for \(n) hours. Still working?" · "Stop at last activity" / "Stop now" /
   "Keep going"

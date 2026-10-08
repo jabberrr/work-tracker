@@ -197,6 +197,8 @@ enum ShortcutValidation: Equatable {
     case ok
     case needsModifier                     // "Include ⌘ or ⌃."
     case reserved                          // "Reserved by macOS."
+    /// ⇧ with a digit or symbol (⇧⌘1, ⇧⌘=): menus match the shifted character, so it may never fire.
+    case shiftNeedsLetter                  // "Use ⇧ with a letter."
     case conflict(ShortcutAction)          // "Used by \(action.title)."
 
     /// nil for .ok
@@ -205,6 +207,7 @@ enum ShortcutValidation: Equatable {
         case .ok: nil
         case .needsModifier: "Include \u{2318} or \u{2303}."
         case .reserved: "Reserved by macOS."
+        case .shiftNeedsLetter: "Use \u{21E7} with a letter."
         case .conflict(let action): "Used by \(action.title)."
         }
     }
@@ -253,7 +256,8 @@ final class ShortcutStore {
     /// Rules, in order:
     /// 1. modifiers must contain .command or .control → else .needsModifier
     /// 2. not in reservedShortcuts → else .reserved
-    /// 3. not equal to another action's effective shortcut → else .conflict(other)
+    /// 3. ⇧ only with a letter or a token key (↩, arrows…), not a digit or symbol → else .shiftNeedsLetter
+    /// 4. not equal to another action's effective shortcut → else .conflict(other)
     /// Re-assigning an action its current shortcut is .ok. `.none` (clearing) is always .ok.
     func validate(_ shortcut: StoredShortcut, for action: ShortcutAction) -> ShortcutValidation {
         let candidate = Self.normalized(shortcut)
@@ -261,6 +265,9 @@ final class ShortcutStore {
         let mods = candidate.eventModifiers
         guard mods.contains(.command) || mods.contains(.control) else { return .needsModifier }
         guard !Self.reservedShortcuts.contains(candidate) else { return .reserved }
+        if mods.contains(.shift), candidate.key.count == 1, let character = candidate.key.first, !character.isLetter {
+            return .shiftNeedsLetter
+        }
         if let other = holder(of: candidate, excluding: action) {
             return .conflict(other)
         }
@@ -287,13 +294,18 @@ final class ShortcutStore {
 
     /// Back to the default. If another action has since taken that default, the other action is cleared
     /// (the reset wins), so no two actions ever share a shortcut.
-    func reset(_ action: ShortcutAction) {
+    /// - Returns: the other action that lost its shortcut, or nil if none did.
+    @discardableResult
+    func reset(_ action: ShortcutAction) -> ShortcutAction? {
         overrides[action] = nil
+        var affected: ShortcutAction?
         if let defaultShortcut = action.defaultShortcut,
            let other = holder(of: defaultShortcut, excluding: action) {
             overrides[other] = other.defaultShortcut == nil ? nil : StoredShortcut.none
+            affected = other
         }
         persist()
+        return affected
     }
 
     func resetAll() {
@@ -302,20 +314,23 @@ final class ShortcutStore {
     }
 
     /// Fixed shortcuts:
-    /// - app/system: ⌘, ⌘Q ⌘W ⌘H ⌥⌘H ⌘M ⌃⌘F ⌃⌘S (Toggle Sidebar) ⌘` ⌃⌘Q
+    /// - app/system: ⌘, ⌘Q ⌘W ⌥⌘W ⌘H ⌥⌘H ⌘M ⌥⌘M ⌃⌘F ⌃⌘S (Toggle Sidebar) ⌘` ⌃⌘Q ⌃⌘Space (Emoji & Symbols)
     /// - text editing: ⌘Z ⇧⌘Z ⌘X ⌘C ⌘V ⌘A
     /// - Help: ⇧⌘/
     static let reservedShortcuts: [StoredShortcut] = [
         StoredShortcut(key: ",", modifiers: .command),
         StoredShortcut(key: "q", modifiers: .command),
         StoredShortcut(key: "w", modifiers: .command),
+        StoredShortcut(key: "w", modifiers: [.option, .command]),
         StoredShortcut(key: "h", modifiers: .command),
         StoredShortcut(key: "h", modifiers: [.option, .command]),
         StoredShortcut(key: "m", modifiers: .command),
+        StoredShortcut(key: "m", modifiers: [.option, .command]),
         StoredShortcut(key: "f", modifiers: [.control, .command]),
         StoredShortcut(key: "s", modifiers: [.control, .command]),
         StoredShortcut(key: "`", modifiers: .command),
         StoredShortcut(key: "q", modifiers: [.control, .command]),
+        StoredShortcut(key: "space", modifiers: [.control, .command]),
         StoredShortcut(key: "z", modifiers: .command),
         StoredShortcut(key: "z", modifiers: [.shift, .command]),
         StoredShortcut(key: "x", modifiers: .command),
@@ -341,6 +356,8 @@ final class ShortcutStore {
     }
 
     /// Unknown actions and undecodable data are ignored; overrides equal to the default are dropped.
+    /// Duplicates (e.g. data edited by hand or written by another version) are resolved in `allCases` order:
+    /// an action whose effective shortcut equals an earlier action's is cleared, so no two actions share one.
     private static func load(from defaults: UserDefaults) -> [ShortcutAction: StoredShortcut] {
         guard let data = defaults.data(forKey: overridesKey),
               let decoded = try? JSONDecoder().decode([String: StoredShortcut].self, from: data)
@@ -353,6 +370,16 @@ final class ShortcutStore {
                 if action.defaultShortcut != nil { result[action] = StoredShortcut.none }
             } else if shortcut != action.defaultShortcut {
                 result[action] = shortcut
+            }
+        }
+        var taken: Set<StoredShortcut> = []
+        for action in ShortcutAction.allCases {
+            let effective = result[action] ?? action.defaultShortcut
+            guard let effective, !effective.isNone else { continue }
+            if taken.contains(effective) {
+                result[action] = action.defaultShortcut == nil ? nil : StoredShortcut.none
+            } else {
+                taken.insert(effective)
             }
         }
         return result

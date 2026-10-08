@@ -8,7 +8,7 @@ struct SettingsGeneralTab: View {
     @Environment(AppSettings.self) private var settings
     @Query(sort: \WorkLabel.sortIndex) private var labels: [WorkLabel]
 
-    /// Maps `settings.defaultLabelID` ⇄ the label object for `LabelPicker`.
+    /// Maps `settings.defaultLabelID` ⇄ the label object for `LabelValuePicker`.
     private var defaultLabel: Binding<WorkLabel?> {
         Binding(
             get: {
@@ -24,7 +24,7 @@ struct SettingsGeneralTab: View {
 
         Form {
             Section("New sessions") {
-                LabelPicker(selection: defaultLabel, includeNone: true, title: "Default label")
+                LabelValuePicker("Default label", selection: defaultLabel)
                 SettingsFootnote("“None” uses your first label.")
                 Toggle("Review when a session ends", isOn: $settings.showEndSessionSheet)
                 Toggle("Ask before discarding", isOn: $settings.confirmBeforeDiscard)

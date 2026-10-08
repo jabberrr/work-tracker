@@ -98,10 +98,12 @@ private struct SettingsAccentPicker: View {
                 .accessibilityLabel("\(choice.displayName) accent")
                 .accessibilityAddTraits(isSelected ? .isSelected : [])
             }
+            // The chosen value reads like the other Settings values: bold, in the (now current) accent color.
             Text(selection.displayName)
-                .font(theme.captionFont)
-                .foregroundStyle(theme.textSecondary)
+                .bold()
+                .foregroundStyle(theme.accent)
                 .frame(minWidth: 90, alignment: .leading)
+                .accessibilityHidden(true)
         }
     }
 }

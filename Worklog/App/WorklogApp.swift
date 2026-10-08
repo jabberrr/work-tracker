@@ -12,8 +12,9 @@ struct WorklogApp: App {
                 .frame(minWidth: 900, minHeight: 600)
         }
         .defaultSize(width: 1100, height: 720)
-        // Explicit: the window's minimum is the root's 900 × 600 (with `.automatic`, a child's oversized minimum
-        // could grow the window). Settings is a page of this window (no Settings scene; see WorklogCommands).
+        // The window's minimum follows the content's minimum size. That stays 900 × 600 only because RootView's
+        // detail (and HistoryView's columns) are wrapped in 0-minimum frames, so a page's minimum can't reach the
+        // window. Settings is a page of this window (no Settings scene; see WorklogCommands).
         .windowResizability(.contentMinSize)
         .commands { WorklogCommands(services: services) }
 

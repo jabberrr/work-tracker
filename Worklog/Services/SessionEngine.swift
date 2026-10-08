@@ -125,7 +125,7 @@ final class SessionEngine {
                 changed = true
                 let time = (extra.endedAt ?? end).shortTime
                 if extraOwner == deviceID && newestOwner != deviceID {
-                    handoffNotice = "Stopped this Mac\u{2019}s session at \(time): a newer one started on another Mac."
+                    handoffNotice = "Stopped here at \(time); newer session on another Mac."
                 } else if !extraOwner.isEmpty && extraOwner != deviceID {
                     handoffNotice = "Stopped another Mac\u{2019}s session at \(time)."
                 } else {

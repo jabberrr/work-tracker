@@ -8,6 +8,7 @@ import SwiftUI
 struct WelcomeView: View {
     @Environment(AuthService.self) private var auth
     @Environment(PersistenceController.self) private var persistence
+    @Environment(WindowRouter.self) private var router
     @Environment(\.theme) private var theme
     @Environment(\.colorScheme) private var colorScheme
 
@@ -31,7 +32,7 @@ struct WelcomeView: View {
                     .font(theme.largeTitleFont)
                     .foregroundStyle(theme.textPrimary)
                     .accessibilityAddTraits(.isHeader)
-                Text("Track focused work, split it as your attention moves, and keep what you learned.")
+                Text("Track focused work and keep what you learned.")
                     .font(theme.bodyFont)
                     .foregroundStyle(theme.textSecondary)
                     .multilineTextAlignment(.center)
@@ -69,6 +70,8 @@ struct WelcomeView: View {
             }
             .frame(maxWidth: 420)
 
+            settingsActions
+
             if let error = auth.lastError {
                 InlineBanner(error, style: .error, onDismiss: { auth.lastError = nil })
                     .frame(maxWidth: 460)
@@ -93,7 +96,22 @@ struct WelcomeView: View {
         case .inMemory(let reason):
             return reason == "Preview"
                 ? "Preview, so nothing is saved."
-                : "Your data couldn’t be opened. Recover it in Settings."
+                : "Your data couldn’t be opened. Changes won’t be saved."
+        }
+    }
+
+    // MARK: Settings
+
+    /// Settings is reachable before signing in: RootView shows it full-window (with a Back button) while
+    /// `router.selection == .settings` on the welcome path. "Recover…" appears only when the store failed to open.
+    private var settingsActions: some View {
+        HStack(spacing: theme.spacingM) {
+            if persistence.isRecoveryMode {
+                Button("Recover…") { router.showSettings(tab: SettingsTab.data.rawValue) }
+                    .buttonStyle(QuietButtonStyle())
+            }
+            Button("Settings…") { router.showSettings() }
+                .buttonStyle(QuietButtonStyle())
         }
     }
 
@@ -102,7 +120,7 @@ struct WelcomeView: View {
     /// Compact first pick of the theme; changes apply immediately and can be revisited in Settings ▸ Appearance.
     private var themePicker: some View {
         VStack(spacing: theme.spacingS) {
-            Text("Pick a look")
+            Text("Theme")
                 .font(theme.sectionHeaderFont)
                 .foregroundStyle(theme.textSecondary)
                 .accessibilityAddTraits(.isHeader)

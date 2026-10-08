@@ -88,6 +88,63 @@ struct LabelPicker: View {
     }
 }
 
+/// Settings-style label picker: "Default label **Work** ⌄" (a `ValuePicker`: value bold in the accent color,
+/// popover list). Same options as `LabelPicker`: "None", then non-archived labels in sortIndex order, plus the
+/// current selection when it is archived. A selection that was deleted reads as "None" and nil is written back.
+@MainActor
+struct LabelValuePicker: View {
+    @Query(sort: \WorkLabel.sortIndex) private var allLabels: [WorkLabel]
+    @Binding private var selection: WorkLabel?
+    private let prefix: String
+
+    init(_ prefix: String, selection: Binding<WorkLabel?>) {
+        self.prefix = prefix
+        self._selection = selection
+    }
+
+    private var liveLabels: [WorkLabel] { ModelLiveness.live(allLabels) }
+
+    /// Active labels, plus the current selection when it is archived.
+    private var options: [WorkLabel] {
+        var list = liveLabels.filter { !$0.isArchived }
+        if let current = ModelLiveness.live(selection),
+           !list.contains(where: { $0.persistentModelID == current.persistentModelID }) {
+            list.append(current)
+        }
+        return list
+    }
+
+    /// The picker works on label UUIDs so the popover never holds a model object.
+    private var idSelection: Binding<UUID?> {
+        Binding(
+            get: { ModelLiveness.live(selection)?.uuid },
+            set: { id in
+                selection = id.flatMap { id in liveLabels.first { $0.uuid == id } }
+            }
+        )
+    }
+
+    var body: some View {
+        let items = options
+        let names = Dictionary(items.map { ($0.uuid, $0.isArchived ? "\($0.name) (archived)" : $0.name) },
+                               uniquingKeysWith: { first, _ in first })
+        let ids: [UUID?] = [nil] + items.map { $0.uuid }
+        ValuePicker(prefix, selection: idSelection, options: ids,
+                    title: { id in id.flatMap { names[$0] } ?? "None" })
+            .onAppear(perform: dropDeletedSelection)
+            .onChange(of: liveLabels.map(\.persistentModelID)) { _, _ in
+                dropDeletedSelection()
+            }
+    }
+
+    /// Writes nil back when the bound label no longer exists.
+    private func dropDeletedSelection() {
+        if let current = selection, !ModelLiveness.isLive(current) {
+            selection = nil
+        }
+    }
+}
+
 /// (Extra) Non-template NSImages of a label's SF Symbol drawn in the label color, for native menus
 /// (NSMenu renders SwiftUI `Image(systemName:)` as monochrome templates). Use in any `Menu`/`Picker`:
 /// `Image(nsImage: LabelMenuIcon.image(symbol: label.symbolName, hex: label.colorHex))`.
