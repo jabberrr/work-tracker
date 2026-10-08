@@ -368,7 +368,8 @@ private struct LiveActivePane: View {
                 header
                 instrument
                 controls
-                if let takeaway = engine.lastTakeaway {
+                // The takeaway belongs to the session's profile: hide it while that isn't the current one.
+                if otherProfile == nil, let takeaway = engine.lastTakeaway {
                     takeawayStrip(takeaway)
                 }
                 segmentsSection
@@ -393,12 +394,24 @@ private struct LiveActivePane: View {
 
     // MARK: Banners
 
+    /// The running session's profile when it isn't the current one (nil otherwise, or when it has no profile).
+    /// The page then says so and offers to switch; the live controls stay usable.
+    private var otherProfile: WorkProfile? {
+        guard let sessionProfile = engine.activeSessionProfile,
+              sessionProfile.uuid != profiles.activeProfileID else { return nil }
+        return sessionProfile
+    }
+
     @ViewBuilder
     private var banners: some View {
         let reason = engine.autoPauseReason
         let showLong = shouldWarnLongSession(at: coarseNow)
-        if (reason != nil && isPaused) || showLong {
+        let other = otherProfile
+        if (reason != nil && isPaused) || showLong || other != nil {
             VStack(alignment: .leading, spacing: theme.spacingS) {
+                if let other {
+                    otherProfileBanner(other)
+                }
                 if let reason, isPaused {
                     InlineBanner(reason == .sleep ? "Paused while your Mac slept." : "Paused when Worklog quit.",
                                  systemImage: "pause.circle",
@@ -416,6 +429,17 @@ private struct LiveActivePane: View {
                 }
             }
         }
+    }
+
+    private func otherProfileBanner(_ profile: WorkProfile) -> some View {
+        let name = profile.displayName
+        let canSwitch = !profile.isArchived
+        let switchAction: (() -> Void)? = canSwitch ? { profiles.select(profile) } : nil
+        return InlineBanner("Running in “\(name)”.",
+                            systemImage: profile.symbolName.isEmpty ? "person.crop.circle" : profile.symbolName,
+                            style: .info,
+                            actionTitle: canSwitch ? "Switch to “\(name)”" : nil,
+                            action: switchAction)
     }
 
     /// Based on active time (pauses, including an overnight auto-pause on sleep, don't count) and never while
