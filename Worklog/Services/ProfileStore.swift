@@ -6,8 +6,8 @@ import SwiftData
 /// Value-type scope for pages and pickers. profileID == nil means ALL profiles (Stats "All profiles", or a store
 /// that has no profile at all — graceful degrade).
 ///
-/// Every check guards with `ModelLiveness` and reads `ModelLiveness.live(x.profile)?.uuid`, so deleted models (and
-/// models whose profile was deleted) are safe to pass.
+/// Every check guards with `ModelLiveness` and reads live profiles only, so deleted models (and models whose profile
+/// was deleted) are safe to pass. Sessions are matched by their *effective* profile (unassigned sessions included).
 struct ProfileScope: Hashable, Sendable {
     let profileID: UUID?
 
@@ -19,12 +19,13 @@ struct ProfileScope: Hashable, Sendable {
 
     var isAllProfiles: Bool { profileID == nil }
 
-    /// Live session whose (live) profile uuid == profileID. allProfiles: any live session. nil-profile sessions are
-    /// in no specific profile (they get repaired).
+    /// Live session whose effective profile (`ProfileOps.effectiveProfile(of:)`) has uuid == profileID: its own live
+    /// profile, or — for an unassigned session (profile nil or deleted) — the profile it is shown in (the single owner
+    /// of its local labels/tags, else the home profile). Nothing is written. allProfiles: any live session.
     @MainActor func contains(_ session: WorkSession) -> Bool {
         guard ModelLiveness.isLive(session) else { return false }
         guard let profileID else { return true }
-        return ModelLiveness.live(session.profile)?.uuid == profileID
+        return ProfileOps.effectiveProfileID(of: session) == profileID
     }
 
     /// point.session (live) is contained. allProfiles: any live point.
@@ -106,6 +107,7 @@ final class ProfileStore {
 
     /// Re-fetch + re-resolve; assigns only when changed (compare persistentModelIDs/uuid) to avoid churn.
     func reload() {
+        ProfileOps.invalidateHomeProfileCache()
         let all = ProfileOps.allProfiles(in: context)
         let active = all.filter { !$0.isArchived }
         let archived = all.filter { $0.isArchived }

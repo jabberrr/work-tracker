@@ -39,7 +39,9 @@ final class WorkSession {
     @Relationship(deleteRule: .cascade, inverse: \LearningPoint.session)
     var learningPoints: [LearningPoint]? = []
     /// The profile this session belongs to. nil = unassigned (legacy, from an older app version on another Mac, or
-    /// its profile was deleted remotely); `ProfileOps.repairSessionProfiles` moves those into the home profile.
+    /// its profile was deleted remotely). Unassigned sessions are shown in `ProfileOps.effectiveProfile(of:)`; the
+    /// relationship is written on the next user edit (`ProfileOps.assignProfileIfUnassigned`) or, in a local-only
+    /// store, by the background repair (`SeedData.repairSessionProfilesIfAllowed`).
     @Relationship(deleteRule: .nullify, inverse: \WorkProfile.sessions)
     var profile: WorkProfile?
 

@@ -95,12 +95,12 @@ final class WindowRouter {
         showMainWindow()
     }
 
-    /// Selects the session's profile first when it is live, non-archived and not current (History is scoped to the
-    /// current profile); then .history + selectedSessionID = session.persistentModelID (and brings the main window
+    /// Selects the session's (effective) profile first when it is live, non-archived and not current (History is
+    /// scoped to the current profile); then .history + selectedSessionID = session.persistentModelID (and brings the main window
     /// forward).
     func showSession(_ session: WorkSession) {
         guard ModelLiveness.isLive(session) else { return }
-        if let profile = ModelLiveness.live(session.profile), !profile.isArchived,
+        if let profile = ProfileOps.effectiveProfile(of: session), !profile.isArchived,
            let profiles, profiles.activeProfileID != profile.uuid {
             profiles.select(profile)
         }

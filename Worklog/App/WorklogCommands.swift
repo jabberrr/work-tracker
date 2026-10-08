@@ -73,9 +73,7 @@ struct WorklogCommands: Commands {
                 services.router.show(.stats)
             }
             Divider()
-            ShortcutCommandButton(title: "Next Profile", action: .nextProfile, store: services.shortcuts) {
-                services.profiles.selectNext()
-            }
+            NextProfileCommandButton(profiles: services.profiles, store: services.shortcuts)
         }
     }
 }
@@ -91,5 +89,18 @@ private struct ShortcutCommandButton: View {
     var body: some View {
         Button(title, action: perform)
             .keyboardShortcut(store.shortcut(for: action))
+    }
+}
+
+/// "Next Profile": disabled while there is only one (non-archived) profile. A View so it re-renders when the
+/// observed ProfileStore changes.
+private struct NextProfileCommandButton: View {
+    let profiles: ProfileStore
+    let store: ShortcutStore
+
+    var body: some View {
+        Button("Next Profile") { profiles.selectNext() }
+            .keyboardShortcut(store.shortcut(for: .nextProfile))
+            .disabled(!profiles.hasMultipleProfiles)
     }
 }

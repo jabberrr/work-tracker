@@ -225,11 +225,13 @@ final class ProfileTests: XCTestCase {
 
         XCTAssertTrue(scopeP.contains(inP))
         XCTAssertFalse(scopeP.contains(inQ))
-        XCTAssertFalse(scopeP.contains(orphan), "unassigned sessions are in no specific profile")
+        XCTAssertTrue(scopeP.contains(orphan), "unassigned sessions are shown in the home profile (P: first)")
+        XCTAssertFalse(ProfileScope(profileID: q.uuid).contains(orphan))
+        XCTAssertNil(orphan.profile, "display-only: nothing written")
         XCTAssertTrue(ProfileScope.allProfiles.contains(orphan))
         XCTAssertTrue(scopeP.contains(point))
         XCTAssertFalse(ProfileScope(profileID: q.uuid).contains(point))
-        XCTAssertEqual(scopeP.filter([inQ, inP, orphan]).map(\.uuid), [inP.uuid])
+        XCTAssertEqual(scopeP.filter([inQ, inP, orphan]).map(\.uuid), [inP.uuid, orphan.uuid])
         XCTAssertEqual(ProfileScope.allProfiles.filter([inQ, inP, orphan]).count, 3)
 
         // Deleted models are ignored.
@@ -239,10 +241,10 @@ final class ProfileTests: XCTestCase {
         XCTAssertFalse(ProfileScope.allProfiles.offers(pLocal))
         XCTAssertFalse(ProfileScope.allProfiles.contains(orphan))
 
-        // A label whose profile was deleted is global.
+        // A label whose profile was deleted is global; a session whose profile was deleted shows in home.
         context.delete(q)
         XCTAssertTrue(scopeP.offers(qLocal))
-        XCTAssertFalse(scopeP.contains(inQ))
+        XCTAssertTrue(scopeP.contains(inQ))
     }
 
     // MARK: - 5. createTag stays within scope
@@ -754,5 +756,357 @@ final class ProfileTests: XCTestCase {
         XCTAssertEqual(p.defaultLabelUUID, b.uuid, "merge: the default follows")
         TaxonomyOps.deleteLabel(b, reassignTo: nil, settings: settings, in: context)
         XCTAssertNil(p.defaultLabelUUID, "delete: the default is cleared")
+    }
+}
+
+// MARK: - Round 3 fixes: unassigned sessions, dedupe, import, scope merges
+
+extension ProfileTests {
+    @MainActor
+    private func label(_ name: String, _ profile: WorkProfile?, in context: ModelContext) -> WorkLabel {
+        TaxonomyOps.createLabel(name: name, colorHex: "#111111", symbolName: "circle.fill", profile: profile,
+                                in: context)
+    }
+
+    @MainActor
+    func testUnassignedSessionsAreDisplayOnlyInCloudKitMode() throws {
+        SeedData.isSessionProfileRepairDisplayOnly = true
+        defer { SeedData.isSessionProfileRepairDisplayOnly = false }
+        let context = try TestSupport.makeContext()
+        let settings = TestSupport.makeSettings()
+        let work = makeProfile("Work", in: context)
+        let personal = makeProfile("Personal", in: context)
+        let gym = label("Gym", personal, in: context)
+        let global = label("Global", nil, in: context)
+
+        let legacy = TestSupport.makeEndedSession(in: context, start: TestSupport.time(9), segmentMinutes: [30],
+                                                  label: global)
+        legacy.title = "Legacy review"
+        let personalLabelled = TestSupport.makeEndedSession(in: context, start: TestSupport.time(10),
+                                                            segmentMinutes: [15], label: gym)
+        try context.save()
+        let modified = legacy.modifiedAt
+
+        // Background paths write nothing.
+        SeedData.ensureProfiles(in: context, settings: settings)
+        SeedData.deduplicate(in: context)
+        XCTAssertEqual(SeedData.repairSessionProfilesIfAllowed(in: context), 0)
+        XCTAssertNil(legacy.profile)
+        XCTAssertNil(personalLabelled.profile)
+        XCTAssertEqual(legacy.modifiedAt, modified)
+
+        // …but every surface shows them in their effective profile.
+        XCTAssertTrue(ProfileOps.isUnassigned(legacy))
+        XCTAssertTrue(ProfileOps.effectiveProfile(of: legacy) === work, "home profile")
+        XCTAssertTrue(ProfileOps.effectiveProfile(of: personalLabelled) === personal, "owner of its local label")
+        let workScope = ProfileScope(profileID: work.uuid)
+        let personalScope = ProfileScope(profileID: personal.uuid)
+        XCTAssertTrue(workScope.contains(legacy))
+        XCTAssertFalse(personalScope.contains(legacy))
+        XCTAssertTrue(personalScope.contains(personalLabelled))
+        XCTAssertEqual(SearchService.filter([legacy, personalLabelled], query: "legacy", scope: workScope).map(\.uuid),
+                       [legacy.uuid])
+        let engine = SessionEngine(context: context, settings: settings)
+        let now = TestSupport.time(12)
+        XCTAssertEqual(engine.totalActiveToday(now: now, scope: workScope), 1800, accuracy: 0.001)
+        XCTAssertEqual(engine.totalActiveToday(now: now, scope: personalScope), 900, accuracy: 0.001)
+
+        // A user edit writes the effective profile.
+        SessionEditor.addNote("Edited", at: TestSupport.time(9, 10), to: legacy, in: context)
+        XCTAssertTrue(legacy.profile === work)
+        XCTAssertFalse(ProfileOps.isUnassigned(legacy))
+        SessionEditor.setPrimaryLabel(gym, for: personalLabelled, in: context)
+        XCTAssertTrue(personalLabelled.profile === personal)
+    }
+
+    @MainActor
+    func testEngineAssignsUnassignedSessionOnStop() throws {
+        SeedData.isSessionProfileRepairDisplayOnly = true
+        defer { SeedData.isSessionProfileRepairDisplayOnly = false }
+        let context = try TestSupport.makeContext()
+        let settings = TestSupport.makeSettings()
+        settings.showEndSessionSheet = false
+        let work = makeProfile("Work", in: context)
+        _ = makeProfile("Personal", in: context)
+        let store = ProfileStore(context: context, settings: settings)
+        let engine = SessionEngine(context: context, settings: settings, profiles: store)
+
+        let session = engine.start(label: nil, at: TestSupport.time(9))
+        session.profile = nil   // as if started by an older app version
+        try context.save()
+        XCTAssertTrue(engine.activeSessionProfile === work, "shown in the home profile")
+        engine.stop(at: TestSupport.time(9, 30))
+        XCTAssertTrue(session.profile === work, "stopping it is an edit: the profile is written")
+    }
+
+    @MainActor
+    func testGatedRepairInLocalModeAssignsAndConformsTaxonomy() throws {
+        XCTAssertFalse(SeedData.isSessionProfileRepairDisplayOnly, "local-only by default")
+        let context = try TestSupport.makeContext()
+        let work = makeProfile("Work", in: context)
+        let personal = makeProfile("Personal", in: context)
+        let other = makeProfile("Other", in: context)
+        let gym = label("Gym", personal, in: context)
+        let errands = label("Errands", other, in: context)
+        let otherTag = TaxonomyOps.createTag(name: "o", profile: other, in: context)
+
+        let owned = TestSupport.makeEndedSession(in: context, start: TestSupport.time(9), segmentMinutes: [10],
+                                                 label: gym)
+        owned.sortedSegments[0].label = gym
+        let mixed = TestSupport.makeEndedSession(in: context, start: TestSupport.time(10), segmentMinutes: [10],
+                                                 label: gym)
+        mixed.tagList = [otherTag]
+        mixed.sortedSegments[0].label = errands
+        try context.save()
+        let modified = mixed.modifiedAt
+
+        XCTAssertEqual(SeedData.repairSessionProfilesIfAllowed(in: context), 2)
+        XCTAssertTrue(owned.profile === personal, "the single owner of its local labels wins over home")
+        XCTAssertTrue(owned.label === gym)
+        XCTAssertTrue(mixed.profile === work, "several owners → home")
+        let mappedLabel = try XCTUnwrap(mixed.label)
+        XCTAssertFalse(mappedLabel === gym, "labels home doesn't offer are mapped")
+        XCTAssertTrue(mappedLabel.profile === work)
+        XCTAssertEqual(mappedLabel.name, "Gym")
+        XCTAssertTrue(mixed.sortedSegments[0].label?.profile === work)
+        XCTAssertTrue(mixed.tagList.first?.profile === work)
+        XCTAssertEqual(mixed.modifiedAt, modified, "repair never touches modifiedAt")
+    }
+
+    @MainActor
+    func testConformTaxonomyOnImport() throws {
+        let profileID = UUID()
+        let labelID = UUID()
+        // Source: label global, session in P using it.
+        let sourceContext = try TestSupport.makeContext()
+        let sourceP = WorkProfile(name: "P", uuid: profileID)
+        sourceContext.insert(sourceP)
+        let sourceLabel = WorkLabel(name: "Shared", uuid: labelID)
+        sourceContext.insert(sourceLabel)
+        let session = TestSupport.makeEndedSession(in: sourceContext, start: TestSupport.time(9), segmentMinutes: [10],
+                                                   label: sourceLabel)
+        session.sortedSegments[0].label = sourceLabel
+        session.profile = sourceP
+        try sourceContext.save()
+        let archive = try ExportService(container: sourceContext.container).makeArchive(includeAttachments: false)
+
+        // Destination: the same label exists but is local to Q; merge keeps its scope.
+        let context = try TestSupport.makeContext()
+        let p = WorkProfile(name: "P", uuid: profileID)
+        context.insert(p)
+        let q = WorkProfile(name: "Q", sortIndex: 1)
+        context.insert(q)
+        let local = WorkLabel(name: "Shared", uuid: labelID)
+        context.insert(local)
+        local.profile = q
+        try context.save()
+
+        _ = try ExportService(container: context.container).importArchive(archive, mode: .merge)
+        let imported = try XCTUnwrap(try context.fetch(FetchDescriptor<WorkSession>()).first)
+        XCTAssertTrue(imported.profile === p)
+        let mapped = try XCTUnwrap(imported.label)
+        XCTAssertFalse(mapped === local, "a label P doesn't offer is not kept")
+        XCTAssertTrue(mapped.profile === p)
+        XCTAssertEqual(mapped.name, "Shared")
+        XCTAssertTrue(imported.sortedSegments[0].label === mapped, "one copy per item")
+        XCTAssertTrue(local.profile === q, "the local label keeps its scope")
+    }
+
+    @MainActor
+    func testImportUnarchivesWhenEveryProfileIsArchived() throws {
+        let sourceContext = try TestSupport.makeContext()
+        let archivedProfile = WorkProfile(name: "Old")
+        sourceContext.insert(archivedProfile)
+        archivedProfile.isArchived = true
+        try sourceContext.save()
+        let archive = try ExportService(container: sourceContext.container).makeArchive(includeAttachments: false)
+
+        let context = try TestSupport.makeContext()
+        _ = try ExportService(container: context.container).importArchive(archive, mode: .replace)
+        let profiles = ProfileOps.allProfiles(in: context)
+        XCTAssertEqual(profiles.count, 1)
+        XCTAssertFalse(profiles.first?.isArchived ?? true, "one profile must stay active")
+    }
+
+    @MainActor
+    func testProfileDedupeKeepsNewestAttributes() throws {
+        let context = try TestSupport.makeContext()
+        let id = ProfileOps.defaultProfileUUID
+        let renamed = WorkProfile(name: "Office", colorHex: "#FF0000", symbolName: "building.2.fill", uuid: id)
+        context.insert(renamed)
+        renamed.createdAt = TestSupport.time(8)
+        renamed.modifiedAt = TestSupport.time(9)
+        // A copy created later (e.g. another Mac upgrading) but edited more recently.
+        let edited = WorkProfile(name: "Job", colorHex: "#00FF00", symbolName: "hammer.fill", sortIndex: 3, uuid: id)
+        context.insert(edited)
+        edited.createdAt = TestSupport.time(10)
+        edited.modifiedAt = TestSupport.time(12)
+        let labelID = UUID()
+        edited.defaultLabelUUID = labelID
+        // A fresh default copy never wins the attributes (epoch modifiedAt).
+        let fresh = WorkProfile(name: "Work", uuid: id)
+        context.insert(fresh)
+        fresh.createdAt = TestSupport.time(11)
+        fresh.modifiedAt = Date(timeIntervalSince1970: 0)
+        try context.save()
+
+        SeedData.deduplicate(in: context)
+        let profiles = ProfileOps.allProfiles(in: context)
+        XCTAssertEqual(profiles.count, 1)
+        let survivor = try XCTUnwrap(profiles.first)
+        XCTAssertTrue(survivor === renamed, "identity: the oldest copy")
+        XCTAssertEqual(survivor.name, "Job", "attributes: the newest copy")
+        XCTAssertEqual(survivor.colorHex, "#00FF00")
+        XCTAssertEqual(survivor.symbolName, "hammer.fill")
+        XCTAssertEqual(survivor.sortIndex, 3)
+        XCTAssertEqual(survivor.defaultLabelUUID, labelID)
+        XCTAssertEqual(survivor.modifiedAt, TestSupport.time(12))
+    }
+
+    @MainActor
+    func testEnsureDefaultProfileHasEpochModifiedAtAndLegacyLabelIsCopiedOnce() throws {
+        let context = try TestSupport.makeContext()
+        let settings = TestSupport.makeSettings()
+        // The default profile arrived from iCloud without a default label.
+        let synced = WorkProfile(name: "Work", uuid: ProfileOps.defaultProfileUUID)
+        context.insert(synced)
+        try context.save()
+        let legacy = UUID()
+        settings.defaultLabelID = legacy
+
+        SeedData.ensureProfiles(in: context, settings: settings)
+        XCTAssertEqual(synced.defaultLabelUUID, legacy, "legacy default label copied into the default profile")
+        XCTAssertTrue(settings.defaults.bool(forKey: SeedData.legacyDefaultLabelCopiedKey))
+        synced.defaultLabelUUID = nil
+        SeedData.ensureProfiles(in: context, settings: settings)
+        XCTAssertNil(synced.defaultLabelUUID, "only once")
+
+        let empty = try TestSupport.makeContext()
+        let created = try XCTUnwrap(ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: nil, in: empty))
+        XCTAssertEqual(created.modifiedAt, Date(timeIntervalSince1970: 0))
+    }
+
+    @MainActor
+    func testLabelAndTagDedupeWithScopeConflictBecomesGlobal() throws {
+        let context = try TestSupport.makeContext()
+        let p = makeProfile("P", in: context)
+        let q = makeProfile("Q", in: context)
+
+        let labelID = UUID()
+        let olderLabel = WorkLabel(name: "L", uuid: labelID)
+        let newerLabel = WorkLabel(name: "L", uuid: labelID)
+        context.insert(olderLabel)
+        context.insert(newerLabel)
+        olderLabel.createdAt = TestSupport.time(8)
+        newerLabel.createdAt = TestSupport.time(9)
+        olderLabel.profile = p
+        newerLabel.profile = q
+
+        let sameID = UUID()
+        let sameOlder = WorkLabel(name: "S", uuid: sameID)
+        let sameNewer = WorkLabel(name: "S", uuid: sameID)
+        context.insert(sameOlder)
+        context.insert(sameNewer)
+        sameOlder.createdAt = TestSupport.time(8)
+        sameNewer.createdAt = TestSupport.time(9)
+        sameOlder.profile = p
+        sameNewer.profile = p
+
+        let tagID = UUID()
+        let olderTag = WorkTag(name: "t", uuid: tagID)
+        let newerTag = WorkTag(name: "t", uuid: tagID)
+        context.insert(olderTag)
+        context.insert(newerTag)
+        olderTag.createdAt = TestSupport.time(8)
+        newerTag.createdAt = TestSupport.time(9)
+        olderTag.profile = p   // the newer copy is global
+
+        let inQ = TestSupport.makeEndedSession(in: context, start: TestSupport.time(10), segmentMinutes: [10],
+                                               label: newerLabel)
+        inQ.profile = q
+        inQ.tagList = [newerTag]
+        try context.save()
+
+        SeedData.deduplicate(in: context)
+        XCTAssertTrue(inQ.label === olderLabel)
+        XCTAssertNil(olderLabel.profile, "copies in different profiles → the survivor is global")
+        XCTAssertTrue(ProfileScope(profileID: q.uuid).offers(olderLabel), "Q's session still sees its label")
+        XCTAssertTrue(sameOlder.profile === p, "same scope is kept")
+        XCTAssertTrue(inQ.tagList.first === olderTag)
+        XCTAssertNil(olderTag.profile, "local vs global copy → global")
+    }
+
+    @MainActor
+    func testSetArchivedRefusesProfileWithRunningSession() throws {
+        let context = try TestSupport.makeContext()
+        let settings = TestSupport.makeSettings()
+        _ = makeProfile("Work", in: context)
+        let side = makeProfile("Side", in: context)
+        let running = WorkSession(startedAt: TestSupport.time(9))
+        context.insert(running)
+        running.profile = side
+        try context.save()
+
+        XCTAssertEqual(ProfileOps.setArchived(side, true, settings: settings, in: context), .sessionRunning)
+        XCTAssertFalse(side.isArchived)
+        SessionEditor.endSession(running, at: TestSupport.time(10))
+        try context.save()
+        XCTAssertEqual(ProfileOps.setArchived(side, true, settings: settings, in: context), .ok)
+        XCTAssertTrue(side.isArchived)
+    }
+
+    @MainActor
+    func testMakingGlobalAndDeleteMoveMergeSameNameItems() throws {
+        let context = try TestSupport.makeContext()
+        let settings = TestSupport.makeSettings()
+        let p = makeProfile("P", in: context)
+        let q = makeProfile("Q", in: context)
+
+        // Making P's "Focus" global absorbs Q's own "focus".
+        let pFocus = label("Focus", p, in: context)
+        let qFocus = label("focus", q, in: context)
+        q.defaultLabelUUID = qFocus.uuid
+        let inQ = TestSupport.makeEndedSession(in: context, start: TestSupport.time(9), segmentMinutes: [10],
+                                               label: qFocus)
+        inQ.profile = q
+        try context.save()
+        XCTAssertEqual(TaxonomyOps.localDuplicatesMerged(byMakingGlobal: pFocus, in: context).map(\.name), ["focus"])
+        TaxonomyOps.setScope(of: pFocus, to: nil, in: context)
+        XCTAssertNil(pFocus.profile)
+        XCTAssertTrue(inQ.label === pFocus)
+        XCTAssertEqual(q.defaultLabelUUID, pFocus.uuid)
+        XCTAssertFalse(try context.fetch(FetchDescriptor<WorkLabel>()).contains { $0.name == "focus" })
+
+        // Deleting Q into P: Q's "Gym" merges into P's "gym"; Q's "Swim" moves as a local of P.
+        let pGym = label("gym", p, in: context)
+        let qGym = label("Gym", q, in: context)
+        let qSwim = label("Swim", q, in: context)
+        let pTag = TaxonomyOps.createTag(name: "cardio", profile: p, in: context)
+        let qTag = TaxonomyOps.createTag(name: "Cardio", profile: q, in: context)
+        let gymSession = TestSupport.makeEndedSession(in: context, start: TestSupport.time(10), segmentMinutes: [10],
+                                                      label: qGym)
+        gymSession.profile = q
+        gymSession.tagList = [qTag]
+        try context.save()
+
+        XCTAssertEqual(ProfileOps.delete(q, .moveSessions(toProfileID: p.uuid), settings: settings, in: context), .ok)
+        XCTAssertTrue(gymSession.profile === p)
+        XCTAssertTrue(gymSession.label === pGym, "same-name label merged")
+        XCTAssertTrue(gymSession.tagList.first === pTag, "same-name tag merged")
+        XCTAssertTrue(qSwim.profile === p)
+        let names = try context.fetch(FetchDescriptor<WorkLabel>()).map(\.name)
+        XCTAssertFalse(names.contains("Gym"))
+    }
+
+    @MainActor
+    func testMakingLabelLocalClearsGlobalTagParent() throws {
+        let context = try TestSupport.makeContext()
+        let p = makeProfile("P", in: context)
+        let parent = label("Parent", nil, in: context)
+        let globalTag = TaxonomyOps.createTag(name: "child", label: parent, in: context)
+        let pTag = TaxonomyOps.createTag(name: "pchild", label: parent, profile: p, in: context)
+        TaxonomyOps.setScope(of: parent, to: p, in: context)
+        XCTAssertNil(globalTag.label, "a global tag can't keep a local parent")
+        XCTAssertTrue(pTag.label === parent, "P's own tag keeps it")
     }
 }

@@ -220,7 +220,10 @@ final class ExportService {
     /// New labels/tags get the archived scope (`profileID`, nil = global); in merge mode existing ones keep their
     /// scope, in replace mode the archived scope is set. A session goes to its archived profile, else its local
     /// profile, else the home profile (created when none exists) — so a v1 archive lands in the home profile with
-    /// global labels/tags. Unassigned sessions are repaired before saving.
+    /// global labels/tags. Every inserted/updated session then gets `TaxonomyOps.conformTaxonomy` (labels/tags its
+    /// profile doesn't offer are mapped to a same-name item or copied). If no non-archived profile is left, the first
+    /// is unarchived. Unassigned sessions are repaired before saving where allowed
+    /// (`SeedData.repairSessionProfilesIfAllowed`; not in CloudKit mode).
     ///
     /// Merge never touches the locally running session. A still-open session from the archive is ended at its local
     /// end time if it was already stopped here, or at its last activity when a session is running here (so an import
@@ -496,13 +499,20 @@ final class ExportService {
                 }
             }
             session.recomputeStoredDuration()
+            // Labels/tags its profile doesn't offer (e.g. merged into a store where they have another scope) are
+            // mapped like a move: same-name equivalent, else a local copy.
+            if let profile = ModelLiveness.live(session.profile) {
+                TaxonomyOps.conformTaxonomy(of: session, to: profile, in: context)
+            }
             session.modifiedAt = dto.modifiedAt
         }
 
         if mode == .replace {
             ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: nil, in: context)
         }
-        ProfileOps.repairSessionProfiles(in: context)
+        ProfileOps.ensureNonArchivedProfile(in: context)
+        SeedData.repairSessionProfilesIfAllowed(in: context)
+        ProfileOps.invalidateHomeProfileCache()
         try saveOrRollback()
         NotificationCenter.default.post(name: .worklogDataDidImport, object: nil)
         Log.persistence.info("Import finished: \(summary.description, privacy: .public)")
@@ -520,7 +530,8 @@ final class ExportService {
         guard try fetchActiveSessions().isEmpty else { throw DataTransferError.sessionActive }
         try deleteEverything()
         ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: nil, in: context)
-        ProfileOps.repairSessionProfiles(in: context)
+        SeedData.repairSessionProfilesIfAllowed(in: context)
+        ProfileOps.invalidateHomeProfileCache()
         try saveOrRollback()
         NotificationCenter.default.post(name: .worklogDataDidImport, object: nil)
         Log.persistence.info("Deleted all data")
@@ -654,9 +665,10 @@ final class ExportService {
                isArchived: tag.isArchived, createdAt: tag.createdAt, profileID: ModelLiveness.live(tag.profile)?.uuid)
     }
 
-    /// The session's profile name for CSV ("" if none).
+    /// The session's profile name for CSV: its effective profile (an unassigned session shows where the app shows it);
+    /// "" if none.
     private static func profileName(of session: WorkSession) -> String {
-        ModelLiveness.live(session.profile)?.name ?? ""
+        ProfileOps.effectiveProfile(of: session)?.name ?? ""
     }
 
     private static func dto(_ session: WorkSession, includeAttachments: Bool) -> SessionDTO {

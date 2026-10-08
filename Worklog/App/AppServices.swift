@@ -34,8 +34,9 @@ final class AppServices {
     /// - normal: a pending recovery (pending-restore.json) is processed first (import the chosen backup — merge when
     ///   CloudKit is on, replace otherwise — and skip seeding), else SeedData.seedIfNeeded (deferred in CloudKit mode
     ///   until the first iCloud import, max 60 s, so a new Mac doesn't resurrect deleted defaults).
-    /// Every branch then runs SeedData.ensureProfiles (default profile + repair of unassigned sessions; *provisional*
-    /// when CloudKit is on and the first import hasn't completed) and deduplicate.
+    /// Every branch then runs SeedData.ensureProfiles (default profile + repair of unassigned sessions — local-only
+    /// stores; with CloudKit `SeedData.isSessionProfileRepairDisplayOnly` makes it display-only; *provisional* when
+    /// CloudKit is on and the first import hasn't completed) and deduplicate.
     /// Then profiles.reload(); router.profiles = profiles; engine.restoreActiveSession(); profiles.startObserving();
     /// the provisional-profile follow-up (see `resolveProvisionalProfile`); sync.start(); overlay.install(services: self).
     ///
@@ -46,6 +47,8 @@ final class AppServices {
         settings = AppSettings(defaults: defaults)
         shortcuts = ShortcutStore(defaults: defaults)
         persistence = PersistenceController(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory: inMemory)
+        // CloudKit: unassigned sessions are shown in their effective profile and only written on a user edit.
+        SeedData.isSessionProfileRepairDisplayOnly = persistence.isSyncingWithICloud
         sync = SyncMonitor(enabled: !inMemory && persistence.isSyncingWithICloud,
                            containerIdentifier: persistence.cloudKitContainerIdentifier)
         themeManager = ThemeManager(defaults: defaults)
@@ -152,28 +155,28 @@ final class AppServices {
     }
 
     /// A default profile created before the first iCloud import (now or at an earlier launch) is *provisional*: once the
-    /// import finished (max 120 s) deduplicate merges it into a synced "Work" profile, and
-    /// `discardProvisionalDefaultProfile` removes it when it is still empty and another profile exists (the user
-    /// deleted "Work" on another Mac). Unassigned sessions aren't repaired while waiting, so sessions whose profile
-    /// hasn't arrived yet don't land in the provisional profile.
+    /// import finished, deduplicate merges it into a synced "Work" profile, and `discardProvisionalDefaultProfile`
+    /// removes it when it is still empty and another profile exists (the user deleted "Work" on another Mac).
+    /// Nothing is forced when the import doesn't finish: after 10 minutes the wait just stops and the key stays for the
+    /// next launch. (Unassigned sessions are never repaired in the background in CloudKit mode, so none lands in the
+    /// provisional profile while waiting.)
     private func resolveProvisionalProfile(in context: ModelContext) {
         let defaults = settings.defaults
         guard persistence.isSyncingWithICloud,
               defaults.string(forKey: SeedData.provisionalDefaultProfileKey) != nil else { return }
-        SeedData.defersSessionProfileRepair = true
         let sync = sync
         let profiles = profiles
         Task { @MainActor in
-            let deadline = Date.now.addingTimeInterval(120)
+            let deadline = Date.now.addingTimeInterval(600)
             while !sync.hasCompletedFirstImport && Date.now < deadline {
-                try? await Task.sleep(for: .seconds(1))
+                try? await Task.sleep(for: .seconds(2))
             }
-            if sync.hasCompletedFirstImport {
-                SeedData.deduplicate(in: context)
-                SeedData.discardProvisionalDefaultProfile(in: context, defaults: defaults)
+            guard sync.hasCompletedFirstImport else {
+                Log.persistence.info("First iCloud import not finished; the provisional profile is checked next launch")
+                return
             }
-            SeedData.defersSessionProfileRepair = false
-            SeedData.deduplicate(in: context)   // now repairs unassigned sessions
+            SeedData.deduplicate(in: context)
+            SeedData.discardProvisionalDefaultProfile(in: context, defaults: defaults)
             profiles.reload()
         }
     }

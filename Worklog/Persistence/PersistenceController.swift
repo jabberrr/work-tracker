@@ -1,4 +1,5 @@
 import AppKit
+import CoreData
 import Foundation
 import Observation
 import Security
@@ -100,6 +101,11 @@ final class PersistenceController {
         } else if !Entitlements.hasCloudKit {
             localReason = "iCloud isn't configured for this build"
         } else {
+            #if DEBUG
+            if PersistenceController.wantsCloudKitSchemaInitialization {
+                PersistenceController.initializeCloudKitSchema(containerIdentifier: containerID)
+            }
+            #endif
             do {
                 let config = ModelConfiguration("Worklog", schema: schema, url: storeURL,
                                                 cloudKitDatabase: .private(containerID))
@@ -198,6 +204,54 @@ final class PersistenceController {
             }
         }
     }
+
+    // MARK: - CloudKit schema (DEBUG only)
+
+    #if DEBUG
+    /// Launch argument that pushes the complete schema to the CloudKit **Development** environment before the store
+    /// opens (run once from Xcode after a model change, then deploy the schema to Production in the CloudKit Console —
+    /// see README "Before shipping a model change"). Lightweight sync only creates record types and fields for values
+    /// that were actually saved, so without this a never-used field (e.g. an optional relationship) can be missing in
+    /// Production.
+    static let initializeCloudKitSchemaArgument = "-initializeCloudKitSchema"
+
+    static var wantsCloudKitSchemaInitialization: Bool {
+        ProcessInfo.processInfo.arguments.contains(initializeCloudKitSchemaArgument)
+    }
+
+    /// Loads the SwiftData model into a throwaway NSPersistentCloudKitContainer (empty store in a temporary folder, so
+    /// the real store is never touched) and calls `initializeCloudKitSchema()`. Errors are logged, never fatal.
+    static func initializeCloudKitSchema(containerIdentifier: String) {
+        let folder = FileManager.default.temporaryDirectory
+            .appending(path: "WorklogSchemaInit-\(UUID().uuidString)", directoryHint: .isDirectory)
+        defer { try? FileManager.default.removeItem(at: folder) }
+        do {
+            try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+            try autoreleasepool {
+                guard let model = NSManagedObjectModel.makeManagedObjectModel(for: WorklogSchema.models) else {
+                    Log.persistence.error("CloudKit schema: couldn't build the managed object model")
+                    return
+                }
+                let description = NSPersistentStoreDescription(url: folder.appending(path: "Schema.store"))
+                description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
+                    containerIdentifier: containerIdentifier)
+                description.shouldAddStoreAsynchronously = false
+                let container = NSPersistentCloudKitContainer(name: "WorklogSchema", managedObjectModel: model)
+                container.persistentStoreDescriptions = [description]
+                var loadError: Error?
+                container.loadPersistentStores { _, error in loadError = error }
+                if let loadError { throw loadError }
+                try container.initializeCloudKitSchema(options: [])
+                for store in container.persistentStoreCoordinator.persistentStores {
+                    try container.persistentStoreCoordinator.remove(store)
+                }
+            }
+            Log.persistence.info("CloudKit schema initialized in the Development environment")
+        } catch {
+            Log.persistence.error("CloudKit schema initialization failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+    #endif
 
     // MARK: - Private
 

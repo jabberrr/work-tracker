@@ -11,7 +11,8 @@ enum TaxonomyScopeImpact: Equatable {
 /// Create / delete / merge / reorder labels and tags, and their profile scope (global or local to one profile).
 ///
 /// Invariant kept by every operation here and by `SessionEditor.moveSession`: a session (its segments and learning
-/// points) only references labels/tags offered in its profile (global, or local to that profile).
+/// points) only references labels/tags offered in its profile (global, or local to that profile). An unassigned
+/// session counts as its effective profile's (`ProfileOps.effectiveProfile(of:)`).
 @MainActor enum TaxonomyOps {
     /// profile nil = global (existing callers). sortIndex = max+1 over ALL labels.
     @discardableResult
@@ -167,18 +168,38 @@ enum TaxonomyScopeImpact: Equatable {
         return impact(of: ModelLiveness.live(tag.sessions ?? []) + fromSegments + fromPoints, outside: profile)
     }
 
-    /// profile nil = make global (always fine). Non-nil: item.profile = profile FIRST; then for every other profile Q
-    /// whose sessions/segments use it, re-point those to equivalentLabel(for:in: Q); a Q.defaultLabelUUID pointing to
-    /// the label follows to Q's copy. Unassigned sessions are repaired into the home profile first. Saves.
+    /// profile nil = make global (always fine). A label that was local and is not archived then absorbs the
+    /// non-archived same-name labels local to other profiles (`localDuplicatesMerged(byMakingGlobal:in:)`: their
+    /// sessions, segments, tags and default-label choices move to it), so no profile shows the name twice.
+    /// Non-nil: item.profile = profile FIRST (global and other profiles' tags whose parent it is lose that parent);
+    /// then for every other profile Q whose sessions/segments use it, re-point those to equivalentLabel(for:in: Q);
+    /// a Q.defaultLabelUUID pointing to the label follows to Q's copy. Unassigned sessions count as their effective
+    /// profile's (`ProfileOps.effectiveProfile(of:)`); they are repaired first only where the repair is allowed
+    /// (`SeedData.repairSessionProfilesIfAllowed`). Saves.
     static func setScope(of label: WorkLabel, to profile: WorkProfile?, in context: ModelContext) {
         guard ModelLiveness.isLive(label) else { return }
         guard let profile = ModelLiveness.live(profile) else {
-            if label.profile != nil { label.profile = nil }
+            if ModelLiveness.live(label.profile) != nil {
+                let duplicates = localDuplicatesMerged(byMakingGlobal: label, in: context)
+                label.profile = nil
+                for duplicate in duplicates { absorb(duplicate, into: label, in: context) }
+            } else if label.profile != nil {
+                label.profile = nil
+            }
             save(context)
             return
         }
-        ProfileOps.repairSessionProfiles(in: context)
+        SeedData.repairSessionProfilesIfAllowed(in: context)
+        // Decide before re-scoping: an unassigned session's effective profile can depend on this label's owner.
+        let segmentSessions = (label.segments ?? []).compactMap { segment in
+            ModelLiveness.isLive(segment) ? ModelLiveness.live(segment.session) : nil
+        }
+        let sessionOwners = effectiveOwners(of: ModelLiveness.live(label.sessions ?? []) + segmentSessions)
         label.profile = profile
+        // Global tags (and other profiles' tags) can't keep a parent only this profile offers.
+        for tag in ModelLiveness.live(label.tags ?? []) where ModelLiveness.live(tag.profile) !== profile {
+            tag.label = nil
+        }
 
         var copies: [PersistentIdentifier: WorkLabel] = [:]
         func copy(in other: WorkProfile) -> WorkLabel {
@@ -188,14 +209,19 @@ enum TaxonomyScopeImpact: Equatable {
             return made
         }
 
+        func otherProfile(of session: WorkSession?) -> WorkProfile? {
+            guard let session = ModelLiveness.live(session),
+                  let other = sessionOwners[session.persistentModelID], other !== profile else { return nil }
+            return other
+        }
+
         for session in ModelLiveness.live(label.sessions ?? []) {
-            guard let other = ModelLiveness.live(session.profile), other !== profile else { continue }
+            guard let other = otherProfile(of: session) else { continue }
             session.label = copy(in: other)
             session.touch()
         }
         for segment in ModelLiveness.live(label.segments ?? []) {
-            guard let session = ModelLiveness.live(segment.session),
-                  let other = ModelLiveness.live(session.profile), other !== profile else { continue }
+            guard let session = ModelLiveness.live(segment.session), let other = otherProfile(of: session) else { continue }
             segment.label = copy(in: other)
             session.touch()
         }
@@ -207,17 +233,36 @@ enum TaxonomyScopeImpact: Equatable {
         save(context)
     }
 
-    /// profile nil = make global (always fine). Non-nil: item.profile = profile FIRST; then for every other profile Q
-    /// whose sessions/segments/learning points use it, replace it there (no duplicates) with equivalentTag(for:in: Q).
-    /// Unassigned sessions are repaired into the home profile first. Saves.
+    /// profile nil = make global (always fine). A tag that was local: its parent label is cleared when that label is
+    /// local (a global tag can't depend on one profile's label), and when the tag isn't archived it absorbs the
+    /// non-archived same-name tags local to other profiles (`localDuplicatesMerged(byMakingGlobal:in:)`).
+    /// Non-nil: item.profile = profile FIRST; then for every other profile Q whose sessions/segments/learning points
+    /// use it, replace it there (no duplicates) with equivalentTag(for:in: Q). Unassigned sessions count as their
+    /// effective profile's (see the label overload). Saves.
     static func setScope(of tag: WorkTag, to profile: WorkProfile?, in context: ModelContext) {
         guard ModelLiveness.isLive(tag) else { return }
         guard let profile = ModelLiveness.live(profile) else {
-            if tag.profile != nil { tag.profile = nil }
+            if ModelLiveness.live(tag.profile) != nil {
+                let duplicates = localDuplicatesMerged(byMakingGlobal: tag, in: context)
+                tag.profile = nil
+                if let parent = ModelLiveness.live(tag.label), ModelLiveness.live(parent.profile) != nil {
+                    tag.label = nil
+                }
+                for duplicate in duplicates { absorb(duplicate, into: tag, in: context) }
+            } else if tag.profile != nil {
+                tag.profile = nil
+            }
             save(context)
             return
         }
-        ProfileOps.repairSessionProfiles(in: context)
+        SeedData.repairSessionProfilesIfAllowed(in: context)
+        let fromSegments = (tag.segments ?? []).compactMap { segment in
+            ModelLiveness.isLive(segment) ? ModelLiveness.live(segment.session) : nil
+        }
+        let fromPoints = (tag.learningPoints ?? []).compactMap { point in
+            ModelLiveness.isLive(point) ? ModelLiveness.live(point.session) : nil
+        }
+        let sessionOwners = effectiveOwners(of: ModelLiveness.live(tag.sessions ?? []) + fromSegments + fromPoints)
         tag.profile = profile
 
         var copies: [PersistentIdentifier: WorkTag] = [:]
@@ -229,7 +274,7 @@ enum TaxonomyScopeImpact: Equatable {
         }
         func otherProfile(of session: WorkSession?) -> WorkProfile? {
             guard let session = ModelLiveness.live(session),
-                  let other = ModelLiveness.live(session.profile), other !== profile else { return nil }
+                  let other = sessionOwners[session.persistentModelID], other !== profile else { return nil }
             return other
         }
 
@@ -298,6 +343,139 @@ enum TaxonomyScopeImpact: Equatable {
         return matches.first(where: { !$0.isArchived }) ?? matches.first
     }
 
+    /// Replaces every label/tag referenced by `session`, its segments and its learning points that `profile` doesn't
+    /// offer with equivalentLabel/equivalentTag (a same-name item offered there, else a local copy; one copy per item,
+    /// no duplicate tags). Keeps the invariant whenever a session lands in a profile: `SessionEditor.moveSession`,
+    /// import, and the assignment of an unassigned session. Never touches modifiedAt; does not save.
+    /// Returns true when anything changed.
+    @discardableResult
+    static func conformTaxonomy(of session: WorkSession, to profile: WorkProfile, in context: ModelContext) -> Bool {
+        guard ModelLiveness.isLive(session), ModelLiveness.isLive(profile) else { return false }
+        let scope = ProfileScope(profileID: profile.uuid)
+        var changed = false
+
+        var labelMap: [PersistentIdentifier: WorkLabel] = [:]
+        var tagMap: [PersistentIdentifier: WorkTag] = [:]
+        func mappedLabel(_ label: WorkLabel) -> WorkLabel {
+            if scope.offers(label) { return label }
+            if let known = labelMap[label.persistentModelID] { return known }
+            let equivalent = equivalentLabel(for: label, in: profile, in: context)
+            labelMap[label.persistentModelID] = equivalent
+            return equivalent
+        }
+        func mappedTags(_ tags: [WorkTag]) -> [WorkTag] {
+            var result: [WorkTag] = []
+            for tag in ModelLiveness.live(tags) {
+                let target: WorkTag
+                if scope.offers(tag) {
+                    target = tag
+                } else if let known = tagMap[tag.persistentModelID] {
+                    target = known
+                } else {
+                    target = equivalentTag(for: tag, in: profile, in: context)
+                    tagMap[tag.persistentModelID] = target
+                }
+                if !result.contains(where: { $0 === target }) { result.append(target) }
+            }
+            return result
+        }
+        func needsMapping(_ tags: [WorkTag]) -> Bool {
+            ModelLiveness.live(tags).contains { !scope.offers($0) }
+        }
+
+        if let label = ModelLiveness.live(session.label), !scope.offers(label) {
+            session.label = mappedLabel(label)
+            changed = true
+        }
+        if needsMapping(session.tagList) {
+            session.tagList = mappedTags(session.tagList)
+            changed = true
+        }
+        for segment in session.sortedSegments where !segment.isDeleted {
+            if let label = ModelLiveness.live(segment.label), !scope.offers(label) {
+                segment.label = mappedLabel(label)
+                changed = true
+            }
+            if needsMapping(segment.tagList) {
+                segment.tagList = mappedTags(segment.tagList)
+                changed = true
+            }
+        }
+        for point in ModelLiveness.live(session.learningPoints ?? []) where needsMapping(point.tagList) {
+            point.tagList = mappedTags(point.tagList)
+            changed = true
+        }
+        return changed
+    }
+
+    /// The non-archived labels, local to some profile, with `label`'s name (trimmed, case/diacritic-insensitive) that
+    /// making `label` global merges into it. Empty when `label` is archived or already global. For confirm texts.
+    static func localDuplicatesMerged(byMakingGlobal label: WorkLabel, in context: ModelContext) -> [WorkLabel] {
+        guard ModelLiveness.isLive(label), !label.isArchived, ModelLiveness.live(label.profile) != nil else { return [] }
+        let all = ModelLiveness.live((try? context.fetch(FetchDescriptor<WorkLabel>())) ?? [])
+        return all.filter { candidate in
+            candidate !== label && !candidate.isArchived && ModelLiveness.live(candidate.profile) != nil
+                && sameName(candidate.name, label.name)
+        }
+    }
+
+    /// The non-archived tags, local to some profile, with `tag`'s name that making `tag` global merges into it.
+    static func localDuplicatesMerged(byMakingGlobal tag: WorkTag, in context: ModelContext) -> [WorkTag] {
+        guard ModelLiveness.isLive(tag), !tag.isArchived, ModelLiveness.live(tag.profile) != nil else { return [] }
+        return allTags(in: context).filter { candidate in
+            candidate !== tag && !candidate.isArchived && ModelLiveness.live(candidate.profile) != nil
+                && sameName(candidate.name, tag.name)
+        }
+    }
+
+    /// Everything using `source` (sessions, segments, child tags, every profile's default-label choice) moves to
+    /// `target`; source is deleted. Sessions are touched. Does not save. (Merging without the legacy setting, which only
+    /// matters while no profile exists.)
+    static func absorb(_ source: WorkLabel, into target: WorkLabel, in context: ModelContext) {
+        guard source !== target, ModelLiveness.isLive(source), ModelLiveness.isLive(target) else { return }
+        for session in ModelLiveness.live(source.sessions ?? []) {
+            session.label = target
+            session.touch()
+        }
+        for segment in ModelLiveness.live(source.segments ?? []) {
+            segment.label = target
+            segment.session?.touch()
+        }
+        for tag in ModelLiveness.live(source.tags ?? []) {
+            tag.label = target
+        }
+        let sourceID = source.uuid
+        for profile in ProfileOps.allProfiles(in: context) where profile.defaultLabelUUID == sourceID {
+            profile.defaultLabelUUID = target.uuid
+            profile.touch()
+        }
+        context.delete(source)
+    }
+
+    /// Replaces `source` with `target` on all sessions/segments/learning points (no duplicates, sessions touched) and
+    /// deletes source. Does not save.
+    static func absorb(_ source: WorkTag, into target: WorkTag, in context: ModelContext) {
+        guard source !== target, ModelLiveness.isLive(source), ModelLiveness.isLive(target) else { return }
+        for session in ModelLiveness.live(source.sessions ?? []) {
+            session.tagList = replacing(source, with: target, in: session.tagList)
+            session.touch()
+        }
+        for segment in ModelLiveness.live(source.segments ?? []) {
+            segment.tagList = replacing(source, with: target, in: segment.tagList)
+            segment.session?.touch()
+        }
+        for point in ModelLiveness.live(source.learningPoints ?? []) {
+            point.tagList = replacing(source, with: target, in: point.tagList)
+            point.session?.touch()
+        }
+        if target.label == nil, let parent = ModelLiveness.live(source.label),
+           ProfileScope(profileID: ModelLiveness.live(target.profile)?.uuid).offers(parent),
+           ModelLiveness.live(target.profile) != nil || ModelLiveness.live(parent.profile) == nil {
+            target.label = parent   // only a parent offered wherever the target is (a global tag needs a global one)
+        }
+        context.delete(source)
+    }
+
     /// Delete/merge targets keeping the invariant: global source → global; local(P) → global + local(P).
     /// Excludes the source; non-archived only.
     static func reassignmentTargets(for label: WorkLabel, among labels: [WorkLabel]) -> [WorkLabel] {
@@ -327,6 +505,17 @@ enum TaxonomyScopeImpact: Equatable {
         return ModelLiveness.live((try? context.fetch(descriptor)) ?? [])
     }
 
+    /// Effective profile (`ProfileOps.effectiveProfile(of:)`) of each live session, by persistentModelID.
+    private static func effectiveOwners(of sessions: [WorkSession]) -> [PersistentIdentifier: WorkProfile] {
+        var owners: [PersistentIdentifier: WorkProfile] = [:]
+        for session in sessions where ModelLiveness.isLive(session) && owners[session.persistentModelID] == nil {
+            if let owner = ProfileOps.effectiveProfile(of: session) {
+                owners[session.persistentModelID] = owner
+            }
+        }
+        return owners
+    }
+
     /// Global: no live profile (nil, or its profile was deleted).
     private static func isGlobal(_ tag: WorkTag) -> Bool {
         ModelLiveness.live(tag.profile) == nil
@@ -337,7 +526,7 @@ enum TaxonomyScopeImpact: Equatable {
         var seenSessions = Set<PersistentIdentifier>()
         var others: [WorkProfile] = []
         for session in sessions {
-            guard let owner = ModelLiveness.live(session.profile), owner !== profile else { continue }
+            guard let owner = ProfileOps.effectiveProfile(of: session), owner !== profile else { continue }
             guard seenSessions.insert(session.persistentModelID).inserted else { continue }
             if !others.contains(where: { $0 === owner }) { others.append(owner) }
         }

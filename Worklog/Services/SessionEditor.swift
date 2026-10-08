@@ -21,7 +21,8 @@ enum SessionEditError: LocalizedError {
 }
 
 /// After-the-fact edits to sessions (used by History/Detail; the engine reuses `normalize` and `endSession`).
-/// Every mutating call touches the session, recomputes its stored duration, normalizes it and saves.
+/// Every mutating call touches the session, recomputes its stored duration, normalizes it and saves. An unassigned
+/// session (profile nil, shown in its effective profile) is assigned to that profile by the edit.
 @MainActor enum SessionEditor {
     nonisolated static let minimumSegmentLength: TimeInterval = 1
 
@@ -216,56 +217,13 @@ enum SessionEditError: LocalizedError {
 
     /// Moves `session` (ended or running) to `profile`. session.profile = profile; every label/tag referenced by the
     /// session, its segments and its learning points that `profile` doesn't offer is replaced (no duplicates) by
-    /// TaxonomyOps.equivalentLabel/equivalentTag (a same-name item offered there, else a local copy). touch + save.
+    /// TaxonomyOps.equivalentLabel/equivalentTag (`TaxonomyOps.conformTaxonomy`). touch + save.
     /// No-op when already there.
     static func moveSession(_ session: WorkSession, to profile: WorkProfile, in context: ModelContext) {
         guard ModelLiveness.isLive(session), ModelLiveness.isLive(profile) else { return }
         guard ModelLiveness.live(session.profile) !== profile else { return }
         session.profile = profile
-        let scope = ProfileScope(profileID: profile.uuid)
-
-        var labelMap: [PersistentIdentifier: WorkLabel] = [:]
-        var tagMap: [PersistentIdentifier: WorkTag] = [:]
-        func mappedLabel(_ label: WorkLabel) -> WorkLabel {
-            if scope.offers(label) { return label }
-            if let known = labelMap[label.persistentModelID] { return known }
-            let equivalent = TaxonomyOps.equivalentLabel(for: label, in: profile, in: context)
-            labelMap[label.persistentModelID] = equivalent
-            return equivalent
-        }
-        func mappedTags(_ tags: [WorkTag]) -> [WorkTag] {
-            var result: [WorkTag] = []
-            for tag in ModelLiveness.live(tags) {
-                let target: WorkTag
-                if scope.offers(tag) {
-                    target = tag
-                } else if let known = tagMap[tag.persistentModelID] {
-                    target = known
-                } else {
-                    target = TaxonomyOps.equivalentTag(for: tag, in: profile, in: context)
-                    tagMap[tag.persistentModelID] = target
-                }
-                if !result.contains(where: { $0 === target }) { result.append(target) }
-            }
-            return result
-        }
-        func needsMapping(_ tags: [WorkTag]) -> Bool {
-            ModelLiveness.live(tags).contains { !scope.offers($0) }
-        }
-
-        if let label = ModelLiveness.live(session.label), !scope.offers(label) {
-            session.label = mappedLabel(label)
-        }
-        if needsMapping(session.tagList) { session.tagList = mappedTags(session.tagList) }
-        for segment in liveSegments(of: session) {
-            if let label = ModelLiveness.live(segment.label), !scope.offers(label) {
-                segment.label = mappedLabel(label)
-            }
-            if needsMapping(segment.tagList) { segment.tagList = mappedTags(segment.tagList) }
-        }
-        for point in ModelLiveness.live(session.learningPoints ?? []) where needsMapping(point.tagList) {
-            point.tagList = mappedTags(point.tagList)
-        }
+        TaxonomyOps.conformTaxonomy(of: session, to: profile, in: context)
         finish(session, in: context)
     }
 
@@ -387,8 +345,10 @@ enum SessionEditError: LocalizedError {
 
     // MARK: - Private helpers
 
-    /// touch + normalize + recomputeStoredDuration + save.
+    /// (Unassigned session: assign its effective profile first — a user edit is when that is written, see
+    /// `ProfileOps.assignProfileIfUnassigned`) + touch + normalize + recomputeStoredDuration + save.
     private static func finish(_ session: WorkSession, in context: ModelContext) {
+        ProfileOps.assignProfileIfUnassigned(session, in: context)
         normalize(session)
         session.recomputeStoredDuration()
         session.touch()

@@ -29,7 +29,7 @@ final class SessionEngine {
     var pendingEndSession: WorkSession? = nil {
         didSet { pendingSessionUUID = pendingEndSession?.uuid }
     }
-    /// Latest takeaway per profile uuid (nil key = unassigned sessions): the most recent ended session of that profile
+    /// Latest takeaway per effective profile uuid (nil key = no profile at all): the most recent ended session of that profile
     /// with showInOverlay == true and a non-nil takeawayText. Rebuilt by refreshTakeaway().
     private(set) var takeaways: [UUID?: SessionTakeaway] = [:]
     /// The takeaway of `contextProfileID` (computed; observation tracks it through takeaways, activeSession and the
@@ -65,10 +65,11 @@ final class SessionEngine {
     var isRunning: Bool { isActive && !isPaused }
     var currentSegment: Segment? { activeSession?.currentSegment }
     var currentLabel: WorkLabel? { currentSegment?.effectiveLabel ?? activeSession?.label }
-    /// Live profile of the active session (nil when idle/unassigned).
+    /// Effective profile of the active session (`ProfileOps.effectiveProfile(of:)`: an unassigned session started by
+    /// an older app version counts as the profile it is shown in); nil when idle.
     var activeSessionProfile: WorkProfile? {
         guard let session = ModelLiveness.live(activeSession) else { return nil }
-        return ModelLiveness.live(session.profile)
+        return ProfileOps.effectiveProfile(of: session)
     }
     var activeSessionProfileID: UUID? { activeSessionProfile?.uuid }
     /// Profile whose takeaway/today context applies: active session's profile when active, else
@@ -388,6 +389,7 @@ final class SessionEngine {
     func stop(at date: Date = .now) -> WorkSession? {
         guard let session = activeSession else { return nil }
         stampOwner(session)
+        ProfileOps.assignProfileIfUnassigned(session, in: context)
         SessionEditor.endSession(session, at: date)
         activeSession = nil
         autoPauseReason = nil
@@ -432,6 +434,7 @@ final class SessionEngine {
     func split(label: WorkLabel?, tags: [WorkTag] = [], focus: String = "", at date: Date = .now) -> Segment? {
         guard let session = activeSession else { return nil }
         stampOwner(session)
+        ProfileOps.assignProfileIfUnassigned(session, in: context)
         let resolvedLabel = label ?? currentLabel
         let segments = session.sortedSegments
         let current = session.currentSegment ?? segments.last
@@ -463,6 +466,7 @@ final class SessionEngine {
     func updateCurrentSegment(label: WorkLabel?, tags: [WorkTag], focus: String) {
         guard let session = activeSession, let segment = session.currentSegment else { return }
         stampOwner(session)
+        ProfileOps.assignProfileIfUnassigned(session, in: context)
         segment.label = label
         segment.tags = tags
         segment.focus = focus.trimmed
@@ -483,6 +487,7 @@ final class SessionEngine {
         note.session = session
         note.segment = session.currentSegment ?? session.segment(containing: date)
         stampOwner(session)
+        ProfileOps.assignProfileIfUnassigned(session, in: context)
         session.touch()
         save()
         return note
@@ -497,6 +502,7 @@ final class SessionEngine {
         if let session = pendingEndSession {
             pendingEndSession = nil
             if !session.isDeleted {
+                ProfileOps.assignProfileIfUnassigned(session, in: context)
                 session.recomputeStoredDuration()
                 session.touch()
                 consumeTakeawayIfNeeded(reviewed: session)
@@ -547,6 +553,7 @@ final class SessionEngine {
         session.endedAt = nil
         session.sortedSegments.last?.endedAt = nil
         stampOwner(session)
+        ProfileOps.assignProfileIfUnassigned(session, in: context)
         SessionEditor.normalize(session)
         session.recomputeStoredDuration(now: now)
         session.touch()
@@ -570,7 +577,7 @@ final class SessionEngine {
         var newValue: [UUID?: SessionTakeaway] = [:]
         for session in candidates where session !== pendingEndSession && !session.isDeleted
             && !discardingUUIDs.contains(session.uuid) {
-            let key: UUID? = ModelLiveness.live(session.profile)?.uuid
+            let key: UUID? = ProfileOps.effectiveProfileID(of: session)
             guard newValue[key] == nil, let text = session.takeawayText else { continue }
             newValue[key] = SessionTakeaway(sessionUUID: session.uuid, title: session.displayTitle,
                                             date: session.startedAt, text: text,
@@ -579,7 +586,7 @@ final class SessionEngine {
         if newValue != takeaways { takeaways = newValue }
     }
 
-    /// The latest takeaway of that profile (nil = unassigned sessions).
+    /// The latest takeaway of that profile (unassigned sessions count as their effective profile's).
     func takeaway(for profileID: UUID?) -> SessionTakeaway? {
         takeaways[profileID]
     }
@@ -684,7 +691,7 @@ final class SessionEngine {
     /// Records which takeaway was on screen when `session` started, so its review can retire it.
     private func rememberTakeawaySource(for session: WorkSession) {
         refreshTakeaway()
-        if let source = takeaway(for: ModelLiveness.live(session.profile)?.uuid)?.sessionUUID {
+        if let source = takeaway(for: ProfileOps.effectiveProfileID(of: session))?.sessionUUID {
             defaults.set(session.uuid.uuidString, forKey: Self.takeawayConsumerKey)
             defaults.set(source.uuidString, forKey: Self.takeawaySourceKey)
         } else {
@@ -709,14 +716,14 @@ final class SessionEngine {
     private func retireTakeaways(through source: WorkSession) {
         if source.showInOverlay { source.showInOverlay = false }
         let cutoff = source.startedAt
-        let sourceProfileID = ModelLiveness.live(source.profile)?.uuid
+        let sourceProfileID = ProfileOps.effectiveProfileID(of: source)
         var descriptor = FetchDescriptor<WorkSession>(
             predicate: #Predicate<WorkSession> { $0.endedAt != nil && $0.showInOverlay == true && $0.startedAt <= cutoff }
         )
         descriptor.fetchLimit = 500
         let older = (try? context.fetch(descriptor)) ?? []
         for session in older where !session.isDeleted && session !== pendingEndSession
-            && ModelLiveness.live(session.profile)?.uuid == sourceProfileID {
+            && ProfileOps.effectiveProfileID(of: session) == sourceProfileID {
             session.showInOverlay = false
         }
     }

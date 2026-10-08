@@ -5,10 +5,23 @@ import SwiftData
     static let didSeedDefaultsKey = "seed.didSeedDefaults"
     /// instanceID (uuidString) of a default profile created before the first iCloud import (see `ensureProfiles`).
     static let provisionalDefaultProfileKey = "profiles.provisionalDefaultInstanceID"
-    /// Set by AppServices while a provisional default profile waits for the first iCloud import: `deduplicate` then
-    /// skips the repair of unassigned sessions, so sessions whose profile hasn't arrived yet aren't moved into the
-    /// provisional profile. Cleared (and the repair run) once the import finished or the wait timed out.
-    static var defersSessionProfileRepair = false
+    /// UserDefaults (`settings.defaults`) flag: the legacy `settings.defaultLabelID` was offered to the default profile.
+    static let legacyDefaultLabelCopiedKey = "profiles.legacyDefaultLabelCopied"
+    /// True in CloudKit mode (set by AppServices before any data setup): unassigned sessions are then never repaired in
+    /// the background — they are shown in their effective profile (`ProfileOps.effectiveProfile(of:)`) and assigned
+    /// only when the user edits them. A background write could overwrite the real profile of a session whose profile
+    /// relationship another Mac hasn't finished syncing, or that an older app version still edits. Local-only stores
+    /// keep repairing (false: the default, also for previews and tests).
+    static var isSessionProfileRepairDisplayOnly = false
+
+    /// The ONE entry point for the background repair of unassigned sessions (launch, dedupe, import, scope changes):
+    /// `ProfileOps.repairSessionProfiles` in a local-only store; a no-op returning 0 when
+    /// `isSessionProfileRepairDisplayOnly`. Does not save.
+    @discardableResult
+    static func repairSessionProfilesIfAllowed(in context: ModelContext) -> Int {
+        guard !isSessionProfileRepairDisplayOnly else { return 0 }
+        return ProfileOps.repairSessionProfiles(in: context)
+    }
 
     /// Default labels: name, hex, SF Symbol, fixed uuid (fixed so copies created on two Macs can be merged).
     static let defaultLabels: [(name: String, hex: String, symbol: String, uuid: String)] = [
@@ -69,16 +82,29 @@ import SwiftData
     /// 1. If no WorkProfile exists: ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: settings.defaultLabelID).
     ///    If `provisional` (CloudKit on and the first iCloud import hasn't completed yet), store the new profile's
     ///    instanceID under `provisionalDefaultProfileKey` (in `settings.defaults`).
-    /// 2. ProfileOps.repairSessionProfiles. Saves if anything changed. Never touches a session's modifiedAt.
+    /// 2. Once (`legacyDefaultLabelCopiedKey`): when the default profile already existed (synced from another Mac) and
+    ///    has no default label, the legacy `settings.defaultLabelID` is copied into it.
+    /// 3. repairSessionProfilesIfAllowed (skipped in CloudKit mode). Saves if anything changed. Never touches a
+    ///    session's modifiedAt.
     static func ensureProfiles(in context: ModelContext, settings: AppSettings, provisional: Bool = false) {
         var changed = false
-        if let created = ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: settings.defaultLabelID, in: context) {
+        let created = ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: settings.defaultLabelID, in: context)
+        if let created {
             changed = true
             if provisional {
                 settings.defaults.set(created.instanceID.uuidString, forKey: provisionalDefaultProfileKey)
             }
         }
-        if ProfileOps.repairSessionProfiles(in: context) > 0 {
+        if !settings.defaults.bool(forKey: legacyDefaultLabelCopiedKey) {
+            if created == nil, let legacy = settings.defaultLabelID,
+               let work = ProfileOps.profile(withID: ProfileOps.defaultProfileUUID, in: context),
+               work.defaultLabelUUID == nil {
+                work.defaultLabelUUID = legacy
+                changed = true
+            }
+            settings.defaults.set(true, forKey: legacyDefaultLabelCopiedKey)
+        }
+        if repairSessionProfilesIfAllowed(in: context) > 0 {
             changed = true
         }
         guard changed else { return }
@@ -125,19 +151,19 @@ import SwiftData
     /// Extra running sessions are NOT ended here: `SessionEngine.reconcile()` (always called right after) ends them at
     /// the handoff time and tells the user.
     ///
-    /// Order: profiles (same rules as labels; sessions, labels and tags of a duplicate move to the survivor) → labels →
-    /// tags → sessions → `ProfileOps.repairSessionProfiles` (unassigned sessions → home profile; skipped while
-    /// `defersSessionProfileRepair`) → save if anything changed. Nothing here touches a session's modifiedAt.
+    /// Order: profiles (identity by the label rules; the attributes of the most recently modified copy win; sessions,
+    /// labels and tags of a duplicate move to the survivor) → labels → tags (copies scoped to different profiles: the
+    /// survivor becomes global) → sessions → `repairSessionProfilesIfAllowed` (skipped in CloudKit mode) → save if
+    /// anything changed. Nothing here touches a session's modifiedAt.
     static func deduplicate(in context: ModelContext) {
         var changed = false
         changed = deduplicateProfiles(in: context) || changed
         changed = deduplicateLabels(in: context) || changed
         changed = deduplicateTags(in: context) || changed
         changed = deduplicateSessions(in: context) || changed
-        if !defersSessionProfileRepair {
-            changed = ProfileOps.repairSessionProfiles(in: context) > 0 || changed
-        }
+        changed = repairSessionProfilesIfAllowed(in: context) > 0 || changed
         guard changed else { return }
+        ProfileOps.invalidateHomeProfileCache()
         do {
             try context.save()
         } catch {
@@ -184,6 +210,20 @@ import SwiftData
                 continue
             }
             let survivor = pick.survivor
+            // Identity (row) = oldest copy; attributes = most recently modified copy (same choice on every Mac).
+            let newest = group.sorted {
+                sessionPrecedes(modifiedAt: $0.modifiedAt, instanceID: $0.instanceID, $1.modifiedAt, $1.instanceID)
+                    ?? false
+            }.first ?? survivor
+            if newest !== survivor {
+                survivor.name = newest.name
+                survivor.colorHex = newest.colorHex
+                survivor.symbolName = newest.symbolName
+                survivor.sortIndex = newest.sortIndex
+                survivor.isArchived = newest.isArchived
+                if let labelID = newest.defaultLabelUUID { survivor.defaultLabelUUID = labelID }
+                survivor.modifiedAt = newest.modifiedAt
+            }
             for duplicate in pick.duplicates {
                 for session in duplicate.sessions ?? [] where !session.isDeleted { session.profile = survivor }
                 for label in duplicate.labels ?? [] where !label.isDeleted { label.profile = survivor }
@@ -195,6 +235,9 @@ import SwiftData
                 changed = true
             }
             Log.persistence.info("Merged duplicate profile \(survivor.name, privacy: .private)")
+        }
+        if changed {
+            ProfileOps.ensureNonArchivedProfile(in: context)
         }
         return changed
     }
@@ -210,6 +253,12 @@ import SwiftData
                 continue
             }
             let survivor = pick.survivor
+            // Copies scoped differently (another profile, or global): the survivor becomes global so every session
+            // that used a copy still sees it offered.
+            let survivorOwner = ModelLiveness.live(survivor.profile)
+            if group.contains(where: { ModelLiveness.live($0.profile) !== survivorOwner }) {
+                survivor.profile = nil
+            }
             for duplicate in pick.duplicates {
                 for session in duplicate.sessions ?? [] { session.label = survivor }
                 for segment in duplicate.segments ?? [] { segment.label = survivor }
@@ -233,6 +282,11 @@ import SwiftData
                 continue
             }
             let survivor = pick.survivor
+            // Copies scoped differently: the survivor becomes global (see deduplicateLabels).
+            let survivorOwner = ModelLiveness.live(survivor.profile)
+            if group.contains(where: { ModelLiveness.live($0.profile) !== survivorOwner }) {
+                survivor.profile = nil
+            }
             for duplicate in pick.duplicates {
                 for session in duplicate.sessions ?? [] {
                     session.tagList = replacing(duplicate, with: survivor, in: session.tagList)

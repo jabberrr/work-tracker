@@ -2098,13 +2098,16 @@ Additive to-one relationships (inverse declared on the to-one side, nullify, opt
 ```swift
 // SeedData
 static let provisionalDefaultProfileKey = "profiles.provisionalDefaultInstanceID"
-static var defersSessionProfileRepair: Bool        // set by AppServices while a provisional profile awaits the import
+static let legacyDefaultLabelCopiedKey = "profiles.legacyDefaultLabelCopied"
+static var isSessionProfileRepairDisplayOnly: Bool  // AppServices: = persistence.isSyncingWithICloud (default false)
+@discardableResult static func repairSessionProfilesIfAllowed(in context: ModelContext) -> Int  // the ONE repair entry
 static func ensureProfiles(in context: ModelContext, settings: AppSettings, provisional: Bool = false)
 static func discardProvisionalDefaultProfile(in context: ModelContext, defaults: UserDefaults = .standard)
 ```
-- `ensureProfiles`: no profile → `ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: settings.defaultLabelID)`; if `provisional`, the new profile's instanceID is stored under the key (in `settings.defaults`). Then `repairSessionProfiles`; saves if anything changed.
+- **Unassigned sessions** (profile nil or deleted): shown everywhere in their *effective profile* (`ProfileOps.effectiveProfile(of:)`: the single non-archived profile owning the local labels/tags the session uses, else `homeProfile`). In CloudKit mode nothing is written in the background (a write could overwrite a profile relationship another Mac hasn't finished syncing); the relationship is written only when the user edits that session: every `SessionEditor` edit (`finish`), `moveSession`, and the engine's stop / completeReview / resumePendingSession / split / updateCurrentSegment / addNote call `ProfileOps.assignProfileIfUnassigned` (effective profile + `TaxonomyOps.conformTaxonomy`, no touch). A local-only store keeps the background repair. Every background call goes through `repairSessionProfilesIfAllowed` (no-op in CloudKit mode): `ensureProfiles`, `deduplicate`, `TaxonomyOps.setScope`, import and delete-all.
+- `ensureProfiles`: no profile → `ProfileOps.ensureDefaultProfile(legacyDefaultLabelID: settings.defaultLabelID)`; if `provisional`, the new profile's instanceID is stored under the key (in `settings.defaults`). Once (`legacyDefaultLabelCopiedKey`): an existing default-uuid profile without a default label gets the legacy `settings.defaultLabelID`. Then `repairSessionProfilesIfAllowed`; saves if anything changed.
 - `discardProvisionalDefaultProfile`: after the first iCloud import, the stored profile is deleted when it still exists, has no sessions and no local labels/tags, and another non-archived profile exists (the user deleted "Work" elsewhere). The key is always cleared once evaluated.
-- `deduplicate(in:)`: profiles → labels → tags → sessions → `ProfileOps.repairSessionProfiles` (skipped while `defersSessionProfileRepair`) → save if changed. Profiles use the label rules (`taxonomyPrecedes`: oldest createdAt, then instanceID; a tie deletes nothing); a duplicate's sessions, labels and tags move to the survivor, and its `defaultLabelUUID` is copied when the survivor has none.
+- `deduplicate(in:)`: profiles → labels → tags → sessions → `repairSessionProfilesIfAllowed` → save if changed. Profiles use the label rules for the surviving row (`taxonomyPrecedes`: oldest createdAt, then instanceID; a tie deletes nothing), but take the attributes (name, colorHex, symbolName, sortIndex, isArchived, defaultLabelUUID when set, modifiedAt) of the most recently modified copy (`sessionPrecedes` order); a duplicate's sessions, labels and tags move to the survivor, its `defaultLabelUUID` is copied when the survivor still has none, and `ensureNonArchivedProfile` runs afterwards. `ensureDefaultProfile` stamps `modifiedAt` = 1970 so a freshly created default copy never wins that attribute merge. Label/tag copies scoped differently (other profile or global) make the survivor global.
 
 `Services/ProfileOps.swift`:
 ```swift
@@ -2120,17 +2123,23 @@ enum ProfileOpResult: Equatable {
     static func profile(withID: UUID?, in:) -> WorkProfile?
     static func homeProfile(in:) -> WorkProfile?              // default uuid if active, else first active, else first
     @discardableResult static func ensureDefaultProfile(legacyDefaultLabelID: UUID?, in:) -> WorkProfile?  // no save
-    @discardableResult static func repairSessionProfiles(in:) -> Int                                      // no save
+    @discardableResult static func repairSessionProfiles(in:) -> Int   // no save; call via SeedData.repairSessionProfilesIfAllowed
+    @discardableResult static func ensureNonArchivedProfile(in:) -> Bool   // all archived → unarchive the first; no save
+    static func effectiveProfile(of: WorkSession) -> WorkProfile?    // display-only; cached home (2 s)
+    static func effectiveProfileID(of: WorkSession) -> UUID?
+    static func isUnassigned(_: WorkSession) -> Bool
+    @discardableResult static func assignProfileIfUnassigned(_: WorkSession, in:) -> WorkProfile?  // user edits; no save
+    static func invalidateHomeProfileCache()
     @discardableResult static func createProfile(name:colorHex:symbolName:in:) -> WorkProfile             // saves
     static func reorder(_ profiles: [WorkProfile])
     @discardableResult static func setArchived(_:_:settings:in:) -> ProfileOpResult
     @discardableResult static func delete(_:_:settings:in:) -> ProfileOpResult
 }
 ```
-- `setArchived`: archiving the last non-archived profile → `.lastProfile`; clears `settings.quickStartProfileID` if it pointed there.
-- `delete`: `.lastProfile` when no other non-archived profile would remain. `.moveSessions`: the target must be live, non-archived and another profile (else `.invalidTarget`); sessions and the profile's local labels/tags move to it (they stay local, now to the target). `.deleteSessions`: `.sessionRunning` while one of its sessions has `endedAt == nil`; otherwise its sessions are deleted (cascade), its local labels/tags still used by a session outside the profile become global, the rest are deleted. Both clear `quickStartProfileID` if it pointed there, delete the profile and save.
+- `setArchived`: archiving the last non-archived profile → `.lastProfile`; archiving a profile with a running session → `.sessionRunning`; clears `settings.quickStartProfileID` if it pointed there.
+- `delete`: `.lastProfile` when no other non-archived profile would remain. `.moveSessions`: the target must be live, non-archived and another profile (else `.invalidTarget`); sessions and the profile's local labels/tags move to it (they stay local, now to the target), except a non-archived local whose name the target already offers (non-archived) is merged into that one (`TaxonomyOps.absorb`); unassigned sessions whose effective profile was this one move to the target too. (`.deleteSessions` leaves unassigned sessions alone: they show in the next home profile. The Settings sheet makes a manual backup before deleting sessions.) `.deleteSessions`: `.sessionRunning` while one of its sessions has `endedAt == nil`; otherwise its sessions are deleted (cascade), its local labels/tags still used by a session outside the profile become global, the rest are deleted. Both clear `quickStartProfileID` if it pointed there, delete the profile and save.
 
-Scenarios: two Macs upgrading both create the fixed-uuid "Work" — dedupe keeps the oldest and re-points everything. A new Mac with CloudKit creates a *provisional* "Work" at launch (the UI always has a profile); after the first import dedupe merges it into the synced copy, or `discardProvisionalDefaultProfile` removes it when the user had deleted "Work". Sessions from un-upgraded Macs arrive unassigned and are repaired. A profile deleted remotely: its sessions are repaired into home, its local labels/tags become global.
+Scenarios: two Macs upgrading both create the fixed-uuid "Work" — dedupe keeps the oldest and re-points everything. A new Mac with CloudKit creates a *provisional* "Work" at launch (the UI always has a profile); after the first import dedupe merges it into the synced copy, or `discardProvisionalDefaultProfile` removes it when the user had deleted "Work". Sessions from un-upgraded Macs arrive unassigned: shown in their effective profile (written on edit; repaired in local-only stores). A profile deleted remotely: its sessions become unassigned the same way, its local labels/tags become global.
 
 ### 12.4 Scope rules
 
@@ -2138,7 +2147,7 @@ Scenarios: two Macs upgrading both create the fixed-uuid "Work" — dedupe keeps
 |---|---|---|
 | Today idle (start form, today total, today's sessions, takeaway) | current profile | current profile |
 | Today active (timer, segment form, today total, notes) | the running session's profile (ProfileBadge with 2+ profiles) | session's profile |
-| End-of-session sheet, Session detail | n/a | `session.profile` |
+| End-of-session sheet, Session detail | n/a | the session's effective profile (`ProfileOps.effectiveProfile(of:)`) |
 | History (list, search, chips, "Live session" row only if in scope) | current profile | current profile |
 | Learning | current profile | n/a |
 | Stats | current profile, or "All profiles" (+ "By profile" chart) | n/a |
@@ -2157,7 +2166,7 @@ struct ProfileScope: Hashable, Sendable {
     init(profileID: UUID?)
     static let allProfiles: ProfileScope
     var isAllProfiles: Bool { get }
-    @MainActor func contains(_ session: WorkSession) -> Bool   // live session whose live profile uuid == profileID
+    @MainActor func contains(_ session: WorkSession) -> Bool   // live session whose EFFECTIVE profile uuid == profileID
     @MainActor func contains(_ point: LearningPoint) -> Bool   // its live session is contained
     @MainActor func offers(_ label: WorkLabel) -> Bool         // live and global (nil/deleted profile) or local to profileID
     @MainActor func offers(_ tag: WorkTag) -> Bool
@@ -2188,7 +2197,7 @@ struct ProfileScope: Hashable, Sendable {
 }
 ```
 
-**`@Query` pattern, everyone.** Keep `@Query` unfiltered by profile (or filtered on plain attributes); read `@Environment(ProfileStore.self) private var profiles` and filter in memory with `profiles.activeScope.filter(_:)`, `.contains(_:)`, `.offers(_:)`, or `ProfileScope(profileID:)` for a session's own profile. Never write `#Predicate { $0.profile?.uuid == id }`. Never read `x.profile.name` on a possibly deleted model; use `ModelLiveness.live(x.profile)`.
+**`@Query` pattern, everyone.** Keep `@Query` unfiltered by profile (or filtered on plain attributes); read `@Environment(ProfileStore.self) private var profiles` and filter in memory with `profiles.activeScope.filter(_:)`, `.contains(_:)`, `.offers(_:)`, or `ProfileScope(profileID: ProfileOps.effectiveProfileID(of: session))` for a session's own profile (never `session.profile` directly: an unassigned session has none but is shown in its effective profile). Never write `#Predicate { $0.profile?.uuid == id }`. Never read `x.profile.name` on a possibly deleted model; use `ModelLiveness.live(x.profile)`.
 
 ### 12.6 Service changes
 
@@ -2198,7 +2207,7 @@ init(context: ModelContext, settings: AppSettings, profiles: ProfileStore? = nil
 var activeSessionProfile: WorkProfile? { get }      // live profile of the active session
 var activeSessionProfileID: UUID? { get }
 var contextProfileID: UUID? { get }                 // active session's profile when active, else profiles?.activeProfileID
-private(set) var takeaways: [UUID?: SessionTakeaway] // per profile uuid (nil = unassigned)
+private(set) var takeaways: [UUID?: SessionTakeaway] // per effective profile uuid (nil = no profile at all)
 var lastTakeaway: SessionTakeaway? { get }          // COMPUTED: takeaways[contextProfileID]
 func takeaway(for profileID: UUID?) -> SessionTakeaway?
 func dismissTakeaway(_ takeaway: SessionTakeaway? = nil)   // nil → lastTakeaway; retires within its profile only
@@ -2217,7 +2226,7 @@ func totalActiveToday(now: Date = .now, scope: ProfileScope = .allProfiles) -> T
 static func moveSession(_ session: WorkSession, to profile: WorkProfile, in context: ModelContext)
 static func taxonomyCopiedByMove(of session: WorkSession, to profile: WorkProfile) -> [String]
 ```
-`moveSession` re-points the session (ended or running) and replaces every label/tag of the session, its segments and learning points that the target doesn't offer with `equivalentLabel/Tag` (one per source item, no duplicates); touch + save; no-op when already there. `taxonomyCopiedByMove` lists the names that would be *copied* (no same-name equivalent), sorted, unique.
+`moveSession` re-points the session (ended or running) and calls `TaxonomyOps.conformTaxonomy` (every label/tag of the session, its segments and learning points that the target doesn't offer → `equivalentLabel/Tag`, one per source item, no duplicates); touch + save; no-op when already there. `taxonomyCopiedByMove` lists the names that would be *copied* (no same-name equivalent), sorted, unique.
 
 **`TaxonomyOps`**
 ```swift
@@ -2232,11 +2241,16 @@ static func equivalentLabel(for: WorkLabel, in profile: WorkProfile, in:) -> Wor
 static func equivalentTag(for: WorkTag, in profile: WorkProfile, in:) -> WorkTag
 static func existingEquivalentLabel(for:in:in:) -> WorkLabel?   // same lookup, never inserts
 static func existingEquivalentTag(for:in:in:) -> WorkTag?
+@discardableResult static func conformTaxonomy(of: WorkSession, to: WorkProfile, in:) -> Bool  // no touch, no save
+static func localDuplicatesMerged(byMakingGlobal: WorkLabel, in:) -> [WorkLabel]   // for confirm texts
+static func localDuplicatesMerged(byMakingGlobal: WorkTag, in:) -> [WorkTag]
+static func absorb(_: WorkLabel, into: WorkLabel, in:)   // merge without settings; no save
+static func absorb(_: WorkTag, into: WorkTag, in:)
 static func reassignmentTargets(for: WorkLabel, among: [WorkLabel]) -> [WorkLabel]
 static func mergeTargets(for: WorkTag, among: [WorkTag]) -> [WorkTag]
 ```
 - `createTag` returns an existing non-archived same-name tag offered in `profile` (the profile's own one first; with `profile` nil only global tags count), else a new tag local to `profile`.
-- `setScope` to a profile: unassigned sessions are repaired first, then `item.profile = profile`, then every other profile Q whose sessions/segments (tags: also learning points) use it is re-pointed to `equivalent…(for:in: Q)`; a `Q.defaultLabelUUID` pointing to the label follows to Q's copy. To nil: just global. Saves.
+- `setScope` to a profile: `repairSessionProfilesIfAllowed`, then `item.profile = profile` (a label: global tags and other profiles' tags whose parent it is lose that parent), then every other (effective) profile Q whose sessions/segments (tags: also learning points) use it is re-pointed to `equivalent…(for:in: Q)`; a `Q.defaultLabelUUID` pointing to the label follows to Q's copy. To nil (from local): a non-archived item absorbs the non-archived same-name items local to any profile (`localDuplicatesMerged`); a tag also drops a local parent label. Saves.
 - `equivalent…`: same name (trimmed, case/diacritic-insensitive, non-archived preferred) offered in the profile, excluding the item itself when it isn't offered there; else a local copy (name, color, symbol, sortIndex, archived state; tag copies keep the parent label only if it is offered there).
 - `deleteLabel` clears every profile's `defaultLabelUUID` pointing to it; `mergeLabel` points them to the target.
 
@@ -2245,9 +2259,9 @@ static func mergeTargets(for: WorkTag, among: [WorkTag]) -> [WorkTag]
 **Export (`ExportDTOs`, `ExportService`)**
 - `ExportArchive.currentFormatVersion = 2`; `var profiles: [ProfileDTO]? = nil` (v2 always writes it, possibly `[]`). `ProfileDTO { id, name, colorHex, symbolName, sortIndex, isArchived, createdAt, modifiedAt, defaultLabelID }`. `LabelDTO`, `TagDTO`, `SessionDTO` append `var profileID: UUID? = nil` (synthesized Decodable uses decodeIfPresent → v1 decodes). Format 3+ is rejected.
 - `ImportSummary.profiles` (archive profiles); the description adds ", N profile(s)" only when > 0.
-- Import order profiles → labels → tags → sessions. Profiles: upsert by uuid, existing ones untouched. New labels/tags get the archived scope; in merge mode existing ones keep theirs, in replace mode the archived scope is set. Sessions: archived profile ?? local profile ?? home (`homeProfile`, or `ensureDefaultProfile` when none exists). Replace also ensures the default profile; both modes repair before saving.
+- Import order profiles → labels → tags → sessions. Profiles: upsert by uuid, existing ones untouched. New labels/tags get the archived scope; in merge mode existing ones keep theirs, in replace mode the archived scope is set. Sessions: archived profile ?? local profile ?? home (`homeProfile`, or `ensureDefaultProfile` when none exists), then `TaxonomyOps.conformTaxonomy` (labels/tags the profile doesn't offer are mapped or copied). Replace also ensures the default profile; both modes then `ensureNonArchivedProfile` and `repairSessionProfilesIfAllowed` before saving.
 - `deleteEverything()` deletes profiles too; `deleteAllData()` then recreates the default profile.
-- CSV: a trailing `profile` column (profile name, "" if none) on both files.
+- CSV: a trailing `profile` column (effective profile name, "" if none) on both files.
 
 **`AppSettings`**: `var quickStartProfileID: UUID?` (key `settings.quickStartProfileID`, uuidString, nil = current profile; assigned last in `init`). `defaultLabelID` is legacy: read once by the migration, no longer written by the UI.
 
@@ -2257,10 +2271,12 @@ static func mergeTargets(for: WorkTag, among: [WorkTag]) -> [WorkTag]
 
 - **AppServices order:** settings → shortcuts → persistence → sync → themeManager → auth → router → **profiles** → engine(…, profiles:) → exporter → backups → overlay.
 - **Data setup:** the existing branches, then `SeedData.ensureProfiles` in each (inMemory after `PreviewData.populate`; recovery after `insertDefaults`; normal after restore/seed with `provisional = isSyncingWithICloud && !sync.hasCompletedFirstImport` — only effective when no profile existed), then `deduplicate`, `profiles.reload()`, `router.profiles = profiles`, `engine.restoreActiveSession()`, `profiles.startObserving()`.
-- **Provisional follow-up:** when the key is set (now or from an earlier launch) and the store is CloudKit, `defersSessionProfileRepair` is set and a Task waits for `sync.hasCompletedFirstImport` (max 120 s); if it completed: `deduplicate` → `discardProvisionalDefaultProfile`; then the repair is re-enabled, `deduplicate` runs again and `profiles.reload()`. The deferred-seeding Task also reloads the profiles.
+- **Repair gate:** right after `persistence`, `SeedData.isSessionProfileRepairDisplayOnly = persistence.isSyncingWithICloud`.
+- **Provisional follow-up:** when the key is set (now or from an earlier launch) and the store is CloudKit, a Task waits for `sync.hasCompletedFirstImport` (polls every 2 s, gives up after 10 min without doing anything — the key stays for the next launch); once it completed: `deduplicate` → `discardProvisionalDefaultProfile` → `profiles.reload()`. The deferred-seeding Task also reloads the profiles.
+- **CloudKit schema (DEBUG):** launch argument `-initializeCloudKitSchema` → `PersistenceController.initializeCloudKitSchema(containerIdentifier:)` before the CloudKit store opens (throwaway `NSPersistentCloudKitContainer` on a temporary empty store built from `NSManagedObjectModel.makeManagedObjectModel(for: WorklogSchema.models)`, then `initializeCloudKitSchema()`); see README checklist.
 - **`withAppServices`** adds `.environment(services.profiles)`: main window, MenuBarExtra panel and label, overlay panel; sheets/popovers inherit it. Views that may be hosted elsewhere must get it explicitly (F1's `LiveEnvironmentBridge`).
-- **`WindowRouter`:** `@ObservationIgnored weak var profiles: ProfileStore?`; `showSession(_:)` first selects the session's live, non-archived profile when it isn't current.
-- **`WorklogCommands`:** Start/Stop starts in the current profile (`engine.start(label: engine.defaultLabel(for: p), profile: p)`); View menu "Next Profile" (`.nextProfile`) → `profiles.selectNext()`.
+- **`WindowRouter`:** `@ObservationIgnored weak var profiles: ProfileStore?`; `showSession(_:)` first selects the session's effective, non-archived profile when it isn't current.
+- **`WorklogCommands`:** Start/Stop starts in the current profile (`engine.start(label: engine.defaultLabel(for: p), profile: p)`); View menu "Next Profile" (`.nextProfile`) → `profiles.selectNext()`, disabled with fewer than 2 profiles (`NextProfileCommandButton`).
 - **`RootView` sidebar inset:** mini status row (while active) → Divider → `ProfileSwitcher()` (always, padding h `spacingS`, v `spacingXS`) → Divider → footer. The mini row shows a `ProfileBadge(.small)` before the label when there are 2+ profiles and the running session's profile isn't current.
 - **`PreviewData`:** "Work" (default uuid, default label "Deep work") and "Personal" (`house.fill`, `#27AE60`) with a Personal-local label "Errands" and tag "family"; 9 / 3 sessions.
 

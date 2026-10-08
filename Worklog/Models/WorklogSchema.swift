@@ -17,8 +17,13 @@ enum WorklogSchema {
 /// `models` lists the LIVE model types (it is not a frozen copy). Round 3 added `WorkProfile` plus three optional
 /// to-one relationships (`WorkSession.profile`, `WorkLabel.profile`, `WorkTag.profile`): an additive change handled by
 /// automatic lightweight migration, locally and in CloudKit (deploy the CloudKit dev schema to Production before
-/// release). Do NOT add a `WorklogSchemaV2` that lists the same live types: two identical schemas in a migration plan
-/// fail with a duplicate-checksum error.
+/// release; run once with the DEBUG launch argument `-initializeCloudKitSchema` first, see README). Do NOT add a
+/// `WorklogSchemaV2` that lists the same live types: two identical schemas in a migration plan fail with a
+/// duplicate-checksum error.
+///
+/// If a migration plan is ever adopted, freeze BOTH shipped shapes as separate versions: the pre-round-3 model (no
+/// `WorkProfile`, no `profile` relationships) and the round-3 model (with them). Stores in the field exist in both
+/// shapes, and a plan that lists only one refuses the other as an unknown model version.
 enum WorklogSchemaV1: VersionedSchema {
     static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
     static var models: [any PersistentModel.Type] {
