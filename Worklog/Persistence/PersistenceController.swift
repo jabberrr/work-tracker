@@ -558,8 +558,42 @@ final class PersistenceController {
             }
             Log.persistence.info("CloudKit schema initialized in the Development environment")
         } catch {
-            Log.persistence.error("CloudKit schema initialization failed: \(error.localizedDescription, privacy: .public)")
+            let details = schemaErrorDetails(error)
+            Log.persistence.error("CloudKit schema initialization failed: \(details, privacy: .public)")
+            // Also on stdout so it shows in Xcode's console unfiltered and can be copied in full.
+            print("CloudKit schema initialization failed:\n\(details)")
         }
+    }
+
+    /// Flattens an error and everything nested in it (underlying errors, Core Data's detailed errors, CloudKit
+    /// partial errors) into readable lines: domain, code, description and the remaining userInfo keys.
+    private static func schemaErrorDetails(_ error: Error, depth: Int = 0) -> String {
+        guard depth < 6 else { return "" }
+        let indent = String(repeating: "  ", count: depth)
+        let ns = error as NSError
+        var lines = ["\(indent)\(ns.domain) \(ns.code): \(ns.localizedDescription)"]
+        var nested: [Error] = []
+        for (key, value) in ns.userInfo.sorted(by: { $0.key < $1.key }) {
+            switch value {
+            case let inner as Error where key == NSUnderlyingErrorKey:
+                nested.append(inner)
+            case let many as [Error]:
+                lines.append("\(indent)  \(key): \(many.count) error(s)")
+                nested.append(contentsOf: many)
+            case let byItem as [AnyHashable: Error]:
+                lines.append("\(indent)  \(key): \(byItem.count) error(s)")
+                for (item, inner) in byItem.prefix(10) {
+                    lines.append("\(indent)  item \(item):")
+                    nested.append(inner)
+                }
+            default:
+                lines.append("\(indent)  \(key): \(String(describing: value).prefix(600))")
+            }
+        }
+        for inner in nested.prefix(20) {
+            lines.append(schemaErrorDetails(inner, depth: depth + 1))
+        }
+        return lines.joined(separator: "\n")
     }
     #endif
 
