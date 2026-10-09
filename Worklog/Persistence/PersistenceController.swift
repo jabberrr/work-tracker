@@ -535,7 +535,7 @@ final class PersistenceController {
     /// Loads the SwiftData model into a throwaway NSPersistentCloudKitContainer (empty store in a temporary folder, so
     /// the real store is never touched), calls `initializeCloudKitSchema()`, prints the result and QUITS the app.
     ///
-    /// Why quit instead of cleaning up: once loaded, the container's CloudKit mirroring keeps working on background
+    /// Why quit (with `_exit`) instead of cleaning up: once loaded, the container's CloudKit mirroring keeps working on background
     /// queues. Removing its store (or deleting its folder) underneath it crashes with "This NSPersistentStoreCoordinator
     /// has no persistent stores". Exiting right away avoids that and keeps this tool separate from normal launches.
     /// The temporary folder is left for the system to clean up.
@@ -575,8 +575,12 @@ final class PersistenceController {
             Log.persistence.error("CloudKit schema initialization failed: \(details, privacy: .public)")
             print("CloudKit schema initialization failed:\n\(details)\n\nWorklog quits now.")
         }
+        // `_exit`, not `exit`: `exit` runs atexit handlers and static destructors while CloudKit mirroring is still
+        // saving on its own queue, which crashes with the same "no persistent stores" error. `_exit` ends the process
+        // immediately, so stdout is flushed first.
+        fflush(stdout)
         withExtendedLifetime(keepAlive) {
-            exit(succeeded ? EXIT_SUCCESS : EXIT_FAILURE)
+            _exit(succeeded ? EXIT_SUCCESS : EXIT_FAILURE)
         }
     }
 
