@@ -127,16 +127,15 @@ struct SettingsAccountTab: View {
                     .buttonStyle(QuietButtonStyle())
             }
         case .guest, .signedOut, .unknown:
-            VStack(alignment: .leading, spacing: theme.spacingS) {
+            if AuthService.isSignInAvailable {
                 SignInWithAppleButton(.signIn,
                                       onRequest: { request in auth.configure(request) },
                                       onCompletion: { result in auth.handleSignInResult(result) })
                     .signInWithAppleButtonStyle(colorScheme == .dark ? .white : .black)
                     .frame(width: 220, height: 32)
                     .accessibilityLabel("Sign in with Apple")
-                if !Entitlements.hasSignInWithApple {
-                    SettingsFootnote("Sign in with Apple isn’t available in this build.")
-                }
+            } else {
+                SettingsFootnote("Sign in with Apple isn’t available outside the App Store. iCloud sync uses this Mac’s Apple Account.")
             }
         }
     }

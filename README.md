@@ -19,7 +19,7 @@ optional floating overlay give quick access while you work.
 - **Floating overlay**: a non-activating `NSPanel` that stays above other apps. Its layout is editable: in Settings ▸ Overlay you choose which elements it shows (label, timer, segment focus, controls, split, today's total, quick note, takeaway) and drag them into order on a live, real-size preview. Opacity, compact mode, the window level and the Spaces behaviour are configurable too.
 - **Themes**: Graphite (the default, a neutral sans-serif look) plus the optional Paper and Meadow themes, light/dark/system appearance and an accent colour.
 - **Images**: add them by picking files, pasting or dragging. They are downscaled to 2048 px and compressed, and sync through iCloud.
-- **Account**: Sign in with Apple, or continue without signing in.
+- **Account**: Sign in with Apple, or continue without signing in. (Debug/App Store builds only — Apple doesn't offer Sign in with Apple to Developer ID apps, so the Release build skips all sign-in UI. iCloud sync never depended on it.)
 - **Data**: JSON export and import (merge or replace), CSV export (sessions and segments), rolling local backups with restore, and a recovery flow if the data store can't be opened.
 - **Settings in the main window**: Settings is a page of the main window (the gear in the sidebar footer, ⌘, or the app menu's "Settings…"), not a separate window. Sections: General, Appearance, Overlay, Shortcuts, Profiles, Labels & Tags, Account, Data.
 - **Customizable keyboard shortcuts**: every app shortcut can be re-recorded, cleared or reset in Settings ▸ Shortcuts. Conflicts, combos reserved by macOS, shortcuts without ⌘ or ⌃ and ⇧ with a digit or symbol are rejected; changes apply immediately and survive relaunch. Defaults:
@@ -316,7 +316,7 @@ Changing the iCloud sync toggle takes effect at the next launch.
 
 **Privacy.** Session titles, learnings, takeaways, notes, learning points, segment focus and image captions are stored with CloudKit encryption (`@Attribute(.allowsCloudEncryption)`), so they are encrypted with keys from the user's iCloud Keychain. Sign in with Apple identifiers live in the Keychain (data-protection keychain, this device only, when the app is signed with a team). Logs mark user content as private.
 
-Signing out never deletes data. Neither does revoking Sign in with Apple; it only brings back the welcome screen.
+Release (Developer ID) builds have no Sign in with Apple — Apple doesn't allow the capability outside the App Store — so they show no welcome screen or sign-in button. To get it back you'd distribute through the Mac App Store or TestFlight instead. Signing out never deletes data. Neither does revoking Sign in with Apple; it only brings back the welcome screen.
 
 ## Known items to verify on a device
 

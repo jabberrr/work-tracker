@@ -346,7 +346,7 @@ struct RootView: View {
         case .signedIn:
             return auth.displayName ?? auth.email ?? "Signed in with Apple"
         case .guest, .signedOut, .unknown:
-            return "Guest"
+            return AuthService.isSignInAvailable ? "Guest" : "Account"
         }
     }
 

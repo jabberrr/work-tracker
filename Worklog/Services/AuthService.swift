@@ -26,8 +26,12 @@ final class AuthService {
         return false
     }
 
-    /// state == .signedOut
-    var needsWelcome: Bool { state == .signedOut }
+    /// Whether this build can use Sign in with Apple. Developer ID builds can't (Apple doesn't offer the capability
+    /// outside the App Store), so Release builds ship without the entitlement and skip all sign-in UI.
+    static var isSignInAvailable: Bool { Entitlements.hasSignInWithApple }
+
+    /// state == .signedOut, and only when Sign in with Apple is available (otherwise there is nothing to gate on).
+    var needsWelcome: Bool { state == .signedOut && AuthService.isSignInAvailable }
 
     private enum Keys {
         static let userID = "appleUserID"
