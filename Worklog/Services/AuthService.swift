@@ -26,8 +26,8 @@ final class AuthService {
         return false
     }
 
-    /// Whether this build can use Sign in with Apple. Developer ID builds can't (Apple doesn't offer the capability
-    /// outside the App Store), so Release builds ship without the entitlement and skip all sign-in UI.
+    /// Whether this build has the Sign in with Apple entitlement (Debug and App Store/TestFlight builds do; a build
+    /// signed without it — e.g. Developer ID, where Apple doesn't offer the capability — skips all sign-in UI).
     static var isSignInAvailable: Bool { Entitlements.hasSignInWithApple }
 
     /// state == .signedOut, and only when Sign in with Apple is available (otherwise there is nothing to gate on).

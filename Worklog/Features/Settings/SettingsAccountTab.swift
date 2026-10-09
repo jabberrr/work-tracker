@@ -135,7 +135,7 @@ struct SettingsAccountTab: View {
                     .frame(width: 220, height: 32)
                     .accessibilityLabel("Sign in with Apple")
             } else {
-                SettingsFootnote("Sign in with Apple isn’t available outside the App Store. iCloud sync uses this Mac’s Apple Account.")
+                SettingsFootnote("Sign in with Apple isn’t available in this build. iCloud sync uses this Mac’s Apple Account.")
             }
         }
     }

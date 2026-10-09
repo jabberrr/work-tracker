@@ -67,6 +67,10 @@
 			isa = PBXBuildFile;
 			fileRef = 70FB65231A246CD726062448;
 		};
+		11F34FF3CA75E251876C464E = {
+			isa = PBXBuildFile;
+			fileRef = 1B1074A3C96CB3073FCEAA16;
+		};
 		123301DC4B6A92225C50ADB4 = {
 			isa = PBXBuildFile;
 			fileRef = F7525FB0B705027B6770095C;
@@ -732,6 +736,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = ProfileOps.swift;
+			sourceTree = "<group>";
+		};
+		1B1074A3C96CB3073FCEAA16 = {
+			isa = PBXFileReference;
+			lastKnownFileType = text.xml;
+			path = PrivacyInfo.xcprivacy;
 			sourceTree = "<group>";
 		};
 		1CBF6F4772EA067183744442 = {
@@ -1933,6 +1943,7 @@
 			children = (
 				8C9A15B58A1AF432FCAEAF75,
 				A58EC387BE1C74C0F8D4AD7C,
+				1B1074A3C96CB3073FCEAA16,
 				3AC7C0EF6733FFCF1F8AF74C,
 				5703A89059558D64DDBF7FDE,
 				2A7F1B07BE65786ECC4E6B68,
@@ -2045,6 +2056,7 @@
 			buildActionMask = 2147483647;
 			files = (
 				74F737BE222EFBF1A07BFB16,
+				11F34FF3CA75E251876C464E,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

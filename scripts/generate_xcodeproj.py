@@ -24,7 +24,7 @@ DEVELOPMENT_TEAM = "6W4ZKDHBVD"  # requires a paid Apple Developer Program team 
 BUNDLE_ID = "app.dabora.worktracker"  # Release; Debug appends ".debug" (also AppConstants.bundleID)
 DEBUG_BUNDLE_ID = f"{BUNDLE_ID}.debug"  # own sandbox container, store, backups, defaults and keychain items
 MARKETING_VERSION = "1.0.1"  # CFBundleShortVersionString (Info.plist uses $(MARKETING_VERSION))
-CURRENT_PROJECT_VERSION = "1"  # CFBundleVersion
+CURRENT_PROJECT_VERSION = "1"  # CFBundleVersion — raise by 1 for every App Store Connect upload, then re-run this script
 DEPLOYMENT_TARGET = "14.0"
 
 # Files that live in the source tree but must not be compiled or copied as resources.
@@ -50,6 +50,7 @@ def file_type(name):
         ".swift": "sourcecode.swift",
         ".xcassets": "folder.assetcatalog",
         ".plist": "text.plist.xml",
+        ".xcprivacy": "text.xml",
         ".entitlements": "text.plist.entitlements",
         ".xcconfig": "text.xcconfig",
         ".json": "text.json",
@@ -298,7 +299,8 @@ def main():
     project_configs = config_list("project", [("Debug", project_debug), ("Release", project_release)])
     # Hardened runtime is for distribution; Debug leaves it off so the test bundle always loads into the host app.
     # Debug: its own bundle id (never opens the real store) and Worklog.entitlements (CloudKit Development).
-    # Release: WorklogRelease.entitlements (CloudKit Production; aps-environment is set to production by the Developer ID export) for Developer ID distribution.
+    # Release: WorklogRelease.entitlements (CloudKit Production) for App Store / TestFlight distribution; the App Store
+    # export re-signs with the distribution profile, which sets aps-environment to production.
     app_debug = dict(app_settings, ENABLE_HARDENED_RUNTIME="NO", PRODUCT_BUNDLE_IDENTIFIER=DEBUG_BUNDLE_ID)
     app_release = dict(app_settings, ENABLE_HARDENED_RUNTIME="YES",
                        CODE_SIGN_ENTITLEMENTS=f"{APP_DIR}/Resources/WorklogRelease.entitlements")

@@ -19,7 +19,7 @@ optional floating overlay give quick access while you work.
 - **Floating overlay**: a non-activating `NSPanel` that stays above other apps. Its layout is editable: in Settings ▸ Overlay you choose which elements it shows (label, timer, segment focus, controls, split, today's total, quick note, takeaway) and drag them into order on a live, real-size preview. Opacity, compact mode, the window level and the Spaces behaviour are configurable too.
 - **Themes**: Graphite (the default, a neutral sans-serif look) plus the optional Paper and Meadow themes, light/dark/system appearance and an accent colour.
 - **Images**: add them by picking files, pasting or dragging. They are downscaled to 2048 px and compressed, and sync through iCloud.
-- **Account**: Sign in with Apple, or continue without signing in. (Debug/App Store builds only — Apple doesn't offer Sign in with Apple to Developer ID apps, so the Release build skips all sign-in UI. iCloud sync never depended on it.)
+- **Account**: Sign in with Apple, or continue without signing in. iCloud sync uses the Mac's Apple Account either way.
 - **Data**: JSON export and import (merge or replace), CSV export (sessions and segments), rolling local backups with restore, and a recovery flow if the data store can't be opened.
 - **Settings in the main window**: Settings is a page of the main window (the gear in the sidebar footer, ⌘, or the app menu's "Settings…"), not a separate window. Sections: General, Appearance, Overlay, Shortcuts, Profiles, Labels & Tags, Account, Data.
 - **Customizable keyboard shortcuts**: every app shortcut can be re-recorded, cleared or reset in Settings ▸ Shortcuts. Conflicts, combos reserved by macOS, shortcuts without ⌘ or ⌃ and ⇧ with a digit or symbol are rejected; changes apply immediately and survive relaunch. Defaults:
@@ -56,7 +56,7 @@ Sign in with Apple). The two build configurations are deliberately different app
 | Configuration | Bundle id | Entitlements | CloudKit environment | Used by |
 |---|---|---|---|---|
 | Debug | `app.dabora.worktracker.debug` | `Worklog/Resources/Worklog.entitlements` | Development | Run (⌘R), tests |
-| Release | `app.dabora.worktracker` | `Worklog/Resources/WorklogRelease.entitlements` | Production (`com.apple.developer.icloud-container-environment`); production push is set by the Developer ID export | Archive |
+| Release | `app.dabora.worktracker` | `Worklog/Resources/WorklogRelease.entitlements` | Production (`com.apple.developer.icloud-container-environment`); production push is set by the App Store export | Archive → App Store Connect / TestFlight |
 
 Both use the iCloud container `iCloud.app.dabora.worktracker`. Because the bundle ids differ, a Debug run never opens
 the store, backups, settings or keychain items of the app you use every day; it starts with its own empty store
@@ -109,20 +109,24 @@ macOS from the build settings (`$(MARKETING_VERSION)`, `$(CURRENT_PROJECT_VERSIO
    2. In the CloudKit Console, check that `CD_WorkProfile` exists and that `CD_WorkSession`, `CD_WorkLabel` and `CD_WorkTag` have a `CD_profile` field.
    3. Deploy the schema to **Production**, then ship the release.
 
-5. **Developer ID distribution** (outside the Mac App Store): the Release configuration signs with
-   `WorklogRelease.entitlements` (`com.apple.developer.icloud-container-environment` = `Production`), so an archived
-   build talks to the Production database. Signing is automatic. The file's `com.apple.developer.aps-environment` is
-   `development` on purpose: the Archive build is signed with Xcode's development profile, which only allows that
-   value. Organizer ▸ **Distribute App** ▸ **Direct Distribution** then re-signs the app with your Developer ID
-   certificate and profile and sets `aps-environment` to `production`. Check the exported app with
-   `codesign -d --entitlements - Worklog.app` (step 7 of the checklist below).
-
-   *Fallback* if the exported app still shows `aps-environment` = `development`: sign Release manually. In
-   `scripts/generate_xcodeproj.py` (and Xcode ▸ Signing & Capabilities for Release) use *Manual* signing with the
-   *Developer ID Application* certificate and a Developer ID provisioning profile for `app.dabora.worktracker`
-   (iCloud, Push Notifications, Sign in with Apple), set `aps-environment` to `production` in
-   `WorklogRelease.entitlements`, then archive and export again. Without production push, CloudKit can't announce
-   changes from your other Macs; they arrive late.
+5. **App Store / TestFlight distribution.** Release signs with `WorklogRelease.entitlements`
+   (`com.apple.developer.icloud-container-environment` = `Production`, Sign in with Apple, iCloud, push). Signing is
+   automatic. The file's `aps-environment` is `development` on purpose: the Archive is signed with Xcode's development
+   profile, which only allows that value; Organizer ▸ **Distribute App** ▸ **App Store Connect** re-signs with the
+   Apple Distribution certificate and profile, which set it to `production`. (Developer ID / Direct Distribution
+   isn't possible: Apple doesn't offer Sign in with Apple to Developer ID apps.)
+   - **App record (once):** App Store Connect ▸ Apps ▸ **+ ▸ New App** ▸ platform *macOS*, bundle ID
+     `app.dabora.worktracker`, any SKU. The store name must be unique across the App Store (e.g. "Worklog – Work
+     Tracker" if "Worklog" is taken); the installed app is still called Worklog.
+   - **Build numbers:** every upload needs a higher build number. Raise `CURRENT_PROJECT_VERSION` in
+     `scripts/generate_xcodeproj.py` and re-run it (or change *Build* in Xcode ▸ target ▸ General, and mirror it in
+     the script before you next regenerate). Raise `MARKETING_VERSION` for user-visible releases.
+   - **Privacy manifest:** `Worklog/Resources/PrivacyInfo.xcprivacy` declares no tracking, no collected data, and the
+     two required-reason APIs the app uses (its own UserDefaults; modification dates of its own backup files).
+   - **TestFlight** builds expire after 90 days; upload a new build (or publish on the Mac App Store) before then.
+   - **Public App Store release** additionally needs a privacy policy URL, screenshots, and App Review. Review may
+     ask about account deletion (guideline 5.1.1(v)): Worklog creates no server account — Sign Out plus
+     Settings ▸ Data ▸ *Delete All Data* cover it; mention that in the review notes.
 
    **Environment guard.** Worklog records which CloudKit environment its store syncs with
    (`persistence.cloudKitEnvironment` in the app's defaults; a store from before this release counts as Development).
@@ -159,29 +163,31 @@ doesn't see that data).
    argument. If it prints a failure instead, run it once more (a brand-new Debug App ID can need a minute for iCloud).
 5. **Deploy the schema.** CloudKit Console ▸ `iCloud.app.dabora.worktracker` ▸ check `CD_WorkProfile` and the
    `CD_profile` fields exist ▸ **Deploy Schema Changes…** to Production. (Never reset Development.)
-6. **Archive and export.** Select *Any Mac*, Product ▸ **Archive** (Release, automatic signing), then Organizer ▸
-   **Distribute App** ▸ **Direct Distribution** (Developer ID + notarization) ▸ export.
-7. **Verify the signature.** Put the exported app in `/Applications` (replacing the old one), then:
+6. **Archive and upload.** Create the App Store Connect app record if you haven't (step 5 of *Signing* above).
+   Select *Any Mac*, Product ▸ **Archive** (Release, automatic signing), then Organizer ▸ **Distribute App** ▸
+   **App Store Connect** ▸ **Distribute** (upload). Wait for the "processing complete" email.
+7. **Install through TestFlight.** App Store Connect ▸ your app ▸ **TestFlight** ▸ add yourself to an *Internal
+   Testing* group (no review needed) and answer the export-compliance question if asked (the app declares no
+   non-exempt encryption). Install the **TestFlight** app from the Mac App Store, accept the invite, and click
+   **Install**. Remove or rename any other `Worklog.app` in `/Applications` first if TestFlight asks. Then check:
    ```sh
-   codesign --verify --deep --strict --verbose=2 /Applications/Worklog.app
-   codesign -d --entitlements - /Applications/Worklog.app   # icloud-container-environment Production, aps-environment production
-   spctl --assess --type execute --verbose /Applications/Worklog.app   # "accepted, source=Notarized Developer ID"
+   codesign -d --entitlements - /Applications/Worklog.app   # icloud-container-environment Production, aps-environment production, applesignin
    ```
-   `aps-environment` still `development`? Don't use this build; see the *Fallback* in step 5 of *Signing* above.
-8. **First launch.** Open it. (macOS may ask once whether Worklog may access its own data from the earlier build —
-   allow it.) The banner says "Saving to this Mac only — this data belongs to iCloud Development, not Production."
+8. **First launch.** Open it from TestFlight or /Applications. (macOS may ask once whether Worklog may access its
+   own data from the earlier build — allow it.) The banner says "Saving to this Mac only — this data belongs to iCloud Development, not Production."
    Settings ▸ Data ▸ **Move to iCloud Production…** ▸ **Back Up and Relaunch**. After the relaunch the banner says
    "Moved to iCloud Production: N sessions restored. Your previous copy is in the Recovered folder."
 9. **Verify.** Compare N with step 2, open a few sessions with images, and check Settings ▸ Account says
    "Syncing with iCloud" (Production). Keep `Recovered/Env-Development-…` and the pinned backup for a while.
-10. **Remove old copies.** List every copy of the app and delete all but `/Applications/Worklog.app` (archives in
-    Xcode's Organizer may stay). Never run a build from before this version again.
+10. **Remove old copies.** List every copy of the app and delete all but the TestFlight-installed
+    `/Applications/Worklog.app` (archives in Xcode's Organizer may stay). Never run a build from before this version
+    again.
     ```sh
     mdfind "kMDItemCFBundleIdentifier == 'app.dabora.worktracker'"
     ```
 
 **Every other Mac** (after step 9 on the first one): back up (steps 1–2), quit the old Worklog (step 3), install
-the same exported app, then Settings ▸ Data ▸ **Use iCloud Production Data…** ▸ **Back Up and Relaunch**. The banner
+the same build through TestFlight (same Apple Account), then Settings ▸ Data ▸ **Use iCloud Production Data…** ▸ **Back Up and Relaunch**. The banner
 says "Now using iCloud Production; downloading your data. Your previous copy is in the Recovered folder." Then do
 step 10. Only if that Mac has sessions the first Mac lacks, choose **Move to iCloud Production…** instead (step 8).
 
@@ -316,7 +322,7 @@ Changing the iCloud sync toggle takes effect at the next launch.
 
 **Privacy.** Session titles, learnings, takeaways, notes, learning points, segment focus and image captions are stored with CloudKit encryption (`@Attribute(.allowsCloudEncryption)`), so they are encrypted with keys from the user's iCloud Keychain. Sign in with Apple identifiers live in the Keychain (data-protection keychain, this device only, when the app is signed with a team). Logs mark user content as private.
 
-Release (Developer ID) builds have no Sign in with Apple — Apple doesn't allow the capability outside the App Store — so they show no welcome screen or sign-in button. To get it back you'd distribute through the Mac App Store or TestFlight instead. Signing out never deletes data. Neither does revoking Sign in with Apple; it only brings back the welcome screen.
+Signing out never deletes data. Neither does revoking Sign in with Apple; it only brings back the welcome screen.
 
 ## Known items to verify on a device
 

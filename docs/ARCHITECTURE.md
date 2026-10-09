@@ -1884,7 +1884,7 @@ Within views:
 </dict>
 </plist>
 ```
-`WorklogRelease.entitlements` adds `com.apple.developer.icloud-container-environment` = Production; its `aps-environment` stays `development` so the Archive build matches Xcode's automatic-signing development profile, and Organizer's Developer ID export rewrites it to `production` from the distribution profile (README *Safe first archive*, step 6 checks it). `WorklogLocal.entitlements` contains only the first three keys. With it, the app runs with "Sign to Run Locally". CloudKit then falls back to the local store, and Sign in with Apple shows its hint.
+`WorklogRelease.entitlements` adds `com.apple.developer.icloud-container-environment` = Production; its `aps-environment` stays `development` so the Archive build matches Xcode's automatic-signing development profile, and Organizer's App Store Connect export rewrites it to `production` from the Apple Distribution profile (README *Safe first archive*, step 7 checks it). Distribution is App Store / TestFlight only: Apple doesn't offer Sign in with Apple to Developer ID apps. `Worklog/Resources/PrivacyInfo.xcprivacy` is bundled as a resource (no tracking, no collected data; required-reason APIs: UserDefaults CA92.1, file timestamps C617.1). `WorklogLocal.entitlements` contains only the first three keys. With it, the app runs with "Sign to Run Locally". CloudKit then falls back to the local store, and Sign in with Apple shows its hint.
 
 ### 8.3 README (CORE) must explain
 1. Open `Worklog.xcodeproj` (or regenerate it with `scripts/generate_xcodeproj.py`; mirror any project-setting change there).
@@ -2463,7 +2463,7 @@ Round 4a made the app safe to use daily with real data; round 4b fixed functiona
 
 ### 14.1 Build and identity
 
-- Release: bundle id `app.dabora.worktracker`, `WorklogRelease.entitlements` (CloudKit **Production**; `aps-environment` `development` in the file, `production` after the Developer ID export), hardened runtime, Developer ID + notarization. Debug: `app.dabora.worktracker.debug`, `Worklog.entitlements` (CloudKit Development), its own sandbox container, store, defaults and keychain items.
+- Release: bundle id `app.dabora.worktracker`, `WorklogRelease.entitlements` (CloudKit **Production**; `aps-environment` `development` in the file, `production` after the App Store export), hardened runtime, distributed via App Store Connect / TestFlight. Debug: `app.dabora.worktracker.debug`, `Worklog.entitlements` (CloudKit Development), its own sandbox container, store, defaults and keychain items.
 - `Entitlements.cloudKitEnvironment` reads the signed `com.apple.developer.icloud-container-environment` (absent → Development); `Entitlements.cloudKitContainerIdentifier` reads the container from the entitlements.
 
 ### 14.2 Data safety (round 4a; never weaken these)
