@@ -24,7 +24,7 @@ DEVELOPMENT_TEAM = "6W4ZKDHBVD"  # requires a paid Apple Developer Program team 
 BUNDLE_ID = "app.dabora.worktracker"  # Release; Debug appends ".debug" (also AppConstants.bundleID)
 DEBUG_BUNDLE_ID = f"{BUNDLE_ID}.debug"  # own sandbox container, store, backups, defaults and keychain items
 MARKETING_VERSION = "1.0.1"  # CFBundleShortVersionString (Info.plist uses $(MARKETING_VERSION))
-CURRENT_PROJECT_VERSION = "1"  # CFBundleVersion — raise by 1 for every App Store Connect upload, then re-run this script
+CURRENT_PROJECT_VERSION = "2"  # CFBundleVersion — raise by 1 for every App Store Connect upload, then re-run this script
 DEPLOYMENT_TARGET = "14.0"
 
 # Files that live in the source tree but must not be compiled or copied as resources.
