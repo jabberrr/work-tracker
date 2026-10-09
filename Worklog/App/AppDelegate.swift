@@ -39,6 +39,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return .terminateNow
     }
 
+    /// Everything is saved and backed up by now (`applicationShouldTerminate`). AppKit calls `exit()` after this, and
+    /// `exit()`'s teardown handlers can pull the store out from under CloudKit mirroring while it is still saving on
+    /// its own queue: "This NSPersistentStoreCoordinator has no persistent stores (unknown). It cannot perform a save
+    /// operation." Registered last, this handler runs first and ends the process before that teardown starts.
+    /// (Saved data is safe either way: SQLite commits are durable, and pending sync work resumes at the next launch.)
+    func applicationWillTerminate(_ notification: Notification) {
+        atexit {
+            fflush(stdout)
+            fflush(stderr)
+            _exit(EXIT_SUCCESS)
+        }
+    }
+
     /// M4: after an iCloud account change, warn once if the store lost most of its sessions.
     func applicationDidBecomeActive(_ notification: Notification) {
         services.checkDataShrinkage()
