@@ -182,6 +182,14 @@ final class PersistenceController {
         isPreview = inMemory
         self.defaults = defaults
 
+        #if DEBUG
+        // One-shot tool: push the schema to the CloudKit Development environment, report, and quit. The real store is
+        // never opened in this mode.
+        if !inMemory, PersistenceController.wantsCloudKitSchemaInitialization {
+            PersistenceController.initializeCloudKitSchemaAndExit(containerIdentifier: containerID)
+        }
+        #endif
+
         if inMemory {
             container = PersistenceController.makeInMemoryContainer(schema: schema)
             storeMode = .inMemory(reason: "Preview")
@@ -262,11 +270,6 @@ final class PersistenceController {
 
         switch decision {
         case .openCloudKit(let target):
-            #if DEBUG
-            if wantsCloudKitSchemaInitialization {
-                initializeCloudKitSchema(containerIdentifier: containerID)
-            }
-            #endif
             do {
                 let config = ModelConfiguration("Worklog", schema: schema, url: storeURL,
                                                 cloudKitDatabase: .private(containerID))
@@ -530,38 +533,50 @@ final class PersistenceController {
     }
 
     /// Loads the SwiftData model into a throwaway NSPersistentCloudKitContainer (empty store in a temporary folder, so
-    /// the real store is never touched) and calls `initializeCloudKitSchema()`. Errors are logged, never fatal.
-    static func initializeCloudKitSchema(containerIdentifier: String) {
+    /// the real store is never touched), calls `initializeCloudKitSchema()`, prints the result and QUITS the app.
+    ///
+    /// Why quit instead of cleaning up: once loaded, the container's CloudKit mirroring keeps working on background
+    /// queues. Removing its store (or deleting its folder) underneath it crashes with "This NSPersistentStoreCoordinator
+    /// has no persistent stores". Exiting right away avoids that and keeps this tool separate from normal launches.
+    /// The temporary folder is left for the system to clean up.
+    static func initializeCloudKitSchemaAndExit(containerIdentifier: String) -> Never {
         let folder = FileManager.default.temporaryDirectory
             .appending(path: "WorklogSchemaInit-\(UUID().uuidString)", directoryHint: .isDirectory)
-        defer { try? FileManager.default.removeItem(at: folder) }
+        var succeeded = false
+        // Held until exit: letting the container deallocate would also tear down its mirroring mid-flight.
+        var keepAlive: NSPersistentCloudKitContainer?
         do {
             try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-            try autoreleasepool {
-                guard let model = NSManagedObjectModel.makeManagedObjectModel(for: WorklogSchema.models) else {
-                    Log.persistence.error("CloudKit schema: couldn't build the managed object model")
-                    return
-                }
-                let description = NSPersistentStoreDescription(url: folder.appending(path: "Schema.store"))
-                description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
-                    containerIdentifier: containerIdentifier)
-                description.shouldAddStoreAsynchronously = false
-                let container = NSPersistentCloudKitContainer(name: "WorklogSchema", managedObjectModel: model)
-                container.persistentStoreDescriptions = [description]
-                var loadError: Error?
-                container.loadPersistentStores { _, error in loadError = error }
-                if let loadError { throw loadError }
-                try container.initializeCloudKitSchema(options: [])
-                for store in container.persistentStoreCoordinator.persistentStores {
-                    try container.persistentStoreCoordinator.remove(store)
-                }
+            guard let model = NSManagedObjectModel.makeManagedObjectModel(for: WorklogSchema.models) else {
+                throw CocoaError(.coreData, userInfo: [NSLocalizedDescriptionKey: "Couldn't build the managed object model."])
             }
+            let description = NSPersistentStoreDescription(url: folder.appending(path: "Schema.store"))
+            description.cloudKitContainerOptions = NSPersistentCloudKitContainerOptions(
+                containerIdentifier: containerIdentifier)
+            description.shouldAddStoreAsynchronously = false
+            let container = NSPersistentCloudKitContainer(name: "WorklogSchema", managedObjectModel: model)
+            keepAlive = container
+            container.persistentStoreDescriptions = [description]
+            var loadError: Error?
+            container.loadPersistentStores { _, error in loadError = error }
+            if let loadError { throw loadError }
+            try container.initializeCloudKitSchema(options: [])
+            succeeded = true
             Log.persistence.info("CloudKit schema initialized in the Development environment")
+            print("""
+
+            ✅ CloudKit schema initialized in the Development environment.
+               Worklog quits now. Remove the -initializeCloudKitSchema launch argument, then deploy the schema
+               to Production in the CloudKit Console.
+
+            """)
         } catch {
             let details = schemaErrorDetails(error)
             Log.persistence.error("CloudKit schema initialization failed: \(details, privacy: .public)")
-            // Also on stdout so it shows in Xcode's console unfiltered and can be copied in full.
-            print("CloudKit schema initialization failed:\n\(details)")
+            print("CloudKit schema initialization failed:\n\(details)\n\nWorklog quits now.")
+        }
+        withExtendedLifetime(keepAlive) {
+            exit(succeeded ? EXIT_SUCCESS : EXIT_FAILURE)
         }
     }
 

@@ -105,7 +105,7 @@ macOS from the build settings (`$(MARKETING_VERSION)`, `$(CURRENT_PROJECT_VERSIO
    stores that mirror it. Your data leaves Development only through *Move to iCloud Production* (below).
 
    **Before shipping a model change (checklist).** A development build only creates the record types and fields for values it actually saved, so a field nobody has used yet (an optional relationship, an archived flag) can be missing from the schema you deploy.
-   1. Build the Debug configuration and run it once with the launch argument `-initializeCloudKitSchema` (Xcode ▸ Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments). Before opening its store, Worklog loads the model into a throwaway, empty store and calls `initializeCloudKitSchema()`, which creates every record type and field in the **Development** environment. The console log says "CloudKit schema initialized…" (or why it failed). Your data isn't touched.
+   1. Build the Debug configuration and run it once with the launch argument `-initializeCloudKitSchema` (Xcode ▸ Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments). Before opening its store, Worklog loads the model into a throwaway, empty store and calls `initializeCloudKitSchema()`, which creates every record type and field in the **Development** environment. The console says "CloudKit schema initialized…" (or prints the full error) and **the app then quits by itself** — that's expected; it never opens a store in this mode. Remove the argument afterwards. Your data isn't touched.
    2. In the CloudKit Console, check that `CD_WorkProfile` exists and that `CD_WorkSession`, `CD_WorkLabel` and `CD_WorkTag` have a `CD_profile` field.
    3. Deploy the schema to **Production**, then ship the release.
 
@@ -154,8 +154,9 @@ doesn't see that data).
    choosing anything): it opens your store local-only and changes nothing.
 3. **Quit the old Worklog completely**: Worklog ▸ Quit Worklog (⌘Q). Its menu bar icon must be gone too.
 4. **Initialize the schema.** Run the **Debug** configuration once with the launch argument `-initializeCloudKitSchema`
-   (Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments). It starts with an empty store of its own — expected; your real
-   store isn't touched. Quit it and remove the argument afterwards.
+   (Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments). The console prints "✅ CloudKit schema initialized…" and the
+   app **quits by itself** (expected — it opens no store in this mode; your data isn't touched). Then untick the
+   argument. If it prints a failure instead, run it once more (a brand-new Debug App ID can need a minute for iCloud).
 5. **Deploy the schema.** CloudKit Console ▸ `iCloud.app.dabora.worktracker` ▸ check `CD_WorkProfile` and the
    `CD_profile` fields exist ▸ **Deploy Schema Changes…** to Production. (Never reset Development.)
 6. **Archive and export.** Select *Any Mac*, Product ▸ **Archive** (Release, automatic signing), then Organizer ▸

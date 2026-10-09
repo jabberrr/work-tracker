@@ -215,7 +215,9 @@ struct ResetToDefaultButton: View {
 /// The class is not actor-isolated on purpose (so `deinit` can clean up); it is only used on the main thread
 /// (views, the local event monitor and a `.main`-queue observer). The shared `active` slot and the methods that
 /// touch it are `@MainActor`.
-private final class ShortcutRecorderMonitor {
+/// Only ever used on the main thread (AppKit event monitor + main-queue observer), so it is marked
+/// `@unchecked Sendable` to let the @Sendable callbacks hold it; `deinit` must stay nonisolated to remove the monitor.
+private final class ShortcutRecorderMonitor: @unchecked Sendable {
     @MainActor private static weak var active: ShortcutRecorderMonitor?
 
     /// The window hosting the recorder (set by `ShortcutRecorderWindowReader`).
