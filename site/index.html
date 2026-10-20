@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Worklog Support</title>
+<meta name="description" content="Help for Worklog for Mac: getting started, sync and backups, shortcuts, troubleshooting and contact.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,500;7..72,600&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+  /* Layout: one readable column; contact card first, then a jump list, then FAQ groups. Shares tokens with privacy.html. */
+  :root {
+    --bg: #f6f7f8;
+    --surface: #ffffff;
+    --ink: #1c2329;
+    --muted: #59636c;
+    --rule: #dde2e6;
+    --accent: #2f6f73;
+    --accent-soft: #e3efef;
+    --display: "Literata", Georgia, "Times New Roman", serif;
+    --body: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+    color-scheme: light;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12171b; --surface: #1a2126; --ink: #e6eaed; --muted: #9aa5ae;
+      --rule: #2b343a; --accent: #7cc2c4; --accent-soft: #1f3335; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12171b; --surface: #1a2126; --ink: #e6eaed; --muted: #9aa5ae;
+    --rule: #2b343a; --accent: #7cc2c4; --accent-soft: #1f3335; color-scheme: dark;
+  }
+
+  * { box-sizing: border-box; }
+  html { -webkit-text-size-adjust: 100%; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 48px 72px;
+  }
+  main { max-width: 720px; margin: 0 auto; display: grid; gap: 44px; }
+
+  header { display: grid; gap: 10px; }
+  .app { font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-family: var(--display); font-weight: 600; font-size: clamp(30px, 6vw, 40px); line-height: 1.15; margin: 0; text-wrap: balance; }
+  .lede { color: var(--muted); margin: 0; max-width: 60ch; }
+
+  .contact {
+    background: var(--accent-soft);
+    border-radius: 10px;
+    padding: 20px 22px;
+    display: grid;
+    gap: 10px;
+  }
+  .contact h2 { font-family: var(--body); font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin: 0; }
+  .contact-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px; }
+  .email { font-family: var(--mono); font-size: 16px; user-select: all; min-width: 0; overflow-wrap: anywhere; }
+  .contact button {
+    font: 500 14px var(--body); color: var(--accent); background: var(--surface);
+    border: 1px solid var(--accent); border-radius: 6px; padding: 5px 12px; cursor: pointer;
+  }
+  .contact button:hover { background: var(--bg); }
+  .contact p { margin: 0; color: var(--ink); }
+
+  nav.jump { display: flex; flex-wrap: wrap; gap: 8px; }
+  nav.jump a {
+    font-size: 14px; text-decoration: none; color: var(--ink);
+    border: 1px solid var(--rule); background: var(--surface); border-radius: 999px; padding: 4px 12px;
+  }
+  nav.jump a:hover { border-color: var(--accent); color: var(--accent); }
+
+  section { display: grid; gap: 18px; scroll-margin-top: 24px; }
+  section + section { border-top: 1px solid var(--rule); padding-top: 36px; }
+  h2 { font-family: var(--display); font-weight: 500; font-size: 24px; line-height: 1.3; margin: 0; text-wrap: balance; }
+  .qa { display: grid; gap: 6px; }
+  h3 { font-family: var(--body); font-weight: 600; font-size: 16px; line-height: 1.4; margin: 0; }
+  p, ul, ol { margin: 0; }
+  ul.list, ol.steps { padding-left: 22px; display: grid; gap: 6px; }
+  .path {
+    font-family: var(--mono); font-size: 13.5px; background: var(--surface); border: 1px solid var(--rule);
+    border-radius: 5px; padding: 1px 6px;
+  }
+  kbd {
+    font-family: var(--mono); font-size: 13px; background: var(--surface); border: 1px solid var(--rule);
+    border-bottom-width: 2px; border-radius: 5px; padding: 0 6px; white-space: nowrap;
+  }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  .table-wrap { overflow-x: auto; border: 1px solid var(--rule); border-radius: 10px; background: var(--surface); }
+  table { border-collapse: collapse; width: 100%; font-size: 15px; }
+  th, td { text-align: left; padding: 9px 14px; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  tr:last-child td { border-bottom: none; }
+  th { font-size: 12px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); }
+  td:last-child { white-space: nowrap; }
+  .note { color: var(--muted); font-size: 14px; }
+
+  dl.facts { display: grid; grid-template-columns: max-content 1fr; gap: 6px 18px; margin: 0; }
+  dl.facts dt { color: var(--muted); }
+  dl.facts dd { margin: 0; font-variant-numeric: tabular-nums; }
+
+  footer { color: var(--muted); font-size: 14px; display: flex; flex-wrap: wrap; gap: 6px 18px; }
+  @media (max-width: 480px) { dl.facts { grid-template-columns: 1fr; gap: 0 0; } dl.facts dd { margin-bottom: 8px; } }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="app">Worklog for Mac</div>
+    <h1>Support</h1>
+    <p class="lede">Help with tracking sessions, syncing between Macs, backups and settings. If your question isn't here, email me.</p>
+  </header>
+
+  <div class="contact" id="contact">
+    <h2>Contact</h2>
+    <div class="contact-row">
+      <span class="email" id="email">jrdabora@icloud.com</span>
+      <button type="button" id="copy-email">Copy email</button>
+    </div>
+    <p>I usually reply within a few days. Please include your macOS version, your Worklog version (<span class="path">Worklog › About Worklog</span>), what you did and what happened. A screenshot helps.</p>
+  </div>
+
+  <nav class="jump" aria-label="On this page">
+    <a href="#start">Getting started</a>
+    <a href="#sessions">Sessions</a>
+    <a href="#sync">Sync &amp; backups</a>
+    <a href="#account">Account</a>
+    <a href="#customize">Customizing</a>
+    <a href="#shortcuts">Shortcuts</a>
+    <a href="#troubleshooting">Troubleshooting</a>
+    <a href="#about">About</a>
+  </nav>
+
+  <section id="start">
+    <h2>Getting started</h2>
+    <ol class="steps">
+      <li>Open Worklog. Sign in with Apple, or choose <strong>Continue as Guest</strong>. Both work the same, and you can sign in later.</li>
+      <li>On <strong>Today</strong>, type what you're working on, pick a label and click <strong>Start session</strong>. You can also start from the menu bar, the overlay, or with <kbd>⇧⌘S</kbd>.</li>
+      <li>While you work, add notes (each gets a timestamp) and click <strong>Split</strong> when you switch to something else.</li>
+      <li>Click <strong>Stop</strong>. Give the session a title, add a takeaway for next time and any learnings, then click <strong>Save</strong>.</li>
+    </ol>
+    <p>Your sessions are in <strong>History</strong>, your learning points in <strong>Learning</strong>, and totals and streaks in <strong>Stats</strong>.</p>
+  </section>
+
+  <section id="sessions">
+    <h2>Sessions</h2>
+    <div class="qa">
+      <h3>I forgot to split when I switched tasks. Can I fix it?</h3>
+      <p>Yes. Open the session in History, then under <strong>Segments</strong> click <strong>Split…</strong> and choose the time you switched. A segment's menu also has <strong>Merge with Next</strong>, <strong>Move End Time…</strong> and <strong>Delete Segment…</strong>.</p>
+    </div>
+    <div class="qa">
+      <h3>How do I change a session's start or end time?</h3>
+      <p>Open it in History and choose <strong>Edit Start and End…</strong> from the more menu.</p>
+    </div>
+    <div class="qa">
+      <h3>How do I add images?</h3>
+      <p>Drag them in, paste them with <kbd>⌘V</kbd>, or click <strong>Add images</strong>. This works in the live Notes section and in a session's <strong>Images</strong> section in History. Each image can have a caption. Images can be up to 100 MB each.</p>
+    </div>
+    <div class="qa">
+      <h3>What is the takeaway?</h3>
+      <p>A one-line note for your next session. It shows in the overlay and the menu bar until your next session's review. To keep it until you replace it, turn off <span class="path">Settings › General › Show only in the next session</span>.</p>
+    </div>
+    <div class="qa">
+      <h3>What do the mastery dots mean?</h3>
+      <p>They show how well you know a learning point, from 1 to 5. Set them when you add the point. The Learning page charts your average mastery over time for each tag.</p>
+    </div>
+    <div class="qa">
+      <h3>Does Worklog pause by itself?</h3>
+      <p>It pauses when your Mac sleeps, and when Worklog quits if you turn on <strong>Pause when Worklog quits</strong>. Both settings are in <span class="path">Settings › General</span>. It never resumes on its own. After 10 hours of running it asks <strong>Still working?</strong>, and you can change that time in the same place.</p>
+    </div>
+    <div class="qa">
+      <h3>What are profiles?</h3>
+      <p>Separate spaces, like Work and Personal, each with its own sessions, stats and labels. Switch profiles at the bottom of the sidebar. A label or tag can be available in all profiles or in one only (<span class="path">Settings › Labels &amp; Tags › Available in</span>).</p>
+    </div>
+  </section>
+
+  <section id="sync">
+    <h2>Sync &amp; backups</h2>
+    <div class="qa">
+      <h3>How do I sync between my Macs?</h3>
+      <p>Turn on <span class="path">Settings › Account › Sync with iCloud</span> on each Mac and reopen Worklog. Every Mac has to be signed in to the same Apple Account in System Settings. The first sync can take a few minutes.</p>
+    </div>
+    <div class="qa">
+      <h3>My sessions aren't showing on my other Mac.</h3>
+      <ul class="list">
+        <li>Check that both Macs use the same Apple Account and have internet.</li>
+        <li>Open <span class="path">Settings › Account</span> and check that the status says <strong>Syncing with iCloud</strong>, not <strong>Saving to this Mac only</strong>.</li>
+        <li>Leave Worklog open for a minute, then check again. A session that's still running shows as <strong>Running on another Mac</strong>.</li>
+      </ul>
+    </div>
+    <div class="qa">
+      <h3>What does “Saving to this Mac only” mean?</h3>
+      <p>Worklog is still saving everything, but only on this Mac for now, usually because iCloud isn't available. Click <strong>Details…</strong> to see why. Your data syncs again once iCloud is available.</p>
+    </div>
+    <div class="qa">
+      <h3>Are my sessions backed up?</h3>
+      <p>Yes. Worklog backs up your data on this Mac every hour after changes, and when it quits. It keeps the latest 10 backups. Change the schedule, how many backups to keep and whether to include images in <span class="path">Settings › Data</span>, or click <strong>Back Up Now</strong>.</p>
+    </div>
+    <div class="qa">
+      <h3>How do I restore a backup?</h3>
+      <p>In <span class="path">Settings › Data</span>, find the backup and click <strong>Restore…</strong>. Choose <strong>Merge with current data</strong> or <strong>Replace current data</strong>. Your current data is backed up first, so you can go back.</p>
+    </div>
+    <div class="qa">
+      <h3>Can I export my data?</h3>
+      <p>Yes, from <span class="path">Settings › Data › Export</span>: <strong>Export JSON…</strong> (everything, optionally with images; you can import it again later), <strong>Export Sessions CSV…</strong> or <strong>Export Segments CSV…</strong> (for spreadsheets). Exports include all profiles.</p>
+    </div>
+    <div class="qa">
+      <h3>How do I delete all my data?</h3>
+      <p>In <span class="path">Settings › Data</span>, click <strong>Delete All Data…</strong>. With iCloud sync on, this also deletes your data in iCloud and on your other Macs. A backup is saved first; delete it from the backups list if you don't want it. See the <a href="privacy.html">Privacy Policy</a> for more.</p>
+    </div>
+  </section>
+
+  <section id="account">
+    <h2>Account</h2>
+    <div class="qa">
+      <h3>Do I have to sign in?</h3>
+      <p>No. <strong>Continue as Guest</strong> works the same. Sync uses the Apple Account your Mac is signed in to, whether or not you sign in to Worklog.</p>
+    </div>
+    <div class="qa">
+      <h3>Does signing out delete anything?</h3>
+      <p>No. Signing in doesn't move your data, and signing out deletes nothing. Sign out in <span class="path">Settings › Account</span>.</p>
+    </div>
+    <div class="qa">
+      <h3>What does Worklog do with my data?</h3>
+      <p>Nothing. It doesn't collect anything. Your data stays on your Mac and in your own iCloud. See the <a href="privacy.html">Privacy Policy</a>.</p>
+    </div>
+  </section>
+
+  <section id="customize">
+    <h2>Customizing</h2>
+    <div class="qa">
+      <h3>How do I change the look?</h3>
+      <p>In <span class="path">Settings › Appearance</span>, pick a theme (Graphite, Paper or Meadow), light or dark mode, an accent color and a text size.</p>
+    </div>
+    <div class="qa">
+      <h3>How do I customize the overlay?</h3>
+      <p>In <span class="path">Settings › Overlay › Layout</span>, click <strong>Edit</strong>. Drag elements to move them, drag an element's right edge to resize it, and use <strong>Add</strong> to bring back an element you removed. Click <strong>Done</strong> when you're finished, or <strong>Reset Layout</strong> to start over. You can also change opacity, compact mode, keep on top and show on all Spaces there.</p>
+    </div>
+    <div class="qa">
+      <h3>Can I hide the Dock icon?</h3>
+      <p>Turn on <span class="path">Settings › General › Hide Dock icon when the window closes</span>. Reopen the window from the menu bar icon.</p>
+    </div>
+  </section>
+
+  <section id="shortcuts">
+    <h2>Keyboard shortcuts</h2>
+    <p>Change any shortcut in <span class="path">Settings › Shortcuts</span>, or click <strong>Reset All</strong> to go back to the defaults. Shortcuts work while Worklog is the active app.</p>
+    <div class="table-wrap">
+      <table>
+        <thead><tr><th scope="col">Action</th><th scope="col">Default</th></tr></thead>
+        <tbody>
+          <tr><td>Start / Stop Session</td><td><kbd>⇧⌘S</kbd></td></tr>
+          <tr><td>Pause / Resume</td><td><kbd>⇧⌘P</kbd></td></tr>
+          <tr><td>Add Note</td><td><kbd>⇧⌘N</kbd></td></tr>
+          <tr><td>Split Segment</td><td><kbd>⇧⌘D</kbd></td></tr>
+          <tr><td>Toggle Overlay</td><td><kbd>⇧⌘O</kbd></td></tr>
+          <tr><td>Show Today, History, Learning, Stats</td><td><kbd>⌘1</kbd>–<kbd>⌘4</kbd></td></tr>
+          <tr><td>Find in History</td><td><kbd>⌘F</kbd></td></tr>
+          <tr><td>Save Session Review</td><td><kbd>⌘↩</kbd></td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p class="note">Discard Session and Switch to Next Profile have no default; you can add one. ⌘, ⌘Q, ⌘W, Esc, Return and ⌫ can't be changed.</p>
+  </section>
+
+  <section id="troubleshooting">
+    <h2>Troubleshooting</h2>
+    <div class="qa">
+      <h3>The menu bar icon is missing.</h3>
+      <p>Turn on <span class="path">Settings › General › Show in menu bar</span>. If it's on but you still can't see it, your menu bar may be full; quit other menu bar apps or make room in <span class="path">System Settings › Menu Bar</span>.</p>
+    </div>
+    <div class="qa">
+      <h3>The overlay doesn't appear.</h3>
+      <p>Turn on <span class="path">Settings › Overlay › Show overlay</span>, or press <kbd>⇧⌘O</kbd>. If <strong>Hide when idle</strong> is on, it only shows while a session runs.</p>
+    </div>
+    <div class="qa">
+      <h3>A shortcut doesn't work.</h3>
+      <p>Shortcuts only work while Worklog is the active app. If another app uses the same keys, record a different combination in <span class="path">Settings › Shortcuts</span>.</p>
+    </div>
+    <div class="qa">
+      <h3>Some of my data seems to be missing.</h3>
+      <p>This can happen after changing the Apple Account on your Mac, since each account has its own iCloud data. Switch back to the original account, or restore a recent backup from <span class="path">Settings › Data</span>. If that doesn't help, email me before deleting anything.</p>
+    </div>
+  </section>
+
+  <section id="about">
+    <h2>About</h2>
+    <dl class="facts">
+      <dt>Current version</dt><dd>1.0.1</dd>
+      <dt>Requires</dt><dd>macOS 14 Sonoma or later</dd>
+      <dt>Privacy</dt><dd><a href="privacy.html">Privacy Policy</a>: no data collected</dd>
+    </dl>
+  </section>
+
+  <footer>
+    <span>© 2026 Jasper Dabora</span>
+    <a href="privacy.html">Privacy Policy</a>
+  </footer>
+</main>
+
+<script>
+  document.getElementById("copy-email").addEventListener("click", function () {
+    var button = this;
+    var node = document.getElementById("email");
+    function selectText() {
+      var range = document.createRange();
+      range.selectNodeContents(node);
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    try {
+      navigator.clipboard.writeText(node.textContent).then(function () {
+        button.textContent = "Copied";
+        setTimeout(function () { button.textContent = "Copy email"; }, 1600);
+      }, selectText);
+    } catch (e) {
+      selectText();
+    }
+  });
+</script>
+</body>
+</html>

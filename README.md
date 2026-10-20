@@ -124,7 +124,7 @@ macOS from the build settings (`$(MARKETING_VERSION)`, `$(CURRENT_PROJECT_VERSIO
    - **Privacy manifest:** `Worklog/Resources/PrivacyInfo.xcprivacy` declares no tracking, no collected data, and the
      two required-reason APIs the app uses (its own UserDefaults; modification dates of its own backup files).
    - **TestFlight** builds expire after 90 days; upload a new build (or publish on the Mac App Store) before then.
-   - **Public App Store release** additionally needs a privacy policy URL (text in `PRIVACY.md`; App Privacy answer: *Data Not Collected*), screenshots, and App Review. Review may
+   - **Public App Store release** additionally needs a privacy policy URL (`site/privacy.html`, also `PRIVACY.md`; support URL: `site/index.html`; App Privacy answer: *Data Not Collected*), screenshots, and App Review. Review may
      ask about account deletion (guideline 5.1.1(v)): Worklog creates no server account — Sign Out plus
      Settings ▸ Data ▸ *Delete All Data* cover it; mention that in the review notes.
 

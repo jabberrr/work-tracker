@@ -1,0 +1,197 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Worklog Privacy Policy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Literata:opsz,wght@7..72,500;7..72,600&family=Instrument+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400&display=swap">
+<style>
+  /* Layout: one readable column, a summary card up top, numbered-free sections (the order isn't a process). */
+  :root {
+    color-scheme: light;
+    --bg: #f6f7f8;
+    --surface: #ffffff;
+    --ink: #1c2329;
+    --muted: #59636c;
+    --rule: #dde2e6;
+    --accent: #2f6f73;
+    --accent-soft: #e3efef;
+    --display: "Literata", Georgia, "Times New Roman", serif;
+    --body: "Instrument Sans", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    --mono: "JetBrains Mono", ui-monospace, Menlo, Consolas, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #12171b; --surface: #1a2126; --ink: #e6eaed; --muted: #9aa5ae;
+      --rule: #2b343a; --accent: #7cc2c4; --accent-soft: #1f3335; color-scheme: dark;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #12171b; --surface: #1a2126; --ink: #e6eaed; --muted: #9aa5ae;
+    --rule: #2b343a; --accent: #7cc2c4; --accent-soft: #1f3335; color-scheme: dark;
+  }
+
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font-family: var(--body);
+    font-size: 16px;
+    line-height: 1.6;
+    padding-left: max(16px, env(safe-area-inset-left, 0px));
+    padding-right: max(16px, env(safe-area-inset-right, 0px));
+    padding-block: 48px 72px;
+  }
+  main { max-width: 680px; margin: 0 auto; display: grid; gap: 40px; }
+
+  header { display: grid; gap: 10px; }
+  .app { font-family: var(--mono); font-size: 13px; letter-spacing: 0.06em; text-transform: uppercase; color: var(--accent); }
+  h1 { font-family: var(--display); font-weight: 600; font-size: clamp(30px, 6vw, 40px); line-height: 1.15; margin: 0; text-wrap: balance; }
+  .meta { color: var(--muted); font-size: 14px; margin: 0; }
+
+  .glance {
+    background: var(--accent-soft);
+    border-radius: 10px;
+    padding: 20px 22px;
+    display: grid;
+    gap: 12px;
+  }
+  .glance h2 { font-family: var(--body); font-size: 13px; font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; color: var(--accent); margin: 0; }
+  .glance ul { margin: 0; padding: 0; list-style: none; display: grid; gap: 8px; }
+  .glance li { display: grid; grid-template-columns: 18px 1fr; gap: 10px; align-items: baseline; }
+  .glance li::before { content: "✓"; color: var(--accent); font-weight: 600; }
+
+  section { display: grid; gap: 12px; }
+  section + section { border-top: 1px solid var(--rule); padding-top: 32px; }
+  h2 { font-family: var(--display); font-weight: 500; font-size: 22px; line-height: 1.3; margin: 0; text-wrap: balance; }
+  p, ul { margin: 0; }
+  ul.list { padding-left: 20px; display: grid; gap: 6px; }
+  strong { font-weight: 600; }
+  .path { font-family: var(--mono); font-size: 14px; background: var(--surface); border: 1px solid var(--rule); border-radius: 5px; padding: 1px 6px; overflow-wrap: anywhere; }
+  a { color: var(--accent); text-underline-offset: 3px; }
+  a:focus-visible, button:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 4px; }
+
+  .contact {
+    display: flex; flex-wrap: wrap; align-items: center; gap: 10px 14px;
+    background: var(--surface); border: 1px solid var(--rule); border-radius: 10px; padding: 14px 16px;
+  }
+  .email { font-family: var(--mono); font-size: 15px; user-select: all; min-width: 0; overflow-wrap: anywhere; }
+  .contact button {
+    font: 500 14px var(--body); color: var(--accent); background: transparent;
+    border: 1px solid var(--accent); border-radius: 6px; padding: 5px 12px; cursor: pointer;
+  }
+  .contact button:hover { background: var(--accent-soft); }
+  footer { color: var(--muted); font-size: 14px; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  footer { display: flex; flex-wrap: wrap; gap: 6px 18px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="app">Worklog for Mac</div>
+    <h1>Privacy Policy</h1>
+    <p class="meta">Effective October 20, 2026</p>
+  </header>
+
+  <div class="glance" role="note">
+    <h2>In short</h2>
+    <ul>
+      <li>Worklog doesn't collect any of your data. The developer can't see your sessions, notes, images or account.</li>
+      <li>Your data stays on your Mac and, if you turn on iCloud sync, in your own private iCloud.</li>
+      <li>No analytics, no ads, no tracking, no third-party services.</li>
+    </ul>
+  </div>
+
+  <section>
+    <h2>Who this covers</h2>
+    <p>This policy covers Worklog, a macOS app for tracking work sessions, made by Jasper Dabora (“I”, “me”). Worklog has no servers, website accounts or backend of its own.</p>
+  </section>
+
+  <section>
+    <h2>Information I collect</h2>
+    <p><strong>None.</strong> Worklog doesn't send anything you create, or anything about how you use the app, to me or to anyone else. There are no analytics or advertising tools and no third-party code that collects data, and the app doesn't track you across apps or websites.</p>
+  </section>
+
+  <section>
+    <h2>Where your data is kept</h2>
+    <p>Everything you create in Worklog stays on your devices or in your iCloud. That includes sessions, segments, titles, labels, tags, profiles, notes, learnings, takeaways and images.</p>
+    <ul class="list">
+      <li><strong>On your Mac.</strong> Data is saved in Worklog's private app container, which other apps can't read.</li>
+      <li><strong>In your iCloud, if you turn on sync.</strong> Worklog uses Apple's CloudKit to keep your Macs in sync through the private database of your Apple Account. Only you can access that database; I can't. Text you write (titles, notes, learnings, takeaways and image captions) is also encrypted with keys from your iCloud Keychain. Apple's <a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener">Privacy Policy</a> covers how iCloud stores data.</li>
+      <li><strong>Backups and exports.</strong> Automatic backups are saved on your Mac inside Worklog's container. Exports are saved only where you choose.</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>Sign in with Apple</h2>
+    <p>Signing in is optional. If you sign in, Apple gives Worklog an anonymous user identifier. The first time you sign in, it may also share your name and email (or a private relay address if you choose <strong>Hide My Email</strong>). Worklog stores these only in your Mac's Keychain, to show who is signed in. They are never sent to me or to any server.</p>
+    <p>Signing out removes the identifier from Worklog. You can also stop using Sign in with Apple for Worklog in <span class="path">System Settings › Apple Account › Sign in with Apple</span>.</p>
+  </section>
+
+  <section>
+    <h2>Diagnostics</h2>
+    <p>Worklog doesn't collect crash or usage reports. If you choose to share analytics with app developers in macOS, Apple may send me anonymous crash reports. Apple's settings control this, not Worklog. You can turn it off in <span class="path">System Settings › Privacy &amp; Security › Analytics &amp; Improvements</span>.</p>
+  </section>
+
+  <section>
+    <h2>Deleting your data</h2>
+    <p>You can delete individual sessions in the app, or everything at once:</p>
+    <ul class="list">
+      <li><span class="path">Settings › Data › Delete All Data</span> removes every session, label and tag. With iCloud sync on, the deletion syncs to your other Macs and your iCloud.</li>
+      <li>Delete Worklog's backups from the backups list in <span class="path">Settings › Data</span>.</li>
+      <li>To remove Worklog's iCloud data, use <span class="path">System Settings › Apple Account › iCloud › Manage</span>.</li>
+    </ul>
+    <p>Since I don't hold any of your data, there is nothing for me to delete on my side.</p>
+  </section>
+
+  <section>
+    <h2>Children</h2>
+    <p>Worklog isn't aimed at children and collects no data from anyone, including children.</p>
+  </section>
+
+  <section>
+    <h2>Changes to this policy</h2>
+    <p>If Worklog's data practices ever change, I'll update this page and its effective date before the change ships.</p>
+  </section>
+
+  <section>
+    <h2>Contact</h2>
+    <p>Questions about this policy or about Worklog:</p>
+    <div class="contact">
+      <span class="email" id="email">jrdabora@icloud.com</span>
+      <button type="button" id="copy-email">Copy email</button>
+    </div>
+  </section>
+
+  <footer>
+    <span>© 2026 Jasper Dabora</span>
+    <a href="index.html">Support</a>
+  </footer>
+</main>
+
+<script>
+  document.getElementById("copy-email").addEventListener("click", function () {
+    var button = this;
+    var text = document.getElementById("email").textContent;
+    function selectText() {
+      var range = document.createRange();
+      range.selectNodeContents(document.getElementById("email"));
+      var selection = window.getSelection();
+      selection.removeAllRanges();
+      selection.addRange(range);
+    }
+    try {
+      navigator.clipboard.writeText(text).then(function () {
+        button.textContent = "Copied";
+        setTimeout(function () { button.textContent = "Copy email"; }, 1600);
+      }, selectText);
+    } catch (e) {
+      selectText();
+    }
+  });
+</script>
+</body>
+</html>
