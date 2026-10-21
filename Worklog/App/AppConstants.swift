@@ -1,7 +1,11 @@
 import Foundation
 
 enum AppConstants {
-    static let appName = "Worklog"
+    /// The app's name as users see it.
+    static let appName = "Diptychon"
+    /// Folder under Application Support that holds the store, backups and recovery files. Keeps the app's former
+    /// name: renaming it would orphan existing data.
+    static let dataFolderName = "Worklog"
     /// The Release bundle id (also `BUNDLE_ID` in scripts/generate_xcodeproj.py). Debug builds run as
     /// "app.dabora.worktracker.debug", with their own sandbox container, store, backups, defaults and keychain items.
     /// Used as the log subsystem and as a fallback only; code that needs the running app's id reads
@@ -21,7 +25,7 @@ enum AppConstants {
     /// URL.applicationSupportDirectory/Worklog (created if missing). Inside the sandbox container when sandboxed.
     static var applicationSupportURL: URL {
         let url = rootDirectoryOverride
-            ?? URL.applicationSupportDirectory.appending(path: appName, directoryHint: .isDirectory)
+            ?? URL.applicationSupportDirectory.appending(path: dataFolderName, directoryHint: .isDirectory)
         ensureDirectory(url)
         return url
     }

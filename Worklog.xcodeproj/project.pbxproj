@@ -1102,7 +1102,7 @@
 			isa = PBXFileReference;
 			explicitFileType = wrapper.application;
 			includeInIndex = 0;
-			path = Worklog.app;
+			path = Diptychon.app;
 			sourceTree = BUILT_PRODUCTS_DIR;
 		};
 		84EE55FFF8E2E5D107C4D1E7 = {
@@ -2001,7 +2001,7 @@
 			dependencies = (
 			);
 			name = Worklog;
-			productName = Worklog;
+			productName = Diptychon;
 			productReference = 84337AD8D27FCD69AF2C4FC2;
 			productType = "com.apple.product-type.application";
 		};
@@ -2261,7 +2261,8 @@
 				);
 				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = app.dabora.worktracker.debug;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = Worklog;
+				PRODUCT_NAME = Diptychon;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
 			name = Debug;
@@ -2287,7 +2288,8 @@
 				);
 				MARKETING_VERSION = 1.0.1;
 				PRODUCT_BUNDLE_IDENTIFIER = app.dabora.worktracker;
-				PRODUCT_NAME = "$(TARGET_NAME)";
+				PRODUCT_MODULE_NAME = Worklog;
+				PRODUCT_NAME = Diptychon;
 				SWIFT_EMIT_LOC_STRINGS = YES;
 			};
 			name = Release;
@@ -2310,7 +2312,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = app.dabora.worktracker.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Worklog.app/Contents/MacOS/Worklog";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Diptychon.app/Contents/MacOS/Diptychon";
 			};
 			name = Release;
 		};
@@ -2454,7 +2456,7 @@
 				PRODUCT_BUNDLE_IDENTIFIER = app.dabora.worktracker.tests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				SWIFT_EMIT_LOC_STRINGS = NO;
-				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Worklog.app/Contents/MacOS/Worklog";
+				TEST_HOST = "$(BUILT_PRODUCTS_DIR)/Diptychon.app/Contents/MacOS/Diptychon";
 			};
 			name = Debug;
 		};

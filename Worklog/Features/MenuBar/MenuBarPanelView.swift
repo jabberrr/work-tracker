@@ -137,7 +137,7 @@ struct MenuBarPanelView: View {
             }
 
             if let reason = engine.autoPauseReason, isPaused {
-                Text(reason == .sleep ? "Paused while your Mac slept." : "Paused when Worklog quit.")
+                Text(reason == .sleep ? "Paused while your Mac slept." : "Paused when Diptychon quit.")
                     .font(theme.captionFont)
                     .foregroundStyle(theme.warning)
             }
@@ -299,13 +299,13 @@ struct MenuBarPanelView: View {
             .padding(.vertical, theme.spacingXS + 1)
             .help("Show overlay")
 
-            menuRow("Open Worklog", systemImage: "macwindow", hint: nil) {
+            menuRow("Open Diptychon", systemImage: "macwindow", hint: nil) {
                 router.showMainWindow()
             }
             menuRow("Settings…", systemImage: "gearshape", hint: "⌘,") {
                 router.showSettings()
             }
-            menuRow("Quit Worklog", systemImage: "power", hint: "⌘Q") {
+            menuRow("Quit Diptychon", systemImage: "power", hint: "⌘Q") {
                 NSApp.terminate(nil)
             }
         }

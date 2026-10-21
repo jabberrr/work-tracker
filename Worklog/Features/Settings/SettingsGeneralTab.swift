@@ -25,8 +25,8 @@ struct SettingsGeneralTab: View {
 
             Section("Automatic pausing") {
                 Toggle("Pause when the Mac sleeps", isOn: $settings.pauseOnSleep)
-                Toggle("Pause when Worklog quits", isOn: $settings.pauseOnQuit)
-                SettingsFootnote("Worklog never resumes on its own.")
+                Toggle("Pause when Diptychon quits", isOn: $settings.pauseOnQuit)
+                SettingsFootnote("Diptychon never resumes on its own.")
                 ValueStepper("Ask “Still working?” after", value: $settings.longSessionWarningHours,
                              in: 1...24, step: 1, format: Self.hoursPhrase)
             }
@@ -51,7 +51,7 @@ struct SettingsGeneralTab: View {
                 if settings.hideDockIconWhenClosed {
                     SettingsFootnote(settings.showMenuBarExtra
                                      ? "Reopen the window from the menu bar."
-                                     : "Reopen Worklog from Applications or Spotlight.")
+                                     : "Reopen Diptychon from Applications or Spotlight.")
                 }
             }
         }

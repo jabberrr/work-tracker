@@ -21,7 +21,7 @@ enum SettingsRecovery {
         guard archive.missingImageCount > 0, archive.attachmentStore != nil else { return archive }
         let panel = NSOpenPanel()
         panel.title = "Allow Access to the Backup\u{2019}s Images"
-        panel.message = "Choose the folder that contains \u{201C}\(url.lastPathComponent)\u{201D} so Worklog can read its images."
+        panel.message = "Choose the folder that contains \u{201C}\(url.lastPathComponent)\u{201D} so Diptychon can read its images."
         panel.prompt = "Allow"
         panel.canChooseFiles = false
         panel.canChooseDirectories = true
@@ -117,7 +117,7 @@ struct SettingsRecoverySheet: View {
                 }
             }
 
-            Text("Worklog moves the damaged data aside, relaunches and then:")
+            Text("Diptychon moves the damaged data aside, relaunches and then:")
                 .font(theme.calloutFont)
                 .foregroundStyle(theme.textPrimary)
                 .fixedSize(horizontal: false, vertical: true)
@@ -240,8 +240,8 @@ struct SettingsRecoverySheet: View {
 
     private var freshExplanation: some View {
         SettingsFootnote(nextLaunchSyncs
-                         ? "Worklog starts empty and downloads your sessions from iCloud again."
-                         : "Worklog starts empty, and you can restore a backup later.")
+                         ? "Diptychon starts empty and downloads your sessions from iCloud again."
+                         : "Diptychon starts empty, and you can restore a backup later.")
     }
 
     private var confirmationText: String {
@@ -252,7 +252,7 @@ struct SettingsRecoverySheet: View {
         case .fresh:
             restore = nextLaunchSyncs ? "downloads your data from iCloud again" : "starts with empty data"
         }
-        return "Worklog relaunches and \(restore), and unsaved changes are lost."
+        return "Diptychon relaunches and \(restore), and unsaved changes are lost."
     }
 
     static func backupTitle(_ backup: BackupFile) -> String {
@@ -264,7 +264,7 @@ struct SettingsRecoverySheet: View {
 
     private func chooseFile() {
         let panel = NSOpenPanel()
-        panel.title = "Choose a Worklog Backup or Export"
+        panel.title = "Choose a Diptychon Backup or Export"
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false

@@ -17,7 +17,8 @@ import string
 import sys
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-PROJECT = "Worklog"
+PROJECT = "Worklog"  # project, target, scheme and Swift module name (internal; unchanged by the rename)
+APP_PRODUCT_NAME = "Diptychon"  # the app's name: Diptychon.app and its executable
 APP_DIR = "Worklog"
 TEST_DIR = "WorklogTests"
 DEVELOPMENT_TEAM = "6W4ZKDHBVD"  # requires a paid Apple Developer Program team (iCloud + Sign in with Apple)
@@ -157,7 +158,7 @@ def main():
 
     app_product = b.add("product:app", "PBXFileReference", {
         "explicitFileType": "wrapper.application", "includeInIndex": "0",
-        "path": f"{PROJECT}.app", "sourceTree": "BUILT_PRODUCTS_DIR",
+        "path": f"{APP_PRODUCT_NAME}.app", "sourceTree": "BUILT_PRODUCTS_DIR",
     })
     test_product = b.add("product:tests", "PBXFileReference", {
         "explicitFileType": "wrapper.cfbundle", "includeInIndex": "0",
@@ -267,7 +268,9 @@ def main():
         "LD_RUNPATH_SEARCH_PATHS": ["$(inherited)", "@executable_path/../Frameworks"],
         "MARKETING_VERSION": MARKETING_VERSION,
         "PRODUCT_BUNDLE_IDENTIFIER": BUNDLE_ID,
-        "PRODUCT_NAME": "$(TARGET_NAME)",
+        # The module keeps the old name: `@testable import Worklog` and anything the module name is baked into stay valid.
+        "PRODUCT_MODULE_NAME": PROJECT,
+        "PRODUCT_NAME": APP_PRODUCT_NAME,
         "SWIFT_EMIT_LOC_STRINGS": "YES",
     }
     test_settings = {
@@ -282,7 +285,7 @@ def main():
         "PRODUCT_BUNDLE_IDENTIFIER": f"{BUNDLE_ID}.tests",
         "PRODUCT_NAME": "$(TARGET_NAME)",
         "SWIFT_EMIT_LOC_STRINGS": "NO",
-        "TEST_HOST": f"$(BUILT_PRODUCTS_DIR)/{PROJECT}.app/Contents/MacOS/{PROJECT}",
+        "TEST_HOST": f"$(BUILT_PRODUCTS_DIR)/{APP_PRODUCT_NAME}.app/Contents/MacOS/{APP_PRODUCT_NAME}",
     }
 
     def config_list(key, settings_by_config, base_ref=None):
@@ -312,7 +315,7 @@ def main():
         "buildConfigurationList": app_configs,
         "buildPhases": [app_src_phase, app_fw_phase, app_res_phase],
         "buildRules": [], "dependencies": [], "name": PROJECT,
-        "productName": PROJECT, "productReference": app_product,
+        "productName": APP_PRODUCT_NAME, "productReference": app_product,
         "productType": "com.apple.product-type.application",
     })
     proxy = b.add("proxy:app", "PBXContainerItemProxy", {
@@ -373,7 +376,7 @@ def scheme(app_id, test_id):
                 f'               BlueprintIdentifier = "{target_id}"\n               BuildableName = "{product}"\n'
                 f'               BlueprintName = "{name}"\n               ReferencedContainer = "container:{PROJECT}.xcodeproj">\n'
                 f'            </BuildableReference>\n')
-    app_ref = ref(app_id, f"{PROJECT}.app", PROJECT)
+    app_ref = ref(app_id, f"{APP_PRODUCT_NAME}.app", PROJECT)
     test_ref = ref(test_id, f"{TEST_DIR}.xctest", TEST_DIR)
     runnable_ref = "".join(line[3:] + "\n" for line in app_ref.splitlines())
     return f'''<?xml version="1.0" encoding="UTF-8"?>

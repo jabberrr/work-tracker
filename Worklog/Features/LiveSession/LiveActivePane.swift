@@ -85,7 +85,7 @@ struct LiveActivePane: View {
                     otherProfileBanner(other)
                 }
                 if let reason, isPaused {
-                    InlineBanner(reason == .sleep ? "Paused while your Mac slept." : "Paused when Worklog quit.",
+                    InlineBanner(reason == .sleep ? "Paused while your Mac slept." : "Paused when Diptychon quit.",
                                  systemImage: "pause.circle",
                                  style: .warning,
                                  actionTitle: "Resume",

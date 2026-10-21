@@ -13,7 +13,7 @@ struct WorklogApp: App {
     }
 
     var body: some Scene {
-        Window("Worklog", id: WindowID.main) {
+        Window("Diptychon", id: WindowID.main) {
             RootView().withAppServices(services)
                 .frame(minWidth: 900, minHeight: 600)
         }

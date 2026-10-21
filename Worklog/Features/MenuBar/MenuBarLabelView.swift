@@ -25,7 +25,7 @@ struct MenuBarLabelView: View {
             let elapsed = engine.elapsed(at: engine.tick)
             Text("\(Image(systemName: icon)) \(elapsed.formattedClock)")
                 .monospacedDigit()
-                .accessibilityLabel(engine.isPaused ? "Worklog, paused" : "Worklog, running")
+                .accessibilityLabel(engine.isPaused ? "Diptychon, paused" : "Diptychon, running")
                 .accessibilityValue(DesignSystemDurationSpeech.spoken(elapsed))
         } else {
             Image(systemName: icon)
@@ -39,7 +39,7 @@ struct MenuBarLabelView: View {
     }
 
     private var accessibilityStatus: String {
-        if !engine.isActive { return "Worklog, not tracking" }
-        return engine.isPaused ? "Worklog, paused" : "Worklog, running"
+        if !engine.isActive { return "Diptychon, not tracking" }
+        return engine.isPaused ? "Diptychon, paused" : "Diptychon, running"
     }
 }

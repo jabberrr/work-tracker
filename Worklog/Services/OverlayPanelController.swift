@@ -180,7 +180,7 @@ final class OverlayPanelController {
         panel.isReleasedWhenClosed = false
         panel.becomesKeyOnlyIfNeeded = true
         panel.animationBehavior = .utilityWindow
-        panel.title = "Worklog Overlay"
+        panel.title = "Diptychon Overlay"
         panel.contentView = hostingView
         let fitting = hostingView.fittingSize
         if fitting.width > 0, fitting.height > 0 {

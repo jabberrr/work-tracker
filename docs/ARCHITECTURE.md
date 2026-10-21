@@ -1,5 +1,7 @@
 # Worklog — Architecture (docs/ARCHITECTURE.md)
 
+> The app ships as **Diptychon**; "Worklog" here is its internal name (see README › Name).
+
 > How Worklog is built: files, models, services and the rules between them. Sections 1–10 are the original design; later rounds (§11–§14) add to it and say where they replace it. When code and this document disagree, the code wins and this document should be fixed. Helper types use their folder's prefix (§1.3) or are `private`/`fileprivate`.
 
 ---

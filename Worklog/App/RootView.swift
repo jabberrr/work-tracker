@@ -403,7 +403,7 @@ struct RootView: View {
                 // Recover isn't offered for a newer store (it must not be moved aside): update the app instead.
                 items.append(BannerItem(
                     id: "inMemory",
-                    message: "Your data needs a newer Worklog. Changes won\u{2019}t be saved.",
+                    message: "Your data needs a newer Diptychon. Changes won\u{2019}t be saved.",
                     systemImage: "exclamationmark.triangle.fill",
                     style: .error,
                     help: reason

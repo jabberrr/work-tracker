@@ -349,9 +349,9 @@ final class ExportRoundTripTests: XCTestCase {
     @MainActor
     func testDefaultFilename() {
         let name = ExportService.defaultFilename(ext: "json")
-        XCTAssertTrue(name.hasPrefix("Worklog-Export-"))
+        XCTAssertTrue(name.hasPrefix("Diptychon-Export-"))
         XCTAssertTrue(name.hasSuffix(".json"))
-        XCTAssertEqual(name.count, "Worklog-Export-2026-10-07.json".count)
+        XCTAssertEqual(name.count, "Diptychon-Export-2026-10-07.json".count)
     }
 
     // MARK: - Search

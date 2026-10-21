@@ -1,6 +1,13 @@
-# Worklog
+# Diptychon
 
 A native macOS 14+ work-session tracker built with SwiftUI, SwiftData and CloudKit.
+
+> **Name.** The app ships as **Diptychon** (`Diptychon.app`, window title, menus, all user-facing text). It was
+> called Worklog before, and the internals keep that name on purpose: the Xcode project, target, scheme and Swift
+> module (`Worklog`), the bundle id `app.dabora.worktracker`, the iCloud container, the data folder
+> `Application Support/Worklog`, `Worklog.store`, backup file names (`Worklog-Backup-…`), and defaults/keychain keys.
+> Renaming any of those would orphan existing data or break the App Store record. The rest of this README and the
+> docs say "Worklog" for the app.
 
 Start a session with a label, pause and resume it, split it into segments when your focus changes, and jot
 timestamped notes. When you stop, give the session a title and write down what you learned. Later you can browse,
@@ -169,9 +176,9 @@ doesn't see that data).
 7. **Install through TestFlight.** App Store Connect ▸ your app ▸ **TestFlight** ▸ add yourself to an *Internal
    Testing* group (no review needed) and answer the export-compliance question if asked (the app declares no
    non-exempt encryption). Install the **TestFlight** app from the Mac App Store, accept the invite, and click
-   **Install**. Remove or rename any other `Worklog.app` in `/Applications` first if TestFlight asks. Then check:
+   **Install**. Remove any older `Worklog.app` (the app's former name) or `Diptychon.app` in `/Applications` first if TestFlight asks. Then check:
    ```sh
-   codesign -d --entitlements - /Applications/Worklog.app   # icloud-container-environment Production, aps-environment production, applesignin
+   codesign -d --entitlements - /Applications/Diptychon.app   # icloud-container-environment Production, aps-environment production, applesignin
    ```
 8. **First launch.** Open it from TestFlight or /Applications. (macOS may ask once whether Worklog may access its
    own data from the earlier build — allow it.) The banner says "Saving to this Mac only — this data belongs to iCloud Development, not Production."
@@ -180,7 +187,7 @@ doesn't see that data).
 9. **Verify.** Compare N with step 2, open a few sessions with images, and check Settings ▸ Account says
    "Syncing with iCloud" (Production). Keep `Recovered/Env-Development-…` and the pinned backup for a while.
 10. **Remove old copies.** List every copy of the app and delete all but the TestFlight-installed
-    `/Applications/Worklog.app` (archives in Xcode's Organizer may stay). Never run a build from before this version
+    `/Applications/Diptychon.app` (older copies may still be called `Worklog.app`) (archives in Xcode's Organizer may stay). Never run a build from before this version
     again.
     ```sh
     mdfind "kMDItemCFBundleIdentifier == 'app.dabora.worktracker'"

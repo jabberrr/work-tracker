@@ -1,5 +1,7 @@
 # Worklog — Design (docs/DESIGN.md)
 
+> The app ships as **Diptychon**; "Worklog" here is its internal name (see README › Name).
+
 > Owner: **DES**. This is the design language and the screen-by-screen UX spec for feature programmers
 > **A** (live session, end-session sheet, menu bar, overlay), **B** (history, session detail, learnings
 > editor) and **C** (learning, stats, settings, welcome). The API contract is `docs/ARCHITECTURE.md` §4;

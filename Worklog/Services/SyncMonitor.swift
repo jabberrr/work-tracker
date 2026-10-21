@@ -153,7 +153,7 @@ final class SyncMonitor {
             case .accountTemporarilyUnavailable:
                 return "Your iCloud account is temporarily unavailable."
             case .serviceUnavailable, .requestRateLimited, .zoneBusy:
-                return "iCloud is busy; Worklog will retry shortly."
+                return "iCloud is busy; Diptychon will retry shortly."
             default:
                 break
             }

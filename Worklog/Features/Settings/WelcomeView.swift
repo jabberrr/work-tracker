@@ -28,7 +28,7 @@ struct WelcomeView: View {
     private var content: some View {
         VStack(spacing: theme.spacingXL) {
             VStack(spacing: theme.spacingM) {
-                Text("Worklog")
+                Text("Diptychon")
                     .font(theme.largeTitleFont)
                     .foregroundStyle(theme.textPrimary)
                     .accessibilityAddTraits(.isHeader)
@@ -97,7 +97,7 @@ struct WelcomeView: View {
             if reason == "Preview" { return "Preview, so nothing is saved." }
             // A newer Worklog made this data: it is left untouched (no Recover); installing that version opens it.
             if persistence.isStoreFromNewerVersion {
-                return "Your data was made by a newer version of Worklog. Install it to open your data. Changes here won’t be saved."
+                return "Your data was made by a newer version of Diptychon. Install it to open your data. Changes here won’t be saved."
             }
             return "Your data couldn’t be opened. Changes won’t be saved."
         }

@@ -70,7 +70,7 @@ enum StoreRecoveryError: LocalizedError {
         case .markerWriteFailed(let reason):
             "The recovery couldn't be scheduled: \(reason)"
         case .storeIsNewer:
-            "This data was made by a newer version of Worklog."
+            "This data was made by a newer version of Diptychon."
         }
     }
 }
@@ -307,7 +307,7 @@ final class PersistenceController {
             // In-memory. The on-disk store is left untouched for recovery.
             let newer = storeIsFromNewerVersion(at: storeURL, defaults: defaults)
             let reason = newer
-                ? "This data was made by a newer version of Worklog."
+                ? "This data was made by a newer version of Diptychon."
                 : "The data store couldn't be opened: \(error.localizedDescription)"
             return OpenResult(container: makeInMemoryContainer(schema: schema), mode: .inMemory(reason: reason),
                               move: move, isNewer: newer, notice: notice)

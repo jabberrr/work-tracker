@@ -44,9 +44,9 @@ enum DataTransferError: LocalizedError {
     var errorDescription: String? {
         switch self {
         case .unsupportedVersion(let version):
-            "This file needs a newer version of Worklog (format \(version))."
+            "This file needs a newer version of Diptychon (format \(version))."
         case .decodingFailed(let reason):
-            "The file couldn't be read as a Worklog export: \(reason)"
+            "The file couldn't be read as a Diptychon export: \(reason)"
         case .sessionActive:
             "Stop the running session first."
         case .writeFailed(let reason):
@@ -165,7 +165,7 @@ final class ExportService {
         formatter.locale = Locale(identifier: "en_US_POSIX")
         formatter.dateFormat = "yyyy-MM-dd"
         let cleanExt = ext.hasPrefix(".") ? String(ext.dropFirst()) : ext
-        return "Worklog-Export-\(formatter.string(from: .now)).\(cleanExt)"
+        return "Diptychon-Export-\(formatter.string(from: .now)).\(cleanExt)"
     }
 
     // Import (decodeArchive, importArchive, import rules): ExportService+Import.swift.

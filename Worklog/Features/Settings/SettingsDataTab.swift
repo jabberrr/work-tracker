@@ -107,14 +107,14 @@ struct SettingsDataTab: View {
             Button("Back Up and Relaunch") { moveToBuildEnvironment() }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Worklog backs up everything, images included, relaunches and uploads your data. "
+            Text("Diptychon backs up everything, images included, relaunches and uploads your data. "
                  + "The current copy stays in the Recovered folder.")
         }
         .confirmationDialog(adoptTitle, isPresented: $confirmsAdopt, titleVisibility: .visible) {
             Button("Back Up and Relaunch") { moveToBuildEnvironment(adoptingCloudData: true) }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("Worklog backs up this Mac\u{2019}s data, relaunches and downloads what\u{2019}s already in iCloud. "
+            Text("Diptychon backs up this Mac\u{2019}s data, relaunches and downloads what\u{2019}s already in iCloud. "
                  + "Nothing from this Mac is uploaded; its copy stays in the Recovered folder.")
         }
     }
@@ -251,9 +251,9 @@ struct SettingsDataTab: View {
 
     private var newerVersionSection: some View {
         Section {
-            InlineBanner("This data was made by a newer version of Worklog. Changes here won\u{2019}t be saved.",
+            InlineBanner("This data was made by a newer version of Diptychon. Changes here won\u{2019}t be saved.",
                          systemImage: "exclamationmark.triangle.fill", style: .error)
-            SettingsFootnote("Install the latest Worklog to open it. Nothing was changed.")
+            SettingsFootnote("Install the latest Diptychon to open it. Nothing was changed.")
         }
     }
 
@@ -310,19 +310,19 @@ struct SettingsDataTab: View {
         panel.isExtensionHidden = false
         switch kind {
         case .json:
-            panel.title = "Export Worklog Data"
+            panel.title = "Export Diptychon Data"
             panel.allowedContentTypes = [.json]
             panel.nameFieldStringValue = ExportService.defaultFilename(ext: "json")
         case .sessionsCSV:
             panel.title = "Export Sessions as CSV"
             panel.allowedContentTypes = [.commaSeparatedText]
             panel.nameFieldStringValue = ExportService.defaultFilename(ext: "csv")
-                .replacingOccurrences(of: "Worklog-Export-", with: "Worklog-Sessions-")
+                .replacingOccurrences(of: "Diptychon-Export-", with: "Diptychon-Sessions-")
         case .segmentsCSV:
             panel.title = "Export Segments as CSV"
             panel.allowedContentTypes = [.commaSeparatedText]
             panel.nameFieldStringValue = ExportService.defaultFilename(ext: "csv")
-                .replacingOccurrences(of: "Worklog-Export-", with: "Worklog-Segments-")
+                .replacingOccurrences(of: "Diptychon-Export-", with: "Diptychon-Segments-")
         }
         guard panel.runModal() == .OK, let url = panel.url else { return }
         do {
@@ -357,7 +357,7 @@ struct SettingsDataTab: View {
 
     private func chooseImportFile() {
         let panel = NSOpenPanel()
-        panel.title = "Import Worklog Data"
+        panel.title = "Import Diptychon Data"
         panel.allowedContentTypes = [.json]
         panel.allowsMultipleSelection = false
         panel.canChooseDirectories = false
@@ -411,12 +411,12 @@ struct SettingsDataTab: View {
             ValuePicker(self.settings.backupInterval == .off ? "Automatic backups" : "Back up",
                         selection: settings.backupInterval, options: BackupInterval.allCases,
                         title: { $0 == .off ? $0.displayName : $0.displayName.lowercased() })
-            SettingsFootnote("Runs after changes and when Worklog quits.")
+            SettingsFootnote("Runs after changes and when Diptychon quits.")
             ValueStepper("Keep the latest", value: settings.backupRetentionCount, in: 1...100,
                          format: { "\($0) \($0 == 1 ? "backup" : "backups")" })
             Toggle("Include images", isOn: settings.backupIncludesAttachments)
             if !self.settings.backupIncludesAttachments {
-                SettingsFootnote("Replace then keeps only images still in Worklog.")
+                SettingsFootnote("Replace then keeps only images still in Diptychon.")
             }
 
             ForEach(backups.backups) { backup in
@@ -520,7 +520,7 @@ struct SettingsDataTab: View {
             } else {
                 message = SettingsDataMessage(title: "Can\u{2019}t restore here",
                                               text: StoreRecoveryError.storeIsNewer.localizedDescription
-                                                + " Install the latest Worklog first.")
+                                                + " Install the latest Diptychon first.")
             }
             return
         }
@@ -670,7 +670,7 @@ private struct SettingsImportSheet: View {
 
             if archive.missingImageCount > 0 {
                 InlineBanner("\(archive.missingImageCount) \(archive.missingImageCount == 1 ? "image is" : "images are") "
-                             + "missing from this backup. Copies already in Worklog are kept.",
+                             + "missing from this backup. Copies already in Diptychon are kept.",
                              systemImage: "photo", style: .warning)
             }
             if mode == .replace {
@@ -678,7 +678,7 @@ private struct SettingsImportSheet: View {
                     InlineBanner("Stop the running session first.", style: .error)
                 }
                 if !archive.includesAttachments {
-                    InlineBanner("This file has no images. Only images still in Worklog are kept.",
+                    InlineBanner("This file has no images. Only images still in Diptychon are kept.",
                                  systemImage: "photo", style: .warning)
                 }
                 SettingsFootnote("Your current data is backed up first.")
@@ -719,8 +719,8 @@ private struct SettingsImportSheet: View {
             Button("Cancel", role: .cancel) {}
         } message: {
             Text(archive.includesAttachments && archive.missingImageCount == 0
-                 ? "Everything in Worklog is replaced with \(sourceName)."
-                 : "Everything in Worklog is replaced with \(sourceName). Images it lacks are kept only if Worklog still has them.")
+                 ? "Everything in Diptychon is replaced with \(sourceName)."
+                 : "Everything in Diptychon is replaced with \(sourceName). Images it lacks are kept only if Diptychon still has them.")
         }
     }
 

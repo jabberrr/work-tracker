@@ -59,15 +59,15 @@ struct SettingsAccountTab: View {
                 if needsRelaunch {
                     // Quit (not relaunch): a second instance must not open the same store while this one
                     // is still saving and backing up on its way out.
-                    InlineBanner("Reopen Worklog to apply this change.",
+                    InlineBanner("Reopen Diptychon to apply this change.",
                                  systemImage: "arrow.clockwise", style: .warning,
-                                 actionTitle: "Quit Worklog", action: { NSApp.terminate(nil) })
+                                 actionTitle: "Quit Diptychon", action: { NSApp.terminate(nil) })
                 }
                 SettingsFootnote(syncExplanation)
             }
         }
         .formStyle(.grouped)
-        .confirmationDialog("Sign out of Worklog?", isPresented: $confirmsSignOut, titleVisibility: .visible) {
+        .confirmationDialog("Sign out of Diptychon?", isPresented: $confirmsSignOut, titleVisibility: .visible) {
             Button("Sign Out", role: .destructive) { auth.signOut() }
             Button("Cancel", role: .cancel) {}
         } message: {
@@ -89,7 +89,7 @@ struct SettingsAccountTab: View {
     private var accountDetail: String {
         switch auth.state {
         case .signedIn: return auth.email ?? "Signed in with Apple."
-        case .guest: return "Using Worklog without an account."
+        case .guest: return "Using Diptychon without an account."
         case .signedOut: return "Sign in or continue as a guest."
         case .unknown: return ""
         }
@@ -278,6 +278,6 @@ struct SettingsAccountTab: View {
     }
 
     private var syncExplanation: String {
-        "Uses this Mac’s iCloud account and applies the next time Worklog opens."
+        "Uses this Mac’s iCloud account and applies the next time Diptychon opens."
     }
 }
