@@ -228,7 +228,7 @@ The unit tests run in in-memory SwiftData containers. Under XCTest, `AppServices
 - profiles: the migration of existing data, profile dedupe and repair, `ProfileScope`, scoped tag creation, making labels/tags local (copies for other profiles), moving sessions between profiles, deleting/archiving profiles, the persisted selection, the profile-aware engine (start, default label, today total, per-profile takeaways), scoped search and export format 2 (including importing format-1 files)
 - shortcut defaults, display strings, validation (conflicts, reserved combos, missing ⌘/⌃, ⇧ without a letter), clearing, reset (and the action it clears) and persistence (including de-duplicating stored overrides)
 - data safety: the CloudKit environment guard's decision table, the interrupted-restore breadcrumb decision and notice, "Use iCloud Production Data" (a move without a restore), the verified backup only failing for images the store has bytes for, the PreOpen snapshot key and model hash, newer-store detection, the restore marker format and restore mode, session dedupe keeping notes/images/learning points, imported running sessions (ended unless this Mac owned them), Replace keeping the store's own images, merge updating re-seeded defaults and newer profiles, reconcile leaving another Mac's just-started session alone, the engine forgetting a deleted active session, and per-kind backup retention
-- Trello: action mapping for every action type (kind and summary fields), the board filter, the fetch window and cursor overlap, auth URLs and token parsing, dedupe by action ID, search by card name, an export round trip with activities, merge, delete-all, and decoding an archive without them
+- Trello: action mapping for every action type (kind and summary fields), full description text, card details parsing, the board filter, the fetch window and cursor overlap, auth URLs and token parsing, dedupe by action ID, search by card name, an export round trip with activities, merge, delete-all, and decoding an archive without them
 - recovery paths on disk, run in a temporary folder: the restore marker and the restore breadcrumb, PreOpen snapshot pruning, moving a damaged store aside (which clears the recorded CloudKit environment), and a skipped environment move
 
 ## Architecture
@@ -346,7 +346,7 @@ Changing the iCloud sync toggle takes effect at the next launch.
 **External services.** Besides iCloud, Worklog talks to no server by default. If the user connects Trello,
 `api.trello.com` (and `trello.com` for the sign-in page) become outbound hosts: read-only requests straight from the
 Mac with the user's token, which lives only in this Mac's Keychain. Logged Trello entries are stored with their
-session; card, board and list names and the comment/description/checklist excerpt are `allowsCloudEncryption`. Nothing goes to the
+session; card, board and list names, the comment/checklist excerpt and the saved description text are `allowsCloudEncryption`. Nothing goes to the
 developer. The sandbox already allows outbound connections (`com.apple.security.network.client`).
 
 Signing out never deletes data. Neither does revoking Sign in with Apple; it only brings back the welcome screen.
@@ -366,7 +366,7 @@ REST API. Details are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §15.
 | `Worklog/Models/TrelloActivity.swift` | `@Model TrelloActivity` (one logged action; `session` → `WorkSession.trelloActivities`, cascade) and `TrelloActivityKind`, plus `summary`, `cardURL`, `systemImage` |
 | `Worklog/Services/TrelloConfig.swift` | `TrelloConfig.apiKey`, `appName` ("Diptychon"), `callbackScheme` (`diptychon-trello`) |
 | `Worklog/Services/TrelloService.swift` | `@MainActor @Observable` service: connection state, settings, polling timer, attaching entries |
-| `Worklog/Services/TrelloService+API.swift` | HTTP and JSON (authorize URL, `members/me`, `actions`, `boards`, token revoke) |
+| `Worklog/Services/TrelloService+API.swift` | HTTP and JSON (authorize URL, `members/me`, `actions`, `boards`, one card, token revoke) and `TrelloCardDetails` |
 | `Worklog/Services/TrelloActionMapper.swift` | Pure mapping from a Trello action to a kind and the stored fields |
 | `Worklog/Features/Settings/SettingsIntegrationsTab.swift` | Settings ▸ Integrations ▸ Trello |
 | `Worklog/Features/LiveSession/LiveTrelloSection.swift`, `Worklog/Features/SessionDetail/DetailTrelloSection.swift`, `Worklog/Shared/TrelloActivityRow.swift` | Live list, session detail section, the shared row and its open/copy/remove actions |
@@ -398,6 +398,12 @@ REST API. Details are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §15.
 - **Boards.** `watchedBoardIDs` empty = all boards; otherwise only actions whose board is in the set.
 - **Errors.** 401 → the token is deleted and Settings says "Trello disconnected. Connect again."; 429, 5xx and offline
   keep the state, show a short `lastError` and retry on the next tick.
+- **Full card.** Clicking an entry shows the card as it is now: `cardDetails(shortLink:)` calls
+  `GET /1/cards/{shortLink}` (name, description, due, archived, labels, board and list names, checklists) and keeps the
+  result in memory for 60 s (refresh skips that); concurrent requests for one card share a fetch. 404 → "deleted";
+  offline, 429 and 5xx → "Can’t reach Trello right now."; a 401 disconnects only after `GET /members/me` also fails.
+  A description edit stores the full new description in `detail` (up to `TrelloActionMapper.descriptionLimit`,
+  10,000 characters, line breaks kept); other entries keep the 200-character `detailLimit`.
 - **Settings keys:** `trello.loggingEnabled`, `trello.watchedBoardIDs`, `trello.pendingFinalSessionIDs`,
   `trello.cursor.<session uuid>`.
 

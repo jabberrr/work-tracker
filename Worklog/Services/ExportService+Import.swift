@@ -464,7 +464,7 @@ extension ExportService {
         activity.boardName = dto.boardName
         activity.listName = dto.listName
         activity.fromListName = dto.fromListName
-        activity.detail = String(dto.detail.prefix(TrelloActionMapper.detailLimit))
+        activity.detail = String(dto.detail.prefix(TrelloActionMapper.storedDetailLimit(for: activity.kind)))
     }
 
     /// Image bytes of a store attachment, kept across a Replace.

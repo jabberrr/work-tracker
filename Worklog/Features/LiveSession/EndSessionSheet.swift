@@ -59,6 +59,8 @@ private struct EndSessionForm: View {
     @State private var confirmDiscard = false
     @State private var showsNotes = false
     @State private var showsTrello = false
+    /// The Trello entry whose card is shown (one at a time).
+    @State private var expandedTrelloID: UUID?
     @State private var showsSegments = false
     @State private var showsLearnings = false
     @FocusState private var titleFocused: Bool
@@ -336,7 +338,8 @@ private struct EndSessionForm: View {
     }
 
     /// Trello card activity logged during the session (oldest first), only when there is some. The final check after
-    /// Stop can add entries while the sheet is up; the count follows.
+    /// Stop can add entries while the sheet is up; the count follows. Clicking an entry shows its card under it.
+    /// (TrelloService comes from RootView's environment: sheets inherit it.)
     @ViewBuilder
     private var trelloReview: some View {
         let activities = ModelLiveness.isLive(session) ? ModelLiveness.live(session.sortedTrelloActivities) : []
@@ -344,7 +347,8 @@ private struct EndSessionForm: View {
             DisclosureGroup(isExpanded: $showsTrello) {
                 VStack(alignment: .leading, spacing: theme.spacingXS) {
                     ForEach(activities, id: \.uuid) { activity in
-                        TrelloActivityRow(activity: activity, isCompact: true)
+                        TrelloActivityDisclosure(activity: activity, isCompact: true,
+                                                 expandedID: $expandedTrelloID)
                     }
                 }
                 .padding(.top, theme.spacingS)

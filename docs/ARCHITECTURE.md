@@ -2506,7 +2506,7 @@ The user can connect Trello. While a session runs on this Mac, Worklog logs the 
 | `Models/TrelloActivity.swift` | `@Model TrelloActivity`, `TrelloActivityKind`, display helpers |
 | `Services/TrelloConfig.swift` | `TrelloConfig.apiKey` (empty → not configured), `appName`, `callbackScheme` (`diptychon-trello`) |
 | `Services/TrelloService.swift` | `@MainActor @Observable TrelloService`: connection, settings, timer, attaching entries |
-| `Services/TrelloService+API.swift` | HTTP and JSON (`URLSession.shared`, async, 20 s timeout) |
+| `Services/TrelloService+API.swift` | HTTP and JSON (`URLSession.shared`, async, 20 s timeout), `TrelloCardDetails`, `TrelloCardLookup` |
 | `Services/TrelloActionMapper.swift` | Pure mapping: Trello action JSON → kind + stored fields |
 | `Features/Settings/SettingsIntegrationsTab.swift` | Settings ▸ Integrations (between Labels & Tags and Account) |
 | `Features/LiveSession/LiveTrelloSection.swift` | Live session list (newest first) + status line + "check now" |
@@ -2527,7 +2527,7 @@ The user can connect Trello. While a session runs on this Mac, Worklog logs the 
     @Attribute(.allowsCloudEncryption) var boardName: String = ""
     @Attribute(.allowsCloudEncryption) var listName: String = ""
     @Attribute(.allowsCloudEncryption) var fromListName: String = ""   // moves only
-    @Attribute(.allowsCloudEncryption) var detail: String = ""         // checklist item / comment or new description excerpt (≤ 200 chars), old name for renames
+    @Attribute(.allowsCloudEncryption) var detail: String = ""         // checklist item / comment excerpt (≤ 200 chars), old name for renames; full new description (≤ 10,000 chars) for description edits
     var session: WorkSession?
 }
 enum TrelloActivityKind: String { case created, moved, completed, reopened, archived, unarchived, commented,
@@ -2557,6 +2557,10 @@ enum TrelloActivityKind: String { case created, moved, completed, reopened, arch
 - Session end: the session goes to `trello.pendingFinalSessionIDs`; a final fetch up to its `endedAt` runs 5 s later (Trello can list an action a moment late) and at every tick until it succeeds, then its cursor is removed. Pending finals survive a relaunch. A session deleted meanwhile is dropped; one resumed from the review is tracked live again. At launch, a leftover cursor of a session that ended while the app wasn't running gets a final fetch too; other stale cursors are removed. Disconnect clears pending finals and cursors.
 - Errors: 401 → token deleted, `.failed("Trello disconnected. Connect again.")`, polling stops. 429, 5xx, offline → state kept, short `lastError`, retry next tick. `checkNow()` runs a tick at once.
 
+### 15.4a Full card (click an entry)
+
+Clicking an entry shows the card as it is now. `TrelloService.cardDetails(shortLink:forceRefresh:) async -> TrelloCardLookup` (`.loaded(TrelloCardDetails)`, `.deleted`, `.unavailable(reason)`) calls `GET /1/cards/{shortLink}?fields=name,desc,due,dueComplete,closed,shortUrl,url,dateLastActivity,labels&board=true&board_fields=name&list=true&list_fields=name&checklists=all` (`TrelloAPI.cardQuery`; the JSON is parsed by the pure `TrelloCardDetails.parse`). Results are cached in memory per short link for 60 s (`cachedCardDetails(shortLink:)`; `forceRefresh` skips it; cleared on disconnect), never stored; concurrent requests for one card share a fetch. 404 → `.deleted`; offline/429/5xx → "Can’t reach Trello right now."; 401 → `GET /members/me` decides: also 401 → disconnect as in polling, else "You can’t see this card in Trello anymore." (Trello answers 401 for a card on a board the user left). For `.editedDescription` the mapper stores the full new description in `detail` (`descriptionLimit` = 10,000 characters, trimmed, line breaks kept; `storedDetailLimit(for:)` also caps imports), so the entry shows what the user wrote then; other kinds keep `detailLimit` = 200.
+
 ### 15.5 Export, backup, search
 
 - `SessionDTO.trelloActivities: [TrelloActivityDTO]?` (optional: old archives decode, old builds ignore it). `currentFormatVersion` stays **2**, so older builds can still restore new backups.
@@ -2567,5 +2571,5 @@ enum TrelloActivityKind: String { case created, moved, completed, reopened, arch
 ### 15.6 Privacy
 
 - Optional and off until connected. Read-only scope. Requests go from the Mac straight to `trello.com` / `api.trello.com`; nothing goes to the developer. The App Store answer stays *Data Not Collected*; `PrivacyInfo.xcprivacy` is unchanged.
-- Token only in this Mac's Keychain. Entries are stored with their session (on the Mac and in the user's iCloud), names and excerpts encrypted. Entries can be removed per row ("Remove from Session") or with the session.
+- Token only in this Mac's Keychain. Entries are stored with their session (on the Mac and in the user's iCloud), names, excerpts and saved description text encrypted. Opening an entry asks Trello for that card (kept in memory for a minute, not stored). Entries can be removed per row ("Remove from Session") or with the session.
 - `PRIVACY.md`, `site/privacy.html` and `site/index.html` describe this; keep them in step with the code.

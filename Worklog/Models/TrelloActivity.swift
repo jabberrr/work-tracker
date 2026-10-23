@@ -21,7 +21,9 @@ final class TrelloActivity {
     @Attribute(.allowsCloudEncryption) var listName: String = ""
     /// Moves only: the list the card came from.
     @Attribute(.allowsCloudEncryption) var fromListName: String = ""
-    /// Checklist item, comment excerpt or (renames) the old card name; ≤ 200 characters.
+    /// Checklist item, comment excerpt or (renames) the old card name, ≤ 200 characters; for description edits the
+    /// full new description as saved with that edit (Markdown), ≤ 10,000 characters
+    /// (`TrelloActionMapper.storedDetailLimit(for:)`).
     @Attribute(.allowsCloudEncryption) var detail: String = ""
     var session: WorkSession?
 

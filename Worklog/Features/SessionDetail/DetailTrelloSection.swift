@@ -2,12 +2,15 @@ import SwiftData
 import SwiftUI
 
 /// Trello card activity logged during the session, oldest first; renders nothing when there is none. Clicking a row
-/// opens the card in the browser. Context menu (and the row's ⋯ menu): Open in Trello, Copy, Remove from Session.
+/// shows the card under it (one at a time; Open in Trello is in the card box). Context menu (and the row's ⋯ menu):
+/// Open in Trello, Copy, Remove from Session.
 @MainActor
 struct DetailTrelloSection: View {
     @Environment(\.theme) private var theme
     @Environment(\.modelContext) private var environmentContext
     private let session: WorkSession
+    /// The entry whose card is shown (one at a time).
+    @State private var expandedID: UUID?
 
     init(session: WorkSession) {
         self.session = session
@@ -31,12 +34,11 @@ struct DetailTrelloSection: View {
         }
     }
 
+    /// The row shows the card under it when clicked (`TrelloActivityDisclosure`, one at a time); ⋯ menu trailing.
     private func row(_ activity: TrelloActivity) -> some View {
-        HStack(alignment: .top, spacing: theme.spacingS) {
-            rowBody(activity)
-                .frame(minWidth: 0, maxWidth: .infinity, alignment: .leading)
+        TrelloActivityDisclosure(activity: activity, expandedID: $expandedID, onRemove: { remove(activity) }) {
             Menu {
-                menuItems(activity)
+                TrelloActivityMenuItems(activity: activity, onRemove: { remove(activity) })
             } label: {
                 Image(systemName: "ellipsis")
             }
@@ -48,35 +50,9 @@ struct DetailTrelloSection: View {
             .help("More")
             .accessibilityLabel("Trello entry actions")
         }
-        .contextMenu { menuItems(activity) }
         .accessibilityElement(children: .contain)
         .accessibilityAction(named: "Open in Trello") { TrelloActivityActions.open(activity) }
         .accessibilityAction(named: "Remove from Session") { remove(activity) }
-    }
-
-    /// A plain button that opens the card when the entry has a card link; just the row otherwise.
-    @ViewBuilder
-    private func rowBody(_ activity: TrelloActivity) -> some View {
-        if ModelLiveness.isLive(activity), activity.cardURL != nil {
-            Button {
-                TrelloActivityActions.open(activity)
-            } label: {
-                TrelloActivityRow(activity: activity)
-            }
-            .buttonStyle(.plain)
-            .help("Open in Trello")
-        } else {
-            TrelloActivityRow(activity: activity)
-        }
-    }
-
-    @ViewBuilder
-    private func menuItems(_ activity: TrelloActivity) -> some View {
-        Button("Open in Trello") { TrelloActivityActions.open(activity) }
-            .disabled(!ModelLiveness.isLive(activity) || activity.cardURL == nil)
-        Button("Copy") { TrelloActivityActions.copy(activity) }
-        Divider()
-        Button("Remove from Session", role: .destructive) { remove(activity) }
     }
 
     private var context: ModelContext { session.modelContext ?? environmentContext }

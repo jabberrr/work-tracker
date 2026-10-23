@@ -27,6 +27,100 @@ enum TrelloAPIError: Error, Equatable {
     }
 }
 
+/// A Trello card as it is now (`GET /1/cards/{shortLink}`), shown when the user opens a logged entry. Not stored:
+/// `TrelloService` keeps it in memory for a minute.
+struct TrelloCardDetails: Equatable, Sendable {
+    struct Label: Equatable, Sendable, Hashable {
+        var name: String
+        /// Trello color name ("green", "sky_dark"…); "" when the label has no color.
+        var color: String
+    }
+
+    struct ChecklistItem: Equatable, Sendable, Hashable {
+        var name: String
+        var isComplete: Bool
+    }
+
+    struct Checklist: Equatable, Sendable, Hashable {
+        var name: String
+        var items: [ChecklistItem]
+    }
+
+    var name: String
+    var url: URL?
+    var boardName: String
+    var listName: String
+    /// Full Markdown text as Trello stores it.
+    var description: String
+    var isArchived: Bool
+    var due: Date?
+    var isDueComplete: Bool
+    var labels: [Label]
+    var checklists: [Checklist]
+    var lastActivity: Date?
+
+    /// Pure, tolerant: the card JSON of `GET /1/cards/{id}` (with `board`, `list` and `checklists`) → details; nil
+    /// when it isn't a card object. Missing fields read as empty/false/nil; checklists and items keep Trello's order
+    /// (`pos`); `url` is the card's short URL (else its URL), https on trello.com only.
+    static func parse(_ json: Any) -> TrelloCardDetails? {
+        guard let card = json as? [String: Any], card["id"] is String || card["name"] is String else { return nil }
+        let board = (card["board"] as? [String: Any]) ?? [:]
+        let list = (card["list"] as? [String: Any]) ?? [:]
+        let labels: [Label] = ((card["labels"] as? [Any]) ?? []).compactMap { element in
+            guard let label = element as? [String: Any] else { return nil }
+            let name = (label["name"] as? String) ?? ""
+            let color = (label["color"] as? String) ?? ""
+            return name.isEmpty && color.isEmpty ? nil : Label(name: name, color: color)
+        }
+        let checklists: [Checklist] = ordered((card["checklists"] as? [Any]) ?? []).map { checklist in
+            let items: [ChecklistItem] = ordered((checklist["checkItems"] as? [Any]) ?? []).map { item in
+                ChecklistItem(name: (item["name"] as? String) ?? "",
+                              isComplete: (item["state"] as? String) == "complete")
+            }
+            return Checklist(name: (checklist["name"] as? String) ?? "", items: items)
+        }
+        return TrelloCardDetails(
+            name: (card["name"] as? String) ?? "",
+            url: trelloURL(card["shortUrl"]) ?? trelloURL(card["url"]),
+            boardName: (board["name"] as? String) ?? "",
+            listName: (list["name"] as? String) ?? "",
+            description: (card["desc"] as? String) ?? "",
+            isArchived: (card["closed"] as? Bool) ?? false,
+            due: (card["due"] as? String).flatMap(TrelloActionMapper.parseDate),
+            isDueComplete: (card["dueComplete"] as? Bool) ?? false,
+            labels: labels,
+            checklists: checklists,
+            lastActivity: (card["dateLastActivity"] as? String).flatMap(TrelloActionMapper.parseDate)
+        )
+    }
+
+    /// The dictionaries of `array`, sorted by `pos` (ties and missing `pos` keep their order).
+    private static func ordered(_ array: [Any]) -> [[String: Any]] {
+        let dictionaries = array.compactMap { $0 as? [String: Any] }
+        return dictionaries.enumerated().sorted { lhs, rhs in
+            let left = (lhs.element["pos"] as? NSNumber)?.doubleValue ?? 0
+            let right = (rhs.element["pos"] as? NSNumber)?.doubleValue ?? 0
+            return left == right ? lhs.offset < rhs.offset : left < right
+        }.map(\.element)
+    }
+
+    /// An https URL on trello.com (or a subdomain); nil otherwise.
+    private static func trelloURL(_ value: Any?) -> URL? {
+        guard let text = value as? String, let url = URL(string: text), url.scheme?.lowercased() == "https",
+              let host = url.host?.lowercased(), host == "trello.com" || host.hasSuffix(".trello.com") else { return nil }
+        return url
+    }
+}
+
+/// The result of `TrelloService.cardDetails(shortLink:forceRefresh:)`.
+enum TrelloCardLookup: Equatable, Sendable {
+    case loaded(TrelloCardDetails)
+    /// Trello says the card doesn't exist (404): deleted.
+    case deleted
+    /// Short user-facing reason (not connected, offline, no link…).
+    case unavailable(String)
+}
+
 /// Trello REST calls (https://api.trello.com/1) with the public API key and the user's token, straight from this Mac.
 /// URLSession async, 20 s timeout, JSON parsed with JSONSerialization off the main actor. URLs carry the token, so
 /// they are never logged.
@@ -95,6 +189,22 @@ struct TrelloAPI: Sendable {
         }
         return result
     }
+
+    /// `GET /cards/{shortLink}` (`cardQuery`): the card as it is now, with its board and list names, labels and
+    /// checklists. A deleted card → `TrelloAPIError.http(404)`. `shortLink` must be alphanumeric (the caller checks).
+    func card(shortLink: String) async throws -> TrelloCardDetails {
+        let json = try await send("cards/\(shortLink)", query: Self.cardQuery)
+        guard let details = TrelloCardDetails.parse(json) else { throw TrelloAPIError.invalidResponse }
+        return details
+    }
+
+    /// Query of `card(shortLink:)`. `checklists=all` brings each checklist with its `checkItems` (name, state, pos).
+    static let cardQuery: [(String, String)] = [
+        ("fields", "name,desc,due,dueComplete,closed,shortUrl,url,dateLastActivity,labels"),
+        ("board", "true"), ("board_fields", "name"),
+        ("list", "true"), ("list_fields", "name"),
+        ("checklists", "all"),
+    ]
 
     /// Best effort `DELETE /tokens/{token}` (Disconnect). Errors are ignored.
     func revokeToken() async {

@@ -1454,7 +1454,9 @@ Trello everywhere: `list.bullet.rectangle`. Entries use the kind's own symbol (`
 
 | Component | Behaviour |
 |---|---|
-| `TrelloActivityRow(activity:isCompact:)` (`Worklog/Shared`) | Like `NoteRow`: time (`captionFont`, tabular, `textTertiary`, min 54) · kind symbol (`captionFont`, `textSecondary`) · summary (`bodyFont`, 3 lines; compact: `calloutFont`, 1 line) · caption (comment excerpt in curly quotes · board name; `textTertiary`). One VoiceOver element. Read-only; renders nothing for a deleted entry. |
+| `TrelloActivityRow(activity:isCompact:isExpanded:)` (`Worklog/Shared`) | Like `NoteRow`: time (`captionFont`, tabular, `textTertiary`, min 54) · kind symbol (`captionFont`, `textSecondary`) · summary (`bodyFont`, 3 lines; compact: `calloutFont`, 1 line) · caption (comment / description excerpt in curly quotes, one line, ≤ 200 characters · board name; `textTertiary`) · with `isExpanded`, a trailing `chevron.right` (`textTertiary`) that turns down while open. One VoiceOver element. Read-only; renders nothing for a deleted entry. |
+| `TrelloActivityDisclosure(activity:isCompact:expandedID:onRemove:accessory:)` | The row as a plain button (whole row) that toggles the list's `expandedID` (one card open per list) and shows `TrelloCardBox` under it; 150 ms ease-out fade, none under Reduce Motion. Help: the summary (compact) or "Show card" / "Hide card"; VoiceOver hint the same, value "Card shown", `.isSelected` while open. Context menu: `TrelloActivityMenuItems` (Open in Trello, Copy, + Divider, Remove from Session with `onRemove`). `accessory`: trailing (the detail's ⋯). |
+| `TrelloCardBox(activity:)` | The card as it is now (`TrelloService.cardDetails`; a cached card shows at once), in an `insetSurface` box (`radiusM`, `separator` border, padding `spacingM`, full list width, text wraps). Loading: small spinner "Loading card…". Deleted: "This card was deleted in Trello." Unavailable: the service's reason after a `warning` triangle. Loaded: name (`headlineFont`, selectable) · "Board › List" (`captionFont`, `textSecondary`) · chips "Archived" / "Due Oct 7, 2026 at 9:41 AM" / "Done" (`success`) · labels (Trello color dot + faint fill, name or color name; unknown colors gray) · "Description" (inline markdown, links only http(s)/mailto, `calloutFont`, selectable; "No description.") · checklists (name + "n/m", `checkmark.circle.fill` `success` / `circle` items, done ones struck through) · "Last activity 3 hours ago" · `( Open in Trello )` (small quiet) · refresh `⊡ arrow.clockwise` (22, bypasses the cache). A failed refresh keeps the card and shows the reason above the footer. Description edits: "This edit" (the text saved with the entry, accent bar on the left) above "Description now"; it also shows while loading, deleted or unavailable. |
 | `TrelloActivityActions` | `open(_:)` (card in the browser, `NSWorkspace`), `copy(_:)` (summary + card link), `remove(_:in:)` (detach, delete, touch, `SafeSave`). |
 
 ### 18.2 Screens
@@ -1473,15 +1475,18 @@ Trello everywhere: `list.bullet.rectangle`. Entries use the kind's own symbol (`
   every 30 s): "Checking…" / "Checked just now" / "Checked 3 minutes ago" / "Checks every minute", then
   `lastError` in `textSecondary` after a `warning` triangle. Entries **newest first**, compact, the latest 8 in a
   `surface` box ("5 earlier entries" below). Empty: "Card activity appears here." Context menu: Open in Trello, Copy.
+  Clicking an entry shows its card under it.
 - **End-of-session sheet**: "▸ Trello (n)" disclosure after Notes, collapsed, only when n > 0; compact rows,
-  oldest first. Entries from the final check after Stop appear while the sheet is open.
+  oldest first; clicking one shows its card. Entries from the final check after Stop appear while the sheet is open.
 - **Session detail**: "TRELLO" section after Images, only when there are entries; count trailing; rows oldest
-  first; a row with a card link is a plain button (help "Open in Trello"). ⋯ menu and context menu: Open in Trello,
-  Copy, Divider, Remove from Session (no confirmation: it only removes the log entry).
+  first; clicking a row shows its card under it (Open in Trello moves into the card box). ⋯ menu and context menu:
+  Open in Trello, Copy, Divider, Remove from Session (no confirmation: it only removes the log entry).
 
 ### 18.3 Do / Don't
 
 - Do read entries through `session.sortedTrelloActivities` (live, deduplicated); don't read a held entry without
   `ModelLiveness`.
 - Don't show the Trello section on the overlay or the menu bar panel; don't color entries by kind.
+- Do show the card through `TrelloCardBox` (it needs `TrelloService` in the environment; sheets inherit it); don't
+  open the browser on a row click.
 - Don't say "Worklog" or "Power-Up" in copy; it is "Trello" and "Diptychon".

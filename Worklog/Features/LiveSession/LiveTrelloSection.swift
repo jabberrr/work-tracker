@@ -4,12 +4,15 @@ import SwiftUI
 /// Trello card activity logged for the running session, newest first (the latest few; the review sheet and History
 /// show all). Shown while `TrelloService` logs this session on this Mac, or when the session already has entries
 /// (e.g. logged on another Mac). Status line: "Checking…" / "Checked 1 minute ago", plus the last error, subtly;
-/// the header's refresh button checks now.
+/// the header's refresh button checks now. Clicking an entry shows its card under it (`TrelloActivityDisclosure`, one
+/// at a time).
 @MainActor
 struct LiveTrelloSection: View {
     @Environment(TrelloService.self) private var trello
     @Environment(\.theme) private var theme
     private let session: WorkSession
+    /// The entry whose card is shown (one at a time).
+    @State private var expandedID: UUID?
 
     private static let visibleLimit = 8
 
@@ -85,14 +88,9 @@ struct LiveTrelloSection: View {
         .overlay(shape.strokeBorder(theme.separator, lineWidth: theme.borderWidth))
     }
 
+    /// Compact row (help: the full summary) that shows the card when clicked; context menu Open in Trello, Copy.
     private func row(_ activity: TrelloActivity) -> some View {
-        TrelloActivityRow(activity: activity, isCompact: true)
-            .help(ModelLiveness.isLive(activity) ? activity.summary : "")
-            .contextMenu {
-                Button("Open in Trello") { TrelloActivityActions.open(activity) }
-                    .disabled(!ModelLiveness.isLive(activity) || activity.cardURL == nil)
-                Button("Copy") { TrelloActivityActions.copy(activity) }
-            }
+        TrelloActivityDisclosure(activity: activity, isCompact: true, expandedID: $expandedID)
     }
 }
 

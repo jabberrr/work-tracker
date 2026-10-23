@@ -32,6 +32,8 @@ extension Log {
 /// - 401 → token deleted, `.failed("Trello disconnected. Connect again.")`, polling stops. 429/5xx/offline →
 ///   `lastError`, retried at the next tick. Nothing here ever changes a session's times or blocks a save path:
 ///   inserted rows are removed again if their save fails.
+/// - Cards: `cardDetails(shortLink:)` fetches one card as it is now (`GET /1/cards/{shortLink}`) when the user opens an
+///   entry; kept in memory for 60 s (`cachedCardDetails`), never stored.
 /// - Previews/tests (in-memory AppServices) never call `start()`; it is also a no-op under XCTest and previews.
 @MainActor @Observable
 final class TrelloService {
@@ -106,6 +108,18 @@ final class TrelloService {
     @ObservationIgnored private var trackedSessionUUID: UUID?
     /// Per session: action ids returned by the last successful fetch (covers the overlap of the next one).
     @ObservationIgnored private var seenActionIDs: [UUID: Set<String>] = [:]
+    /// Cards fetched for `cardDetails(shortLink:)`, by short link (in memory only, `cardCacheLifetime`).
+    @ObservationIgnored private var cardCache: [String: CachedCard] = [:]
+    /// Card lookups in flight, by short link: concurrent requests for the same card share one fetch.
+    @ObservationIgnored private var cardFetches: [String: Task<TrelloCardLookup, Never>] = [:]
+
+    private struct CachedCard {
+        var details: TrelloCardDetails
+        var fetchedAt: Date
+    }
+
+    /// How long a fetched card is reused without asking Trello again.
+    static let cardCacheLifetime: TimeInterval = 60
 
     init(context: ModelContext, settings: AppSettings, engine: SessionEngine, keychain: KeychainStore = KeychainStore()) {
         self.context = context
@@ -197,6 +211,7 @@ final class TrelloService {
         watchedBoardIDs = []
         trackedSessionUUID = nil
         seenActionIDs = [:]
+        cardCache = [:]
         defaults.removeObject(forKey: Keys.pendingFinals)
         removeCursors { _ in true }
         lastError = nil
@@ -285,6 +300,35 @@ final class TrelloService {
         updateTimer()
     }
 
+    // MARK: - Cards
+
+    /// The card of a logged entry as it is now in Trello (`GET /1/cards/{shortLink}`), reused from memory for
+    /// `cardCacheLifetime` unless `forceRefresh`. Concurrent requests for the same card share one fetch. Never
+    /// throws: a 404 is `.deleted`; everything else that goes wrong is `.unavailable` with a short reason. A 401 is
+    /// handled like polling (disconnect) once `GET /members/me` confirms the token itself is gone; otherwise the
+    /// user just can't see that card any more.
+    func cardDetails(shortLink: String, forceRefresh: Bool = false) async -> TrelloCardLookup {
+        let link = shortLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard TrelloActivity.cardURL(shortLink: link) != nil else { return .unavailable(CardMessage.noLink) }
+        guard isConfigured else { return .unavailable(CardMessage.notConfigured) }
+        guard isConnected, let token, let api = makeAPI(token: token) else {
+            return .unavailable(CardMessage.notConnected)
+        }
+        if !forceRefresh, let cached = cachedCardDetails(shortLink: link) { return .loaded(cached) }
+        if let running = cardFetches[link] { return await running.value }
+        let lookup = Task { await self.loadCard(link, api: api) }
+        cardFetches[link] = lookup
+        return await lookup.value
+    }
+
+    /// The card fetched for `shortLink` within the last `cardCacheLifetime`, if any (no network).
+    func cachedCardDetails(shortLink: String) -> TrelloCardDetails? {
+        let link = shortLink.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let cached = cardCache[link], Date.now.timeIntervalSince(cached.fetchedAt) < Self.cardCacheLifetime,
+              isConnected else { return nil }
+        return cached.details
+    }
+
     // MARK: - Pure helpers
 
     /// Boards sorted by name (case-insensitive), then id.
@@ -304,6 +348,56 @@ final class TrelloService {
 
     private static var isEphemeralProcess: Bool {
         AppServices.isRunningUnitTests || ProcessInfo.processInfo.environment["XCODE_RUNNING_FOR_PREVIEWS"] == "1"
+    }
+
+    /// Short user-facing reasons of `TrelloCardLookup.unavailable`.
+    enum CardMessage {
+        static let noLink = "Trello didn\u{2019}t send a link for this card."
+        static let notConfigured = "Trello isn\u{2019}t set up in this build."
+        static let notConnected = "Connect Trello in Settings to see the full card."
+        static let offline = "Can\u{2019}t reach Trello right now."
+        static let noAccess = "You can\u{2019}t see this card in Trello anymore."
+        static let failed = "Couldn\u{2019}t load this card from Trello."
+    }
+
+    /// One card fetch (`cardDetails`): caches a loaded card, maps errors, then leaves `cardFetches`.
+    private func loadCard(_ link: String, api: TrelloAPI) async -> TrelloCardLookup {
+        defer { cardFetches[link] = nil }
+        let failure: TrelloAPIError
+        do {
+            let details = try await api.card(shortLink: link)
+            guard token == api.token else { return .unavailable(CardMessage.notConnected) }
+            let now = Date.now
+            cardCache = cardCache.filter { now.timeIntervalSince($0.value.fetchedAt) < Self.cardCacheLifetime }
+            cardCache[link] = CachedCard(details: details, fetchedAt: now)
+            return .loaded(details)
+        } catch let error as TrelloAPIError {
+            failure = error
+        } catch {
+            failure = .invalidResponse
+        }
+        guard token == api.token else { return .unavailable(CardMessage.notConnected) }
+        Log.trello.error("Trello card lookup failed: \(String(describing: failure), privacy: .public)")
+        switch failure {
+        case .http(404):
+            cardCache[link] = nil
+            return .deleted
+        case .unauthorized:
+            // Trello also answers 401 for a card on a board the user can no longer see: check the token itself.
+            do {
+                _ = try await api.memberID()
+                return .unavailable(CardMessage.noAccess)
+            } catch TrelloAPIError.unauthorized {
+                if token == api.token { handleUnauthorized() }
+                return .unavailable(TrelloAPIError.unauthorized.userMessage)
+            } catch {
+                return .unavailable(CardMessage.offline)
+            }
+        case .offline, .rateLimited, .server:
+            return .unavailable(CardMessage.offline)
+        case .http, .invalidResponse:
+            return .unavailable(CardMessage.failed)
+        }
     }
 
     private func makeAPI(token: String) -> TrelloAPI? {
@@ -355,6 +449,7 @@ final class TrelloService {
         token = nil
         boards = []
         trackedSessionUUID = nil
+        cardCache = [:]
         lastError = nil
         connection = .failed(TrelloAPIError.unauthorized.userMessage)
         updateTimer()

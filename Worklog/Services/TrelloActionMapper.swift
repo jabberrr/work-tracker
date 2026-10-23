@@ -19,6 +19,8 @@ struct TrelloMappedAction: Equatable, Sendable {
 enum TrelloActionMapper {
     /// Longest `detail` stored (checklist item, comment excerpt, old card name), ellipsis included.
     static let detailLimit = 200
+    /// Longest `detail` stored for a description edit (the full new description, line breaks kept), ellipsis included.
+    static let descriptionLimit = 10_000
 
     /// The action types requested from Trello (`filter=`).
     static let actionTypes = [
@@ -30,7 +32,8 @@ enum TrelloActionMapper {
     /// `updateCard` that only changed something else (position, due date, labels, cover…).
     ///
     /// updateCard (by `data.old` key, first match wins): idList → moved (listBefore → listAfter); closed →
-    /// archived/unarchived; dueComplete → completed/reopened; name → renamed (detail = old name).
+    /// archived/unarchived; dueComplete → completed/reopened; name → renamed (detail = old name); desc →
+    /// editedDescription (detail = the full new description, `descriptionText`).
     static func map(_ action: [String: Any]) -> TrelloMappedAction? {
         let id = string(action["id"])
         guard !id.isEmpty, let type = action["type"] as? String,
@@ -81,7 +84,7 @@ enum TrelloActionMapper {
                 result.detail = excerpt(string(old["name"]))
             } else if old["desc"] != nil {
                 result.kind = .editedDescription
-                result.detail = excerpt(string(card["desc"]))
+                result.detail = descriptionText(string(card["desc"]))
             } else {
                 return nil
             }
@@ -160,6 +163,19 @@ enum TrelloActionMapper {
         let line = text.split(whereSeparator: { $0.isWhitespace || $0.isNewline }).joined(separator: " ")
         guard line.count > detailLimit else { return line }
         return String(line.prefix(detailLimit - 1)).trimmingCharacters(in: .whitespaces) + "\u{2026}"
+    }
+
+    /// A description as Trello stores it (Markdown, line breaks kept), trimmed, at most `limit` characters with "…"
+    /// when cut.
+    static func descriptionText(_ text: String, limit: Int = descriptionLimit) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.count > limit else { return trimmed }
+        return String(trimmed.prefix(max(0, limit - 1))).trimmingCharacters(in: .whitespacesAndNewlines) + "\u{2026}"
+    }
+
+    /// The longest `detail` stored for an entry of `kind` (`descriptionLimit` for description edits).
+    static func storedDetailLimit(for kind: TrelloActivityKind) -> Int {
+        kind == .editedDescription ? descriptionLimit : detailLimit
     }
 
     // MARK: - Private

@@ -3,7 +3,8 @@ import XCTest
 @testable import Worklog
 
 /// Trello activity logging: the pure action mapper and summaries, the attach rules (window, board filter, dedupe,
-/// cursor), auth URL/token helpers, the model relationship, export/import round trips and dedupe.
+/// cursor), card details parsing and lookup, auth URL/token helpers, the model relationship, export/import round
+/// trips and dedupe.
 final class TrelloTests: XCTestCase {
 
     // MARK: - Fixtures
@@ -109,13 +110,35 @@ final class TrelloTests: XCTestCase {
     }
 
     func testDescriptionEdits() throws {
-        let edited = try mapped("updateCard", data: #""card": {"id": "c1", "name": "Fix login", "desc": "Use the new token flow."}, "old": {"desc": ""}"#)
+        let edited = try mapped("updateCard", data: #""card": {"id": "c1", "name": "Fix login", "desc": "Use the new token flow.\n\n- **Step 1**  check\n- Step 2\n"}, "old": {"desc": ""}"#)
         XCTAssertEqual(edited.kind, .editedDescription)
-        XCTAssertEqual(edited.detail, "Use the new token flow.")
+        // The full description as saved, Markdown and line breaks kept (only trimmed).
+        XCTAssertEqual(edited.detail, "Use the new token flow.\n\n- **Step 1**  check\n- Step 2")
         XCTAssertEqual(summary(edited), "Edited the description of \u{201C}Fix login\u{201D}")
         let cleared = try mapped("updateCard", data: #""card": {"id": "c1", "name": "Fix login", "desc": ""}, "old": {"desc": "Old notes"}"#)
         XCTAssertEqual(cleared.kind, .editedDescription)
+        XCTAssertEqual(cleared.detail, "")
         XCTAssertEqual(summary(cleared), "Cleared the description of \u{201C}Fix login\u{201D}")
+    }
+
+    func testLongDescriptionIsStoredInFull() throws {
+        // 300 lines, 4,200 characters: far over `detailLimit`. In JSON each line break is the escape \n.
+        let jsonLong = String(repeating: #"Line of text.\n"#, count: 300)
+        let m = try mapped("updateCard", data: #""card": {"id": "c1", "name": "Fix login", "desc": ""#
+            + jsonLong + #""}, "old": {"desc": "x"}"#)
+        XCTAssertEqual(m.kind, .editedDescription)
+        let long = String(repeating: "Line of text.\n", count: 300)
+        XCTAssertEqual(m.detail, long.trimmingCharacters(in: .whitespacesAndNewlines))
+        XCTAssertGreaterThan(m.detail.count, TrelloActionMapper.detailLimit)
+
+        let huge = String(repeating: "a", count: TrelloActionMapper.descriptionLimit + 500)
+        let cut = TrelloActionMapper.descriptionText(huge)
+        XCTAssertEqual(cut.count, TrelloActionMapper.descriptionLimit)
+        XCTAssertTrue(cut.hasSuffix("\u{2026}"))
+        XCTAssertEqual(TrelloActionMapper.descriptionText("  a\n\nb \n"), "a\n\nb")
+
+        XCTAssertEqual(TrelloActionMapper.storedDetailLimit(for: .editedDescription), 10_000)
+        XCTAssertEqual(TrelloActionMapper.storedDetailLimit(for: .commented), TrelloActionMapper.detailLimit)
     }
 
     func testIrrelevantCardUpdatesAreNotLogged() {
@@ -200,6 +223,86 @@ final class TrelloTests: XCTestCase {
                                               detail: ""), "Moved \u{201C}X\u{201D} to Done")
         XCTAssertEqual(TrelloActivity.summary(kind: .completed, cardName: " ", listName: "", fromListName: "",
                                               detail: ""), "Completed a card")
+    }
+
+    // MARK: - Card details
+
+    func testCardDetailsParsing() throws {
+        let json = #"""
+        {"id": "c1", "name": "Fix login", "desc": "Use the **new** flow.\n\nSecond paragraph.", "closed": true,
+         "due": "2026-10-30T17:00:00.000Z", "dueComplete": true, "dateLastActivity": "2026-10-23T09:15:02.123Z",
+         "shortUrl": "https://trello.com/c/AbC123", "url": "https://trello.com/c/AbC123/7-fix-login",
+         "labels": [{"id": "lb1", "name": "Bug", "color": "red"}, {"id": "lb2", "name": "", "color": "sky_dark"},
+                    {"id": "lb3", "name": "Later", "color": null}, {"id": "lb4", "name": "", "color": null}],
+         "board": {"id": "b1", "name": "Product"}, "list": {"id": "l1", "name": "Doing"},
+         "checklists": [
+           {"id": "k2", "name": "Release", "pos": 32768, "checkItems": [{"id": "i3", "name": "Ship", "state": "incomplete", "pos": 1}]},
+           {"id": "k1", "name": "Tasks", "pos": 16384, "checkItems": [
+             {"id": "i2", "name": "Review", "state": "incomplete", "pos": 200},
+             {"id": "i1", "name": "Write tests", "state": "complete", "pos": 100}]}]}
+        """#
+        let object = try JSONSerialization.jsonObject(with: Data(json.utf8))
+        let card = try XCTUnwrap(TrelloCardDetails.parse(object))
+        XCTAssertEqual(card.name, "Fix login")
+        XCTAssertEqual(card.url?.absoluteString, "https://trello.com/c/AbC123")
+        XCTAssertEqual(card.boardName, "Product")
+        XCTAssertEqual(card.listName, "Doing")
+        XCTAssertEqual(card.description, "Use the **new** flow.\n\nSecond paragraph.")
+        XCTAssertTrue(card.isArchived)
+        XCTAssertTrue(card.isDueComplete)
+        XCTAssertEqual(card.due, TrelloActionMapper.parseDate("2026-10-30T17:00:00.000Z"))
+        XCTAssertEqual(try XCTUnwrap(card.lastActivity).timeIntervalSince1970, Self.referenceDate.timeIntervalSince1970,
+                       accuracy: 0.001)
+        XCTAssertEqual(card.labels, [.init(name: "Bug", color: "red"), .init(name: "", color: "sky_dark"),
+                                     .init(name: "Later", color: "")])
+        XCTAssertEqual(card.checklists.map(\.name), ["Tasks", "Release"], "Trello order (pos)")
+        XCTAssertEqual(card.checklists[0].items, [.init(name: "Write tests", isComplete: true),
+                                                  .init(name: "Review", isComplete: false)])
+        XCTAssertEqual(card.checklists[1].items, [.init(name: "Ship", isComplete: false)])
+    }
+
+    func testCardDetailsParsingIsTolerant() throws {
+        let minimal = try XCTUnwrap(TrelloCardDetails.parse(["id": "c1", "name": "Bare", "due": NSNull(),
+                                                             "url": "javascript:alert(1)"] as [String: Any]))
+        XCTAssertEqual(minimal.name, "Bare")
+        XCTAssertNil(minimal.url, "only https links on trello.com")
+        XCTAssertNil(minimal.due)
+        XCTAssertNil(minimal.lastActivity)
+        XCTAssertEqual(minimal.boardName, "")
+        XCTAssertEqual(minimal.description, "")
+        XCTAssertFalse(minimal.isArchived)
+        XCTAssertTrue(minimal.labels.isEmpty)
+        XCTAssertTrue(minimal.checklists.isEmpty)
+        XCTAssertNil(TrelloCardDetails.parse(["not", "a card"]))
+        XCTAssertNil(TrelloCardDetails.parse(["message": "not found"] as [String: Any]))
+        XCTAssertNil(TrelloCardDetails.parse(NSNull()))
+    }
+
+    func testCardQueryAsksForBoardListAndChecklists() {
+        let query = Dictionary(uniqueKeysWithValues: TrelloAPI.cardQuery.map { ($0.0, $0.1) })
+        XCTAssertEqual(query["board"], "true")
+        XCTAssertEqual(query["list"], "true")
+        XCTAssertEqual(query["checklists"], "all")
+        for field in ["name", "desc", "due", "dueComplete", "closed", "shortUrl", "labels", "dateLastActivity"] {
+            XCTAssertTrue(query["fields"]?.split(separator: ",").contains(Substring(field)) ?? false, field)
+        }
+    }
+
+    @MainActor
+    func testCardLookupWithoutConnectionNeverFetches() async throws {
+        let context = try TestSupport.makeContext()
+        let settings = TestSupport.makeSettings()
+        let engine = SessionEngine(context: context, settings: settings)
+        let keychain = KeychainStore(service: "WorklogTests.\(UUID().uuidString)")
+        let service = TrelloService(context: context, settings: settings, engine: engine, keychain: keychain)
+
+        let noLink = await service.cardDetails(shortLink: " ")
+        XCTAssertEqual(noLink, .unavailable("Trello didn\u{2019}t send a link for this card."))
+        let expected = TrelloConfig.apiKey.isEmpty
+            ? "Trello isn\u{2019}t set up in this build." : "Connect Trello in Settings to see the full card."
+        let lookup = await service.cardDetails(shortLink: "AbC123", forceRefresh: true)
+        XCTAssertEqual(lookup, .unavailable(expected))
+        XCTAssertNil(service.cachedCardDetails(shortLink: "AbC123"))
     }
 
     // MARK: - Attach rules
@@ -384,6 +487,30 @@ final class TrelloTests: XCTestCase {
         XCTAssertEqual(activities[0].cardShortLink, "AbC123")
         XCTAssertEqual(activities[1].detail, "Looks good")
         XCTAssertEqual(activities[1].occurredAt, start.addingTimeInterval(120))
+    }
+
+    @MainActor
+    func testImportKeepsFullDescriptionsAndCapsOtherDetails() throws {
+        let source = try TestSupport.makeContext()
+        let start = TestSupport.time(9)
+        let session = TestSupport.makeEndedSession(in: source, start: start, segmentMinutes: [60])
+        let description = String(repeating: "Paragraph text.\n\n", count: 100).trimmingCharacters(in: .newlines)
+        let edit = addActivity("a1", kind: .editedDescription, at: start.addingTimeInterval(60), to: session, in: source)
+        edit.detail = description
+        try source.save()
+        var archive = try ExportService(container: source.container).makeArchive(includeAttachments: false)
+        archive.sessions[0].trelloActivities?.append(TrelloActivityDTO(
+            id: UUID(), actionID: "a2", occurredAt: start.addingTimeInterval(120), kind: "commented",
+            cardName: "Fix login", cardShortLink: "", boardName: "", listName: "", fromListName: "",
+            detail: String(repeating: "c", count: 500)))
+
+        let destination = try TestSupport.makeContext()
+        _ = try ExportService(container: destination.container).importArchive(archive, mode: .replace)
+        let copy = try XCTUnwrap(try destination.fetch(FetchDescriptor<WorkSession>()).first)
+        let activities = copy.sortedTrelloActivities
+        XCTAssertEqual(activities.map(\.actionID), ["a1", "a2"])
+        XCTAssertEqual(activities[0].detail, description, "full description survives export and import")
+        XCTAssertEqual(activities[1].detail.count, TrelloActionMapper.detailLimit)
     }
 
     @MainActor

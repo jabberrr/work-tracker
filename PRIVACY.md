@@ -8,7 +8,7 @@
 This policy covers Diptychon, a macOS app for tracking work sessions, made by Jasper Dabora ("I", "me"). Diptychon has no servers, website accounts or backend of its own.
 
 ## Information I collect
-**None.** Diptychon doesn't send anything you create, or anything about how you use the app, to me. It doesn't send anything you create to anyone else either. If you connect Trello, Diptychon asks Trello for your card activity while a session runs, so Trello can see when those requests are made; it never sends your sessions, notes or anything else you write to Trello (see *Trello* below). There are no analytics or advertising tools and no third-party code that collects data, and the app doesn't track you across apps or websites.
+**None.** Diptychon doesn't send anything you create, or anything about how you use the app, to me. It doesn't send anything you create to anyone else either. If you connect Trello, Diptychon asks Trello for your card activity while a session runs (and for one card when you open an entry), so Trello can see when those requests are made; it never sends your sessions, notes or anything else you write to Trello (see *Trello* below). There are no analytics or advertising tools and no third-party code that collects data, and the app doesn't track you across apps or websites.
 
 ## Where your data is kept
 Everything you create in Diptychon stays on your devices or in your iCloud. That includes sessions, segments, titles, labels, tags, profiles, notes, learnings, takeaways, images and any Trello activity it logged.
@@ -25,9 +25,9 @@ Signing out removes the identifier from Diptychon. You can also stop using Sign 
 ## Trello (optional)
 Connecting Trello is optional. Nothing is sent to Trello until you connect it in **Settings › Integrations › Trello**. When you connect, Trello asks you to allow **read-only** access and gives Diptychon a token. Diptychon stores the token only in your Mac's Keychain and never sends it to me.
 
-While a session runs on this Mac, Diptychon asks Trello about once a minute for your own card activity: cards you added, moved, completed, archived, renamed or deleted, card descriptions you edited, checklist items you checked, and your comments. You can limit this to some boards. These requests go from your Mac straight to Trello (trello.com and api.trello.com) with your token. Like any visit to Trello, Trello sees each request, including when it's made and your IP address. Diptychon never changes your boards or cards.
+While a session runs on this Mac, Diptychon asks Trello about once a minute for your own card activity: cards you added, moved, completed, archived, renamed or deleted, card descriptions you edited, checklist items you checked, and your comments. You can limit this to some boards. These requests go from your Mac straight to Trello (trello.com and api.trello.com) with your token. Like any visit to Trello, Trello sees each request, including when it's made and your IP address. When you open an entry, Diptychon asks Trello for that card. Diptychon never changes your boards or cards.
 
-The entries it logs (card, board and list names, and a short excerpt of a comment, card description or checklist item) are saved with that session on your Mac and, if you turn on sync, in your iCloud, encrypted like your notes. They're also in your backups and exports. None of it reaches me, so Diptychon's App Store privacy answer stays accurate: **Data Not Collected**.
+The entries it logs (card, board and list names, a short excerpt of a comment or checklist item, and the text of a card description you edited) are saved with that session on your Mac and, if you turn on sync, in your iCloud, encrypted like your notes. They're also in your backups and exports. None of it reaches me, so Diptychon's App Store privacy answer stays accurate: **Data Not Collected**.
 
 - To remove one entry, right-click it in the session and choose **Remove from Session**. Deleting a session removes its entries.
 - **Disconnect…** in **Settings › Integrations › Trello** deletes the token from your Mac and asks Trello to revoke it. Entries already logged stay with your sessions.
