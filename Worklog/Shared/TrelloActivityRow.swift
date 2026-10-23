@@ -62,10 +62,10 @@ struct TrelloActivityRow: View {
         .accessibilityLabel(accessibilityText(summary: summary, time: time, caption: caption))
     }
 
-    /// "“Looks good to me”" (comments only) · board name, or nil.
+    /// "“Looks good to me”" (comments and description edits) · board name, or nil.
     private var captionText: String? {
         var parts: [String] = []
-        if activity.kind == .commented, !activity.detail.isBlank {
+        if activity.kind == .commented || activity.kind == .editedDescription, !activity.detail.isBlank {
             parts.append("\u{201C}\(activity.detail.trimmed)\u{201D}")
         }
         if !activity.boardName.isBlank {

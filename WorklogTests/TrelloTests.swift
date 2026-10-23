@@ -108,9 +108,18 @@ final class TrelloTests: XCTestCase {
         XCTAssertEqual(summary(m), "Renamed \u{201C}Fix login\u{201D} to \u{201C}Fix sign-in\u{201D}")
     }
 
+    func testDescriptionEdits() throws {
+        let edited = try mapped("updateCard", data: #""card": {"id": "c1", "name": "Fix login", "desc": "Use the new token flow."}, "old": {"desc": ""}"#)
+        XCTAssertEqual(edited.kind, .editedDescription)
+        XCTAssertEqual(edited.detail, "Use the new token flow.")
+        XCTAssertEqual(summary(edited), "Edited the description of \u{201C}Fix login\u{201D}")
+        let cleared = try mapped("updateCard", data: #""card": {"id": "c1", "name": "Fix login", "desc": ""}, "old": {"desc": "Old notes"}"#)
+        XCTAssertEqual(cleared.kind, .editedDescription)
+        XCTAssertEqual(summary(cleared), "Cleared the description of \u{201C}Fix login\u{201D}")
+    }
+
     func testIrrelevantCardUpdatesAreNotLogged() {
         XCTAssertNil(TrelloActionMapper.map(action("updateCard", data: Self.card + #", "old": {"pos": 16384}"#)))
-        XCTAssertNil(TrelloActionMapper.map(action("updateCard", data: Self.card + #", "old": {"desc": ""}"#)))
         XCTAssertNil(TrelloActionMapper.map(action("updateCard", data: Self.card + #", "old": {"due": null}"#)))
         XCTAssertNil(TrelloActionMapper.map(action("updateCard", data: Self.card)))
         XCTAssertNil(TrelloActionMapper.map(action("addMemberToCard", data: Self.card)))

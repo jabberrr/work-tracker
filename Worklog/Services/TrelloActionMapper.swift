@@ -27,7 +27,7 @@ enum TrelloActionMapper {
     ]
 
     /// One action dictionary → mapped fields, or nil when it isn't logged: unknown type, missing id/date, or an
-    /// `updateCard` that only changed something else (position, description, due date, labels, cover…).
+    /// `updateCard` that only changed something else (position, due date, labels, cover…).
     ///
     /// updateCard (by `data.old` key, first match wins): idList → moved (listBefore → listAfter); closed →
     /// archived/unarchived; dueComplete → completed/reopened; name → renamed (detail = old name).
@@ -79,6 +79,9 @@ enum TrelloActionMapper {
             } else if old["name"] != nil {
                 result.kind = .renamed
                 result.detail = excerpt(string(old["name"]))
+            } else if old["desc"] != nil {
+                result.kind = .editedDescription
+                result.detail = excerpt(string(card["desc"]))
             } else {
                 return nil
             }

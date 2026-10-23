@@ -35,7 +35,7 @@ final class TrelloActivity {
 
 enum TrelloActivityKind: String, CaseIterable, Codable {
     case created, moved, completed, reopened, archived, unarchived, commented, checkedItem, uncheckedItem,
-         renamed, deleted, movedToBoard, copied, other
+         renamed, editedDescription, deleted, movedToBoard, copied, other
 }
 
 extension TrelloActivity {
@@ -88,6 +88,9 @@ extension TrelloActivity {
         case .renamed:
             let old = detail.trimmingCharacters(in: .whitespacesAndNewlines)
             return old.isEmpty ? "Renamed a card to \(card)" : "Renamed \(quoted(old)) to \(card)"
+        case .editedDescription:
+            return detail.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+                ? "Cleared the description of \(card)" : "Edited the description of \(card)"
         case .deleted:
             let what = cardName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "a card" : card
             return list.isEmpty ? "Deleted \(what)" : "Deleted \(what) from \(list)"
@@ -127,6 +130,7 @@ extension TrelloActivityKind {
         case .checkedItem: "checklist"
         case .uncheckedItem: "checklist.unchecked"
         case .renamed: "pencil"
+        case .editedDescription: "text.alignleft"
         case .deleted: "trash"
         case .movedToBoard: "rectangle.portrait.and.arrow.right"
         case .copied: "doc.on.doc"

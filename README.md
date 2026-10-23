@@ -27,7 +27,7 @@ optional floating overlay give quick access while you work.
 - **Themes**: Graphite (the default, a neutral sans-serif look) plus the optional Paper and Meadow themes, light/dark/system appearance and an accent colour.
 - **Images**: add them by picking files, pasting or dragging. They are downscaled to 2048 px and compressed, and sync through iCloud.
 - **Account**: Sign in with Apple, or continue without signing in. iCloud sync uses the Mac's Apple Account either way.
-- **Trello (optional)**: connect a Trello account (read-only) and Worklog logs your own card activity (cards added, moved, completed, archived, checklist items, comments, renames, deletions) to the session running on this Mac. Entries show in the live session, the review and session detail, are searchable, can be removed one by one, and are included in export and backups.
+- **Trello (optional)**: connect a Trello account (read-only) and Worklog logs your own card activity (cards added, moved, completed, archived, checklist items, comments, renames, description edits, deletions) to the session running on this Mac. Entries show in the live session, the review and session detail, are searchable, can be removed one by one, and are included in export and backups.
 - **Data**: JSON export and import (merge or replace), CSV export (sessions and segments), rolling local backups with restore, and a recovery flow if the data store can't be opened.
 - **Settings in the main window**: Settings is a page of the main window (the gear in the sidebar footer, ⌘, or the app menu's "Settings…"), not a separate window. Sections: General, Appearance, Overlay, Shortcuts, Profiles, Labels & Tags, Integrations, Account, Data.
 - **Customizable keyboard shortcuts**: every app shortcut can be re-recorded, cleared or reset in Settings ▸ Shortcuts. Conflicts, combos reserved by macOS, shortcuts without ⌘ or ⌃ and ⇧ with a digit or symbol are rejected; changes apply immediately and survive relaunch. Defaults:
@@ -346,7 +346,7 @@ Changing the iCloud sync toggle takes effect at the next launch.
 **External services.** Besides iCloud, Worklog talks to no server by default. If the user connects Trello,
 `api.trello.com` (and `trello.com` for the sign-in page) become outbound hosts: read-only requests straight from the
 Mac with the user's token, which lives only in this Mac's Keychain. Logged Trello entries are stored with their
-session; card, board and list names and the comment/checklist excerpt are `allowsCloudEncryption`. Nothing goes to the
+session; card, board and list names and the comment/description/checklist excerpt are `allowsCloudEncryption`. Nothing goes to the
 developer. The sandbox already allows outbound connections (`com.apple.security.network.client`).
 
 Signing out never deletes data. Neither does revoking Sign in with Apple; it only brings back the welcome screen.

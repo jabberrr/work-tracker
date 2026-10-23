@@ -2527,11 +2527,11 @@ The user can connect Trello. While a session runs on this Mac, Worklog logs the 
     @Attribute(.allowsCloudEncryption) var boardName: String = ""
     @Attribute(.allowsCloudEncryption) var listName: String = ""
     @Attribute(.allowsCloudEncryption) var fromListName: String = ""   // moves only
-    @Attribute(.allowsCloudEncryption) var detail: String = ""         // checklist item / comment excerpt (≤ 200 chars), old name for renames
+    @Attribute(.allowsCloudEncryption) var detail: String = ""         // checklist item / comment or new description excerpt (≤ 200 chars), old name for renames
     var session: WorkSession?
 }
 enum TrelloActivityKind: String { case created, moved, completed, reopened, archived, unarchived, commented,
-                                       checkedItem, uncheckedItem, renamed, deleted, movedToBoard, copied, other }
+                                       checkedItem, uncheckedItem, renamed, editedDescription, deleted, movedToBoard, copied, other }
 // extension: kind (unknown raw → .other), summary (one line, curly quotes), cardURL (nil without shortLink), systemImage
 ```
 
