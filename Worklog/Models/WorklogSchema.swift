@@ -21,15 +21,21 @@ enum WorklogSchema {
 /// `WorklogSchemaV2` that lists the same live types: two identical schemas in a migration plan fail with a
 /// duplicate-checksum error.
 ///
-/// If a migration plan is ever adopted, freeze BOTH shipped shapes as separate versions: the pre-round-3 model (no
-/// `WorkProfile`, no `profile` relationships) and the round-3 model (with them). Stores in the field exist in both
-/// shapes, and a plan that lists only one refuses the other as an unknown model version.
+/// The Trello round added `TrelloActivity` (new record type `CD_TrelloActivity`) and the optional to-many
+/// `WorkSession.trelloActivities` (cascade): additive again, every attribute defaulted, handled by lightweight
+/// migration. BEFORE shipping a build with it, run once with `-initializeCloudKitSchema` (DEBUG) and deploy the
+/// CloudKit schema to Production; otherwise Production can't store the new records.
+///
+/// If a migration plan is ever adopted, freeze EVERY shipped shape as a separate version: the pre-round-3 model (no
+/// `WorkProfile`, no `profile` relationships), the round-3 model (with them) and the Trello model (with
+/// `TrelloActivity`). Stores in the field exist in each shape, and a plan that lists only some refuses the others as
+/// an unknown model version.
 enum WorklogSchemaV1: VersionedSchema {
     static var versionIdentifier: Schema.Version { Schema.Version(1, 0, 0) }
     static var models: [any PersistentModel.Type] {
         [
             WorkSession.self, Segment.self, Note.self, Attachment.self,
-            WorkLabel.self, WorkTag.self, LearningPoint.self, WorkProfile.self,
+            WorkLabel.self, WorkTag.self, LearningPoint.self, WorkProfile.self, TrelloActivity.self,
         ]
     }
 }

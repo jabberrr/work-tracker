@@ -46,6 +46,7 @@ struct LiveActivePane: View {
                 }
                 segmentsSection
                 notesSection
+                LiveTrelloSection(session: session)
             }
             .padding(theme.spacingXL)
             .frame(maxWidth: 760, alignment: .leading)

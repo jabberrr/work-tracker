@@ -65,6 +65,7 @@ struct SettingsProfilesTab: View {
         }
         .sheet(isPresented: $showsCreateSheet, onDismiss: selectCreatedProfile) {
             ProfileCreateSheet(selectsNewProfile: false)
+                .tint(theme.accent)
         }
     }
 
@@ -334,6 +335,7 @@ private struct SettingsProfileEditor: View {
                 showsDeleteSheet = false
                 onDeleted()
             }
+            .tint(theme.accent)
         }
     }
 

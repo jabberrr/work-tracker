@@ -166,7 +166,11 @@ struct HistoryLiveRow: View {
                         .font(theme.headlineFont)
                         .foregroundStyle(theme.textPrimary)
                         .lineLimit(1)
-                    LabelBadge(label: engine.currentLabel, size: .small)
+                    HStack(spacing: theme.spacingXS) {
+                        LabelBadge(label: engine.currentLabel, size: .small)
+                            .layoutPriority(1)
+                        TagChipsLine(tags: LiveCurrentSegmentTags.editable(engine))
+                    }
                 }
                 Spacer(minLength: theme.spacingS)
                 timer

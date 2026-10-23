@@ -35,6 +35,10 @@
 			isa = PBXBuildFile;
 			fileRef = 2087EBE5D706F2D9C59426BC;
 		};
+		0C276C60AB6899B8228ABCB7 = {
+			isa = PBXBuildFile;
+			fileRef = 37DCB834A2BA83BF3CD20A70;
+		};
 		0D2A381C3DEC585D0A09E679 = {
 			isa = PBXBuildFile;
 			fileRef = 2B11F321D5F28258CF4F8815;
@@ -111,6 +115,10 @@
 			isa = PBXBuildFile;
 			fileRef = D727E0A76B6413FB80EDA399;
 		};
+		1F92140C082F94205699207B = {
+			isa = PBXBuildFile;
+			fileRef = 56DBEE9181DD864B65FEB737;
+		};
 		205FC65A645EF28D0B77310E = {
 			isa = PBXBuildFile;
 			fileRef = BBD694351C56140020B322B2;
@@ -131,6 +139,10 @@
 			isa = PBXBuildFile;
 			fileRef = 0D7CE01109B1568C06399987;
 		};
+		291DD40B8CF6FAAD7CF93C94 = {
+			isa = PBXBuildFile;
+			fileRef = DFB9490FCD834FAB94AEC342;
+		};
 		2A02235E77CFCF09D7030AC0 = {
 			isa = PBXBuildFile;
 			fileRef = CCCE3B78A4E54D19A757E5BA;
@@ -146,6 +158,10 @@
 		2CC06D38576F8A7CFD7BA849 = {
 			isa = PBXBuildFile;
 			fileRef = 9BAD66802D6F49034C74A41C;
+		};
+		2CE3F664296F2894FFAAB4A1 = {
+			isa = PBXBuildFile;
+			fileRef = 810B01EF07E2F9B66BAC4480;
 		};
 		3099CCE93C43F099E75E40FC = {
 			isa = PBXBuildFile;
@@ -175,9 +191,21 @@
 			isa = PBXBuildFile;
 			fileRef = AC9147D506B148A30D3CE432;
 		};
+		3622BED02729337FDA117C10 = {
+			isa = PBXBuildFile;
+			fileRef = 680FF39F970731685FAF646A;
+		};
+		362360B8B72D555A67A033A0 = {
+			isa = PBXBuildFile;
+			fileRef = 3DA01ED6C26C701C70238D46;
+		};
 		3D186EB705C59193098ED206 = {
 			isa = PBXBuildFile;
 			fileRef = B737B9845B291C99728EDAD7;
+		};
+		3D32833831B1605875DAF412 = {
+			isa = PBXBuildFile;
+			fileRef = 02F06223A792BF1055D9278A;
 		};
 		3D642B7BC890A75C991AFD6F = {
 			isa = PBXBuildFile;
@@ -246,6 +274,10 @@
 		5A446A91634CA2E56E826B56 = {
 			isa = PBXBuildFile;
 			fileRef = 1780D3DF7C7D5082A5F92FD7;
+		};
+		5DB1336ABACD32995E51B2D1 = {
+			isa = PBXBuildFile;
+			fileRef = 5499C0B432C949B5F5FEA4AD;
 		};
 		5E801F050C9648794E3094A3 = {
 			isa = PBXBuildFile;
@@ -399,6 +431,10 @@
 			isa = PBXBuildFile;
 			fileRef = 77A2B4F44D272048CB6D1421;
 		};
+		9C4A233DFACEF9BB32BABF39 = {
+			isa = PBXBuildFile;
+			fileRef = 14D91280DAFB641166600078;
+		};
 		9C7824DCF623B965C88F57B4 = {
 			isa = PBXBuildFile;
 			fileRef = E4296589FF2E5EBCD793D52B;
@@ -430,6 +466,10 @@
 		A5272C673B41A760697B5943 = {
 			isa = PBXBuildFile;
 			fileRef = 95E76D68EE4F8940D16A8C8A;
+		};
+		A8481D790E86BF302620DD9B = {
+			isa = PBXBuildFile;
+			fileRef = C359ABCA92D656BBB34BD547;
 		};
 		AB0DC39B27F0BA233BAFC276 = {
 			isa = PBXBuildFile;
@@ -607,6 +647,10 @@
 			isa = PBXBuildFile;
 			fileRef = 65D79B86442E4C5EAEBEF34D;
 		};
+		F07D7111E14BB3297A204053 = {
+			isa = PBXBuildFile;
+			fileRef = A740AA3EBB3427A0CC043325;
+		};
 		F391221C184F8B79DBD0233F = {
 			isa = PBXBuildFile;
 			fileRef = D81CE2DCA528ABD7FDCDF679;
@@ -640,6 +684,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = OverlayLayoutTests.swift;
+			sourceTree = "<group>";
+		};
+		02F06223A792BF1055D9278A = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = DetailTrelloSection.swift;
 			sourceTree = "<group>";
 		};
 		0306C67FE0A05E3738178DB6 = {
@@ -718,6 +768,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = StatsModel.swift;
+			sourceTree = "<group>";
+		};
+		14D91280DAFB641166600078 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = TrelloConfig.swift;
 			sourceTree = "<group>";
 		};
 		15E3BEE04DD0F34407F870DC = {
@@ -852,6 +908,12 @@
 			path = HistoryRowView.swift;
 			sourceTree = "<group>";
 		};
+		37DCB834A2BA83BF3CD20A70 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = TrelloTests.swift;
+			sourceTree = "<group>";
+		};
 		3AC7C0EF6733FFCF1F8AF74C = {
 			isa = PBXFileReference;
 			lastKnownFileType = text.plist.entitlements;
@@ -862,6 +924,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = SettingsTagsPane.swift;
+			sourceTree = "<group>";
+		};
+		3DA01ED6C26C701C70238D46 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = TrelloService.swift;
 			sourceTree = "<group>";
 		};
 		410219524203CB273BEFDD21 = {
@@ -930,10 +998,22 @@
 			path = WorkTag.swift;
 			sourceTree = "<group>";
 		};
+		5499C0B432C949B5F5FEA4AD = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = TrelloActionMapper.swift;
+			sourceTree = "<group>";
+		};
 		56BCF2262960A4048EC59667 = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = ProportionBar.swift;
+			sourceTree = "<group>";
+		};
+		56DBEE9181DD864B65FEB737 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = LiveTrelloSection.swift;
 			sourceTree = "<group>";
 		};
 		5703A89059558D64DDBF7FDE = {
@@ -976,6 +1056,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = ButtonStyles.swift;
+			sourceTree = "<group>";
+		};
+		680FF39F970731685FAF646A = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = TrelloActivity.swift;
 			sourceTree = "<group>";
 		};
 		69F172FBD697306E60F161F0 = {
@@ -1090,6 +1176,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = AppSettings.swift;
+			sourceTree = "<group>";
+		};
+		810B01EF07E2F9B66BAC4480 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = "TrelloService+API.swift";
 			sourceTree = "<group>";
 		};
 		838181E5837724F08349E237 = {
@@ -1255,6 +1347,12 @@
 			path = LiveIdlePane.swift;
 			sourceTree = "<group>";
 		};
+		A740AA3EBB3427A0CC043325 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = SettingsIntegrationsTab.swift;
+			sourceTree = "<group>";
+		};
 		A7D653AE081D84B2400DFAE1 = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
@@ -1369,6 +1467,12 @@
 			path = PaperTheme.swift;
 			sourceTree = "<group>";
 		};
+		C359ABCA92D656BBB34BD547 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = LearningPageIndexTests.swift;
+			sourceTree = "<group>";
+		};
 		C5014AB9671E080FD5E3BA24 = {
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
@@ -1451,6 +1555,12 @@
 			isa = PBXFileReference;
 			lastKnownFileType = sourcecode.swift;
 			path = MenuBarLabelView.swift;
+			sourceTree = "<group>";
+		};
+		DFB9490FCD834FAB94AEC342 = {
+			isa = PBXFileReference;
+			lastKnownFileType = sourcecode.swift;
+			path = TrelloActivityRow.swift;
 			sourceTree = "<group>";
 		};
 		DFDED23FA58339F9273F6C84 = {
@@ -1664,6 +1774,10 @@
 				AC9147D506B148A30D3CE432,
 				C86B4F06C496D3DDF18B1E4B,
 				0306C67FE0A05E3738178DB6,
+				5499C0B432C949B5F5FEA4AD,
+				14D91280DAFB641166600078,
+				810B01EF07E2F9B66BAC4480,
+				3DA01ED6C26C701C70238D46,
 			);
 			path = Services;
 			sourceTree = "<group>";
@@ -1748,6 +1862,7 @@
 				092F1C72242915A4393BED68,
 				6F51F09C08EFC9A26762B2F2,
 				7712CD2E8D81F8A68848E351,
+				02F06223A792BF1055D9278A,
 				EF3BD3170DE67A940860E67F,
 				B963C43735ACB0E83D4547B4,
 			);
@@ -1761,6 +1876,7 @@
 				775461C2C5D1479BCD0535A4,
 				A1A48AAAE8702426B552C92D,
 				70FB65231A246CD726062448,
+				A740AA3EBB3427A0CC043325,
 				2B11F321D5F28258CF4F8815,
 				305E698306A46939138A2BAA,
 				2D721BC20164D6A4B718B335,
@@ -1788,6 +1904,7 @@
 				6B4EB14AF993A8A9D318100B,
 				B4397333DDC3C15AD237CB1A,
 				58B82BE736C232D54B133DB0,
+				DFB9490FCD834FAB94AEC342,
 			);
 			path = Shared;
 			sourceTree = "<group>";
@@ -1843,6 +1960,7 @@
 				5B128114F156A922AB51D8FF,
 				F0D8C8865C9615A25FBB4DAF,
 				5327E5289672553ED4FEDFBC,
+				C359ABCA92D656BBB34BD547,
 				2087EBE5D706F2D9C59426BC,
 				E4296589FF2E5EBCD793D52B,
 				014DF8DD5B4F1F5123EF9988,
@@ -1853,6 +1971,7 @@
 				9E9C480630C17BE835576D40,
 				C5014AB9671E080FD5E3BA24,
 				B29A35C9FBD440CF68C3DB02,
+				37DCB834A2BA83BF3CD20A70,
 			);
 			path = WorklogTests;
 			sourceTree = "<group>";
@@ -1875,6 +1994,7 @@
 				F4FEFD069FDE1F281FD813CB,
 				8A07A151C187DB60793171CE,
 				9CF1FD0D73BBEEB8736B61B4,
+				680FF39F970731685FAF646A,
 				32F240F6320441CFE58134E1,
 				410219524203CB273BEFDD21,
 				0D7CE01109B1568C06399987,
@@ -1962,6 +2082,7 @@
 				60305C7093BEB6E40BC9ED4D,
 				339EEF75A406D6A2F2B8FD29,
 				AECAC22FFA8A01D23DA584B4,
+				56DBEE9181DD864B65FEB737,
 				1780D3DF7C7D5082A5F92FD7,
 			);
 			path = LiveSession;
@@ -2120,6 +2241,7 @@
 				17D586FB18FD953982FDEABA,
 				345F36E32840BC772DA25487,
 				E77C393BE0D26C0DD17D1886,
+				1F92140C082F94205699207B,
 				5A446A91634CA2E56E826B56,
 				AD50E10B998398E107AE957A,
 				47B78DF714EE9E505EC3DCBC,
@@ -2132,12 +2254,14 @@
 				5601FE6C5A8BB7D55DAB94F4,
 				9EABE7595AC7EF3BA06C90F3,
 				C47A01F180E7DBCF9724B667,
+				3D32833831B1605875DAF412,
 				43BE3E7E2D47437483A08226,
 				4887D410CFAC123D769707E0,
 				EDE3872FA98789884AA381E5,
 				02305B73E65D4580AA0AC9B9,
 				23CDD29AEFF2B218B5AC5332,
 				1197839B7D1F70C4119A1C99,
+				F07D7111E14BB3297A204053,
 				0D2A381C3DEC585D0A09E679,
 				826DF7DE0F15836BFB5646B6,
 				ADD8137A62259E6900BF87BC,
@@ -2158,6 +2282,7 @@
 				C787656E3EDA9B2EDE5EFCA5,
 				3509506D75AD7DA367F4E924,
 				B6E2D128A469A1F6B96DF326,
+				3622BED02729337FDA117C10,
 				3099CCE93C43F099E75E40FC,
 				C4B38500D9ACEE9A92D2282C,
 				28A4E05C075C360049C20E59,
@@ -2192,6 +2317,10 @@
 				3535FCE37737CAFF519648B4,
 				F5EB5E0E524621C401A76AD7,
 				85F3ADBE5BB73CE46DC90461,
+				5DB1336ABACD32995E51B2D1,
+				9C4A233DFACEF9BB32BABF39,
+				2CE3F664296F2894FFAAB4A1,
+				362360B8B72D555A67A033A0,
 				BBAA67B987A21F36E0C57D4F,
 				82B36A5241DA542B79FC2C94,
 				82A41913E9B1BDD87346557D,
@@ -2202,6 +2331,7 @@
 				9645D5DB940FF9C7B3F81E63,
 				BD75C236EBBD8416713D49EF,
 				A2A811B432E129C243435AFE,
+				291DD40B8CF6FAAD7CF93C94,
 				FC137B2FE4D0CFE4D9891049,
 				EDE44E2F2232436239BE45F1,
 				6CF085BDDBFCADF9725C08F4,
@@ -2216,6 +2346,7 @@
 				6374D3AFBD3295851613EA05,
 				C3A5B8FB9C785310794284C7,
 				D538B806D55D31B98BFC8DF8,
+				A8481D790E86BF302620DD9B,
 				0A95AAD03F32003EAA9D2D1B,
 				9C7824DCF623B965C88F57B4,
 				62E3A25EA6C7DF10C5597AD7,
@@ -2226,6 +2357,7 @@
 				31BB7DB4599D377C2B2628A9,
 				147C88E2248D2B08E385916C,
 				E6FED80281D76F3156D89D35,
+				0C276C60AB6899B8228ABCB7,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -2249,7 +2381,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 6W4ZKDHBVD;
 				ENABLE_HARDENED_RUNTIME = NO;
 				ENABLE_PREVIEWS = YES;
@@ -2276,7 +2408,7 @@
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
 				COMBINE_HIDPI_IMAGES = YES;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 6W4ZKDHBVD;
 				ENABLE_HARDENED_RUNTIME = YES;
 				ENABLE_PREVIEWS = YES;
@@ -2300,7 +2432,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 6W4ZKDHBVD;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (
@@ -2444,7 +2576,7 @@
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_IDENTITY = "Apple Development";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 2;
+				CURRENT_PROJECT_VERSION = 3;
 				DEVELOPMENT_TEAM = 6W4ZKDHBVD;
 				GENERATE_INFOPLIST_FILE = YES;
 				LD_RUNPATH_SEARCH_PATHS = (

@@ -27,8 +27,9 @@ optional floating overlay give quick access while you work.
 - **Themes**: Graphite (the default, a neutral sans-serif look) plus the optional Paper and Meadow themes, light/dark/system appearance and an accent colour.
 - **Images**: add them by picking files, pasting or dragging. They are downscaled to 2048 px and compressed, and sync through iCloud.
 - **Account**: Sign in with Apple, or continue without signing in. iCloud sync uses the Mac's Apple Account either way.
+- **Trello (optional)**: connect a Trello account (read-only) and Worklog logs your own card activity (cards added, moved, completed, archived, checklist items, comments, renames, deletions) to the session running on this Mac. Entries show in the live session, the review and session detail, are searchable, can be removed one by one, and are included in export and backups.
 - **Data**: JSON export and import (merge or replace), CSV export (sessions and segments), rolling local backups with restore, and a recovery flow if the data store can't be opened.
-- **Settings in the main window**: Settings is a page of the main window (the gear in the sidebar footer, ⌘, or the app menu's "Settings…"), not a separate window. Sections: General, Appearance, Overlay, Shortcuts, Profiles, Labels & Tags, Account, Data.
+- **Settings in the main window**: Settings is a page of the main window (the gear in the sidebar footer, ⌘, or the app menu's "Settings…"), not a separate window. Sections: General, Appearance, Overlay, Shortcuts, Profiles, Labels & Tags, Integrations, Account, Data.
 - **Customizable keyboard shortcuts**: every app shortcut can be re-recorded, cleared or reset in Settings ▸ Shortcuts. Conflicts, combos reserved by macOS, shortcuts without ⌘ or ⌃ and ⇧ with a digit or symbol are rejected; changes apply immediately and survive relaunch. Defaults:
 
   | Action | Default |
@@ -107,14 +108,22 @@ macOS from the build settings (`$(MARKETING_VERSION)`, `$(CURRENT_PROJECT_VERSIO
 
 4. **Before the first release**, open the CloudKit Console and **deploy the development schema to Production**. Development builds create the schema automatically, production builds can't. Schema changes must be additive only: new properties need defaults, and fields can't be renamed or removed. **Profiles (round 3)** added the `CD_WorkProfile` record type and a `CD_profile` field on `CD_WorkSession`, `CD_WorkLabel` and `CD_WorkTag`: run a development build against the development container once, then deploy the schema to Production *before* shipping the release, or production builds can't sync profiles. Free-text fields are marked `allowsCloudEncryption` (see *Privacy*); that choice can't be changed for a field after the schema is deployed to Production.
 
+   > **CRITICAL — Trello (this release).** The Trello integration adds the record type `CD_TrelloActivity`, with a
+   > `CD_session` relationship field (to `CD_WorkSession`). Both must exist in **Production before the build ships**,
+   > or production builds can't sync Trello entries. Run the Debug build with `-initializeCloudKitSchema`, check
+   > `CD_TrelloActivity` and its `CD_session` field in the CloudKit Console, deploy the schema to Production, **then**
+   > upload the build. Also raise the build number (`CURRENT_PROJECT_VERSION`, now 2) before uploading.
+
    **Never reset the Development environment** while any build could still open a store that synced with it (every
    store made before this release did): resetting deletes the server copy, and CloudKit can then empty the local
    stores that mirror it. Your data leaves Development only through *Move to iCloud Production* (below).
 
    **Before shipping a model change (checklist).** A development build only creates the record types and fields for values it actually saved, so a field nobody has used yet (an optional relationship, an archived flag) can be missing from the schema you deploy.
    1. Build the Debug configuration and run it once with the launch argument `-initializeCloudKitSchema` (Xcode ▸ Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments). Before opening its store, Worklog loads the model into a throwaway, empty store and calls `initializeCloudKitSchema()`, which creates every record type and field in the **Development** environment. The console says "CloudKit schema initialized…" (or prints the full error) and **the app then quits by itself** — that's expected; it never opens a store in this mode. Remove the argument afterwards. Your data isn't touched.
-   2. In the CloudKit Console, check that `CD_WorkProfile` exists and that `CD_WorkSession`, `CD_WorkLabel` and `CD_WorkTag` have a `CD_profile` field.
-   3. Deploy the schema to **Production**, then ship the release.
+   2. In the CloudKit Console, check that `CD_WorkProfile` exists and that `CD_WorkSession`, `CD_WorkLabel` and `CD_WorkTag` have a `CD_profile` field. **Check that `CD_TrelloActivity` exists and has a `CD_session` field.**
+   3. Deploy the schema to **Production**.
+   4. Raise the build number (`CURRENT_PROJECT_VERSION` in `scripts/generate_xcodeproj.py`, then re-run it).
+   5. Only now archive and upload the build.
 
 5. **App Store / TestFlight distribution.** Release signs with `WorklogRelease.entitlements`
    (`com.apple.developer.icloud-container-environment` = `Production`, Sign in with Apple, iCloud, push). Signing is
@@ -130,6 +139,8 @@ macOS from the build settings (`$(MARKETING_VERSION)`, `$(CURRENT_PROJECT_VERSIO
      the script before you next regenerate). Raise `MARKETING_VERSION` for user-visible releases.
    - **Privacy manifest:** `Worklog/Resources/PrivacyInfo.xcprivacy` declares no tracking, no collected data, and the
      two required-reason APIs the app uses (its own UserDefaults; modification dates of its own backup files).
+     Trello doesn't change it: the Mac calls Trello directly with the user's own token and nothing reaches the
+     developer, so the answer stays *Data Not Collected*. Trello's hosts aren't tracking domains.
    - **TestFlight** builds expire after 90 days; upload a new build (or publish on the Mac App Store) before then.
    - **Public App Store release** additionally needs a privacy policy URL (`site/privacy.html`, also `PRIVACY.md`; support URL: `site/index.html`; App Privacy answer: *Data Not Collected*), screenshots, and App Review. Review may
      ask about account deletion (guideline 5.1.1(v)): Worklog creates no server account — Sign Out plus
@@ -168,8 +179,8 @@ doesn't see that data).
    (Product ▸ Scheme ▸ Edit Scheme ▸ Run ▸ Arguments). The console prints "✅ CloudKit schema initialized…" and the
    app **quits by itself** (expected — it opens no store in this mode; your data isn't touched). Then untick the
    argument. If it prints a failure instead, run it once more (a brand-new Debug App ID can need a minute for iCloud).
-5. **Deploy the schema.** CloudKit Console ▸ `iCloud.app.dabora.worktracker` ▸ check `CD_WorkProfile` and the
-   `CD_profile` fields exist ▸ **Deploy Schema Changes…** to Production. (Never reset Development.)
+5. **Deploy the schema.** CloudKit Console ▸ `iCloud.app.dabora.worktracker` ▸ check `CD_WorkProfile`, the
+   `CD_profile` fields, and `CD_TrelloActivity` with its `CD_session` field exist ▸ **Deploy Schema Changes…** to Production. (Never reset Development.)
 6. **Archive and upload.** Create the App Store Connect app record if you haven't (step 5 of *Signing* above).
    Select *Any Mac*, Product ▸ **Archive** (Release, automatic signing), then Organizer ▸ **Distribute App** ▸
    **App Store Connect** ▸ **Distribute** (upload). Wait for the "processing complete" email.
@@ -217,6 +228,7 @@ The unit tests run in in-memory SwiftData containers. Under XCTest, `AppServices
 - profiles: the migration of existing data, profile dedupe and repair, `ProfileScope`, scoped tag creation, making labels/tags local (copies for other profiles), moving sessions between profiles, deleting/archiving profiles, the persisted selection, the profile-aware engine (start, default label, today total, per-profile takeaways), scoped search and export format 2 (including importing format-1 files)
 - shortcut defaults, display strings, validation (conflicts, reserved combos, missing ⌘/⌃, ⇧ without a letter), clearing, reset (and the action it clears) and persistence (including de-duplicating stored overrides)
 - data safety: the CloudKit environment guard's decision table, the interrupted-restore breadcrumb decision and notice, "Use iCloud Production Data" (a move without a restore), the verified backup only failing for images the store has bytes for, the PreOpen snapshot key and model hash, newer-store detection, the restore marker format and restore mode, session dedupe keeping notes/images/learning points, imported running sessions (ended unless this Mac owned them), Replace keeping the store's own images, merge updating re-seeded defaults and newer profiles, reconcile leaving another Mac's just-started session alone, the engine forgetting a deleted active session, and per-kind backup retention
+- Trello: action mapping for every action type (kind and summary fields), the board filter, the fetch window and cursor overlap, auth URLs and token parsing, dedupe by action ID, search by card name, an export round trip with activities, merge, delete-all, and decoding an archive without them
 - recovery paths on disk, run in a temporary folder: the restore marker and the restore breadcrumb, PreOpen snapshot pruning, moving a damaged store aside (which clears the recorded CloudKit environment), and a skipped environment move
 
 ## Architecture
@@ -228,7 +240,7 @@ Worklog/
   App/            @main WorklogApp (Window + MenuBarExtra scenes; Settings is a page of the window), AppDelegate,
                   AppServices (service container + View.withAppServices), RootView, WindowRouter, commands
   Models/         SwiftData @Model types: WorkSession, Segment, Note, Attachment, WorkLabel, WorkTag, LearningPoint,
-                  WorkProfile
+                  WorkProfile, TrelloActivity
   Persistence/    PersistenceController (CloudKit → local → in-memory fallback), SeedData, PreviewData
   Services/       SessionEngine (live state machine; +Review/+Takeaway/+Ownership/+SystemEvents extensions),
                   LiveSessionRules (today total, default label, long-session warning), SessionEditor (after-the-fact
@@ -236,7 +248,8 @@ Worklog/
                   AuthService + KeychainStore, ExportService (+Import/+Mapping) + DTOs, BackupService, SearchService,
                   AttachmentImporter, AppSettings, OverlayLayout (overlay elements), ShortcutStore (customizable
                   shortcuts), ProfileStore + ProfileScope (current profile, in-memory scoping), ProfileOps,
-                  OverlayPanelController, SyncMonitor (iCloud status)
+                  OverlayPanelController, SyncMonitor (iCloud status), TrelloService (+API) + TrelloActionMapper +
+                  TrelloConfig (optional Trello activity logging)
   Utilities/      Formatting helpers, Log, ModelLiveness
   DesignSystem/   Theme, ThemeManager, components (designer-owned)
   Shared/         Data-bound pickers shared by features
@@ -324,12 +337,81 @@ Changing the iCloud sync toggle takes effect at the next launch.
 **Export and import.**
 - **JSON:** versioned (`formatVersion`, currently 2: profiles and each label's, tag's and session's profile), ISO-8601 dates, images optional as base64. Format-1 files from earlier versions still import: their sessions go to the home profile and their labels and tags become available in all profiles. Delete All Data and Replace with a file without profiles recreate the "Work" profile. Imported images are checked to be JPEG/PNG/HEIC of sane size.
 - **CSV:** one file per session or per segment, RFC 4180 quoting, with the profile name as the last column. Values starting with `=`, `+`, `-`, `@`, tab or CR get a leading `'` so spreadsheet apps don't run them as formulas.
+- **Trello entries** are in the JSON as each session's optional `trelloActivities` array. The format stays 2, so older builds still restore new backups (they ignore the key) and older archives decode. Merge skips entries the session already has (same id or same Trello action ID).
 - **Importing:** importing an archive exported without images keeps the images already in the store (merge and replace). Archives now record which Mac controlled a running session (`ownerDeviceID`, optional).
 - **Images you add** are limited to 100 MB files and 150 megapixels, then downscaled to 2048 px.
 
 **Privacy.** Session titles, learnings, takeaways, notes, learning points, segment focus and image captions are stored with CloudKit encryption (`@Attribute(.allowsCloudEncryption)`), so they are encrypted with keys from the user's iCloud Keychain. Sign in with Apple identifiers live in the Keychain (data-protection keychain, this device only, when the app is signed with a team). Logs mark user content as private.
 
+**External services.** Besides iCloud, Worklog talks to no server by default. If the user connects Trello,
+`api.trello.com` (and `trello.com` for the sign-in page) become outbound hosts: read-only requests straight from the
+Mac with the user's token, which lives only in this Mac's Keychain. Logged Trello entries are stored with their
+session; card, board and list names and the comment/checklist excerpt are `allowsCloudEncryption`. Nothing goes to the
+developer. The sandbox already allows outbound connections (`com.apple.security.network.client`).
+
 Signing out never deletes data. Neither does revoking Sign in with Apple; it only brings back the welcome screen.
+
+## Trello integration
+
+Optional. When the user connects Trello (Settings ▸ Integrations ▸ Trello), Worklog logs their own Trello card
+activity while a session runs on this Mac and attaches each entry, with Trello's timestamp, to that session. Entries
+show in the live session, the end-of-session review and session detail; they are searchable, removable per row
+("Remove from Session"), and included in export, backup and restore. No SDK: plain `URLSession` calls to Trello's
+REST API. Details are in [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md) §15.
+
+**Where it lives.**
+
+| File | What |
+|---|---|
+| `Worklog/Models/TrelloActivity.swift` | `@Model TrelloActivity` (one logged action; `session` → `WorkSession.trelloActivities`, cascade) and `TrelloActivityKind`, plus `summary`, `cardURL`, `systemImage` |
+| `Worklog/Services/TrelloConfig.swift` | `TrelloConfig.apiKey`, `appName` ("Diptychon"), `callbackScheme` (`diptychon-trello`) |
+| `Worklog/Services/TrelloService.swift` | `@MainActor @Observable` service: connection state, settings, polling timer, attaching entries |
+| `Worklog/Services/TrelloService+API.swift` | HTTP and JSON (authorize URL, `members/me`, `actions`, `boards`, token revoke) |
+| `Worklog/Services/TrelloActionMapper.swift` | Pure mapping from a Trello action to a kind and the stored fields |
+| `Worklog/Features/Settings/SettingsIntegrationsTab.swift` | Settings ▸ Integrations ▸ Trello |
+| `Worklog/Features/LiveSession/LiveTrelloSection.swift`, `Worklog/Features/SessionDetail/DetailTrelloSection.swift`, `Worklog/Shared/TrelloActivityRow.swift` | Live list, session detail section, the shared row and its open/copy/remove actions |
+| `WorklogTests/TrelloTests.swift` | Mapper, board filter, dedupe, export round trip |
+
+**How it works.**
+- **Auth.** The developer's API key (public) plus the user's token (secret). "Connect Trello…" opens
+  `ASWebAuthenticationSession` on Trello's authorize page with `scope=read`, `expiration=never` and the return URL
+  `diptychon-trello://auth`; the token comes back in the URL fragment. "Paste a token instead" opens the same page
+  without a return URL, so Trello shows the token and the user pastes it; it is checked with `GET /1/members/me`.
+  The token is stored in the Keychain (`trelloToken`, same `KeychainStore` service as the account; the member's
+  display name under `trelloMemberName`) and never logged.
+  Disconnect revokes it (`DELETE /1/tokens/{token}`, best effort) and deletes the Keychain item.
+- **Polling.** A 60-second timer runs only while logging is on, Trello is connected and there is something to fetch:
+  the active session owned by this Mac (`engine.isOwnedByThisDevice`) or a pending final fetch. Each tick calls
+  `GET /1/members/me/actions` (only the user's own actions) since the session's cursor minus 60 s, paging by `before`
+  when 1000 come back. The cursor is persisted per session (`trello.cursor.<session uuid>`, the end of the last fully
+  successful fetch; it starts at `startedAt`). The 60 s overlap catches actions Trello lists a little late; action IDs
+  the session has, or the previous fetch returned, are skipped, so an entry the user removed isn't added back.
+  Actions inside [`startedAt`, now] are kept, including paused time. When the session ends, a final fetch up to
+  `endedAt` runs 5 s later (and at every tick until it succeeds); pending finals are kept in
+  `trello.pendingFinalSessionIDs` and also run after a relaunch, then the session's cursor is removed.
+- **Saving.** New entries are inserted and saved right away (a plain `context.save()`, not `SafeSave`: a failed save
+  removes only the new entries again, never rolls back anything else). A Trello failure never blocks or undoes a
+  session save.
+- **Ownership.** A session running on another Mac is never polled here; the Mac that runs it logs it (each Mac
+  connects Trello on its own, since the token is per-Mac Keychain).
+- **Dedupe.** An action ID the session already has is never inserted again (two ticks, a final fetch, a merge import).
+- **Boards.** `watchedBoardIDs` empty = all boards; otherwise only actions whose board is in the set.
+- **Errors.** 401 → the token is deleted and Settings says "Trello disconnected. Connect again."; 429, 5xx and offline
+  keep the state, show a short `lastError` and retry on the next tick.
+- **Settings keys:** `trello.loggingEnabled`, `trello.watchedBoardIDs`, `trello.pendingFinalSessionIDs`,
+  `trello.cursor.<session uuid>`.
+
+### Trello setup (developer)
+
+Without an API key the build works, and Settings says "Trello isn't set up in this build."
+
+1. Open <https://trello.com/power-ups/admin> (signed in to Trello) and click **New**.
+2. Fill in the form: name (Diptychon), workspace, and the contact fields. Create it.
+3. Open its **API key** tab and click **Generate a new API key**.
+4. Paste the key into `TrelloConfig.apiKey` in `Worklog/Services/TrelloConfig.swift`. The key is public (it identifies
+   the app, not a user). Never put the API secret or a token in the code.
+5. The browser flow returns to `diptychon-trello://auth`. If Trello rejects that return URL, add it under the API
+   key's **Allowed origins**. "Paste a token instead" works without it.
 
 ## Known items to verify on a device
 
@@ -343,4 +425,5 @@ These can't be checked in CI and should be tried on real Macs before a release:
 - **Recovery**: corrupt a copy of the store (e.g. truncate `Worklog.store` while the app is quit) and walk through Recover… with a backup and with a fresh store.
 - **Keychain**: with a team-signed build, sign in with Apple, quit, relaunch: the account should persist (items migrate from the legacy keychain on first read).
 - **Move to iCloud Production**: on a copy of real data, walk through the checklist above; check the session and image counts, that `Recovered/Env-Development-…` holds the old store, and that a second Mac sees the data after **Use iCloud Production Data…**.
+- **Trello**: connect with **Connect Trello…** (the browser returns to the app) and with **Paste a token instead**; run a session, move and complete a card, and check the entries appear within a minute and in the review; quit during a session, edit a card, stop after relaunch and check the final fetch; with two Macs, check only the Mac running the session logs and the entries sync; disconnect and check the token is gone from Trello's authorized apps.
 - **Single instance**: launch a second copy of the same build (e.g. from another folder): the first one comes to the front and the second quits.

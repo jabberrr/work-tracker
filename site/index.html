@@ -135,6 +135,7 @@
     <a href="#sync">Sync &amp; backups</a>
     <a href="#account">Account</a>
     <a href="#customize">Customizing</a>
+    <a href="#trello">Trello</a>
     <a href="#shortcuts">Shortcuts</a>
     <a href="#troubleshooting">Troubleshooting</a>
     <a href="#about">About</a>
@@ -231,7 +232,7 @@
     </div>
     <div class="qa">
       <h3>What does Diptychon do with my data?</h3>
-      <p>Nothing. It doesn't collect anything. Your data stays on your Mac and in your own iCloud. See the <a href="privacy.html">Privacy Policy</a>.</p>
+      <p>Nothing. It doesn't collect anything. Your data stays on your Mac and in your own iCloud. If you connect Trello, your Mac talks to Trello directly. See the <a href="privacy.html">Privacy Policy</a>.</p>
     </div>
   </section>
 
@@ -248,6 +249,40 @@
     <div class="qa">
       <h3>Can I hide the Dock icon?</h3>
       <p>Turn on <span class="path">Settings › General › Hide Dock icon when the window closes</span>. Reopen the window from the menu bar icon.</p>
+    </div>
+  </section>
+
+  <section id="trello">
+    <h2>Trello</h2>
+    <div class="qa">
+      <h3>How do I connect Trello?</h3>
+      <p>Open <span class="path">Settings › Integrations › Trello</span> and click <strong>Connect Trello…</strong>. Sign in to Trello if asked and allow access. Diptychon only asks to read your Trello data.</p>
+      <p>If that doesn't work, click <strong>Paste a token instead</strong>, then <strong>Open Trello</strong>. Allow access, copy the token Trello shows, paste it in <strong>Token</strong> and click <strong>Connect</strong>.</p>
+    </div>
+    <div class="qa">
+      <h3>What does Diptychon log?</h3>
+      <p>Your card activity: cards you add, move between lists, complete, archive, rename or delete, checklist items you check, and your comments. Each entry keeps Trello's time. Entries show in the live session, in the review when you stop, and in the session in History. To stop logging, turn off <strong>Log Trello activity during sessions</strong>.</p>
+    </div>
+    <div class="qa">
+      <h3>Does it log everything I do in Trello?</h3>
+      <p>No. It only logs your own activity, not other people's, and only while a session runs on this Mac (paused time counts). New activity shows up within about a minute; click the refresh button in the live session's Trello section to check now.</p>
+      <p>Trello is connected per Mac. Connect it on each Mac you start sessions on.</p>
+    </div>
+    <div class="qa">
+      <h3>Can I log only some boards?</h3>
+      <p>Yes. In <span class="path">Settings › Integrations › Trello</span>, set <strong>Log activity from</strong> to <strong>chosen boards</strong> and check the boards you want. If a new board is missing, click the refresh button next to <strong>Boards</strong>.</p>
+    </div>
+    <div class="qa">
+      <h3>How do I remove an entry?</h3>
+      <p>Open the session in History, right-click the entry in its <strong>Trello</strong> section and choose <strong>Remove from Session</strong>. This only removes it from Diptychon; nothing changes in Trello.</p>
+    </div>
+    <div class="qa">
+      <h3>How do I disconnect Trello?</h3>
+      <p>Click <strong>Disconnect…</strong> in <span class="path">Settings › Integrations › Trello</span>. Diptychon deletes its token and asks Trello to revoke it. Entries already logged stay with your sessions. If Diptychon says <strong>Trello disconnected. Connect again.</strong>, Trello no longer accepts the token; click <strong>Connect Trello…</strong> again.</p>
+    </div>
+    <div class="qa">
+      <h3>Is my Trello data private?</h3>
+      <p>Yes. Your Mac talks to Trello directly, with read-only access. The token stays in your Mac's Keychain, and logged entries are stored with your sessions like your notes. Nothing goes to me. See the <a href="privacy.html">Privacy Policy</a>.</p>
     </div>
   </section>
 

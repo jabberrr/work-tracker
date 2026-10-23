@@ -5,7 +5,8 @@ import SwiftData
 @MainActor enum PreviewData {
     /// Seeds labels/tags, two profiles ("Work" with the default uuid and default label "Deep work"; "Personal" with a
     /// local label "Errands" and a local tag "family") + 12 ended sessions over the past 3 weeks (9 Work, 3 Personal;
-    /// multi-segment, notes, learning points with tags, one session with showInOverlay + overlaySummary) and NO
+    /// multi-segment, notes, learning points with tags, one session with showInOverlay + overlaySummary and sample
+    /// Trello activity) and NO
     /// active session.
     static func populate(_ context: ModelContext) {
         SeedData.insertDefaults(into: context)
@@ -171,6 +172,7 @@ import SwiftData
             if index == 0 {
                 session.overlaySummary = "Override canBecomeKey for text input in non-activating panels."
                 session.showInOverlay = true
+                insertSampleTrelloActivity(for: session, start: start, in: context)
             }
             SessionEditor.normalize(session)
             session.recomputeStoredDuration(now: cursor)
@@ -180,6 +182,31 @@ import SwiftData
             try context.save()
         } catch {
             Log.persistence.error("PreviewData save failed: \(error.localizedDescription, privacy: .public)")
+        }
+    }
+
+    /// A few Trello card actions on the "Overlay polish" session (previews of the Trello sections).
+    private static func insertSampleTrelloActivity(for session: WorkSession, start: Date, in context: ModelContext) {
+        // (minute, kind, card, list, from list, detail)
+        let samples: [(Int, TrelloActivityKind, String, String, String, String)] = [
+            (3, .moved, "Overlay panel sizing", "Doing", "To do", ""),
+            (28, .checkedItem, "Overlay panel sizing", "Doing", "", "Minimum width"),
+            (52, .moved, "Overlay panel sizing", "Done", "Doing", ""),
+            (55, .created, "Opacity slider snapping", "Doing", "", ""),
+            (88, .commented, "Opacity slider snapping", "Doing", "", "Snaps at 5% steps now."),
+            (96, .completed, "Opacity slider snapping", "Doing", "", ""),
+        ]
+        for (index, sample) in samples.enumerated() {
+            let occurredAt = start.addingTimeInterval(TimeInterval(sample.0 * 60))
+            let activity = TrelloActivity(actionID: "preview-\(index)", occurredAt: occurredAt, kind: sample.1)
+            context.insert(activity)
+            activity.cardName = sample.2
+            activity.cardShortLink = "aBcD\(index)"
+            activity.boardName = "Diptychon"
+            activity.listName = sample.3
+            activity.fromListName = sample.4
+            activity.detail = sample.5
+            activity.session = session
         }
     }
 

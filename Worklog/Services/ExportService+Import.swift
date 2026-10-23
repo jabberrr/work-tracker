@@ -59,8 +59,9 @@ extension ExportService {
     /// - an existing profile is updated only when the archived copy is strictly newer (`modifiedAt`);
     /// - an existing session is updated only when the archived copy is strictly newer (`modifiedAt`); otherwise it is
     ///   skipped (`sessionsSkipped`);
-    /// - when updated, its segments follow the archive (they partition the session's time), while notes, images and
-    ///   learning points are upserted only — local ones missing from the archive are kept;
+    /// - when updated, its segments follow the archive (they partition the session's time), while notes, images,
+    ///   learning points and Trello activity are upserted only — local ones missing from the archive are kept (a
+    ///   Trello action the session already has under another uuid is not added twice);
     /// - attachment bytes are kept when the archive has none.
     /// Image bytes from the archive are accepted only if they are a JPEG/PNG/HEIC of sane size.
     /// Saves, posts .worklogDataDidImport.
@@ -364,6 +365,34 @@ extension ExportService {
                 }
             }
 
+            // Trello activity (upsert by uuid; merge also skips an action the session already has under another
+            // uuid; local rows missing from the archive are kept on merge, like notes)
+            var activitiesByID = Self.index(ModelLiveness.live(session.trelloActivities ?? []), by: \.uuid)
+            var knownActionIDs = Set(activitiesByID.values.map(\.actionID).filter { !$0.isEmpty })
+            var keptActivities = Set<UUID>()
+            for activityDTO in dto.trelloActivities ?? [] {
+                let activity: TrelloActivity
+                if let existing = activitiesByID[activityDTO.id] {
+                    activity = existing
+                } else {
+                    if !activityDTO.actionID.isEmpty && knownActionIDs.contains(activityDTO.actionID) { continue }
+                    activity = TrelloActivity(actionID: activityDTO.actionID, occurredAt: activityDTO.occurredAt,
+                                              kind: .other, uuid: activityDTO.id)
+                    context.insert(activity)
+                    activity.session = session
+                    activitiesByID[activityDTO.id] = activity
+                }
+                Self.apply(activityDTO, to: activity)
+                if !activityDTO.actionID.isEmpty { knownActionIDs.insert(activityDTO.actionID) }
+                keptActivities.insert(activityDTO.id)
+            }
+            if mode == .replace {
+                for (id, activity) in activitiesByID where !keptActivities.contains(id) {
+                    activity.session = nil
+                    context.delete(activity)
+                }
+            }
+
             SessionEditor.normalize(session)
             if session.endedAt == nil {
                 if let localEndedAt {
@@ -424,6 +453,19 @@ extension ExportService {
     }
 
     // MARK: - Private (import)
+
+    /// Archived Trello activity fields → row (`kind` raw value kept as-is; unknown kinds read as `.other`).
+    private static func apply(_ dto: TrelloActivityDTO, to activity: TrelloActivity) {
+        activity.actionID = dto.actionID
+        activity.occurredAt = dto.occurredAt
+        activity.kindRaw = dto.kind
+        activity.cardName = dto.cardName
+        activity.cardShortLink = dto.cardShortLink
+        activity.boardName = dto.boardName
+        activity.listName = dto.listName
+        activity.fromListName = dto.fromListName
+        activity.detail = String(dto.detail.prefix(TrelloActionMapper.detailLimit))
+    }
 
     /// Image bytes of a store attachment, kept across a Replace.
     private struct PreservedImage {

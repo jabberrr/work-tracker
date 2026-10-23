@@ -2,7 +2,7 @@
 
 > The app ships as **Diptychon**; "Worklog" here is its internal name (see README › Name).
 
-> How Worklog is built: files, models, services and the rules between them. Sections 1–10 are the original design; later rounds (§11–§14) add to it and say where they replace it. When code and this document disagree, the code wins and this document should be fixed. Helper types use their folder's prefix (§1.3) or are `private`/`fileprivate`.
+> How Worklog is built: files, models, services and the rules between them. Sections 1–10 are the original design; later rounds (§11–§15) add to it and say where they replace it. When code and this document disagree, the code wins and this document should be fixed. Helper types use their folder's prefix (§1.3) or are `private`/`fileprivate`.
 
 ---
 
@@ -10,7 +10,7 @@
 
 **Worklog** is a native macOS 14+ work-session tracker. You start a session with a label, pause and resume it, split it into segments when your focus changes, and take timestamped notes. At the end you title it and record learnings. You can later browse, search and edit history, follow how your learnings evolve per tag, and view stats. Quick access comes from a `MenuBarExtra` window panel and an optional floating, non-activating `NSPanel` overlay.
 
-Stack: Swift 5 language mode, SwiftUI, Observation, SwiftData + CloudKit (private DB) with local fallback, AuthenticationServices, Swift Charts and ImageIO. The Xcode project (`Worklog.xcodeproj`) is committed. There are no third-party dependencies.
+Stack: Swift 5 language mode, SwiftUI, Observation, SwiftData + CloudKit (private DB) with local fallback, AuthenticationServices, Swift Charts and ImageIO. The Xcode project (`Worklog.xcodeproj`) is committed. There are no third-party dependencies. Besides CloudKit, the only network calls are to Trello's REST API, and only when the user connects Trello (§15).
 
 **Identity vs. sync:**
 - iCloud sync uses the Mac's signed-in iCloud account through the CloudKit private database. It works whether or not the user signs in with Apple.
@@ -2492,3 +2492,80 @@ Round 4a made the app safe to use daily with real data; round 4b fixed functiona
 - **`LiveTicker`** (`Features/LiveSession/LiveTicker.swift`): the one "tick every second while running" view (`.periodic(from:by: 1)`, stable identity, no updates while paused); RootView's mini timer uses it.
 - **`PersistenceController.launchNoticeOffersRestore`**: the launch notice gets "Restore…" (Settings ▸ Data).
 - Tests added: `StatsCalculatorTests`, `LiveRulesTests`, `EngineStateTests`, `RecoveryPathTests`.
+
+---
+
+## 15. Round 5: Trello activity logging (optional)
+
+The user can connect Trello. While a session runs on this Mac, Worklog logs the user's own card activity and attaches each entry, with Trello's timestamp, to that session. Nothing goes to any server except Trello's API, called from the Mac with the user's token. UI copy and layout are in `docs/DESIGN.md`; the code's doc comments are the detailed reference.
+
+### 15.1 Files
+
+| File | What |
+|---|---|
+| `Models/TrelloActivity.swift` | `@Model TrelloActivity`, `TrelloActivityKind`, display helpers |
+| `Services/TrelloConfig.swift` | `TrelloConfig.apiKey` (empty → not configured), `appName`, `callbackScheme` (`diptychon-trello`) |
+| `Services/TrelloService.swift` | `@MainActor @Observable TrelloService`: connection, settings, timer, attaching entries |
+| `Services/TrelloService+API.swift` | HTTP and JSON (`URLSession.shared`, async, 20 s timeout) |
+| `Services/TrelloActionMapper.swift` | Pure mapping: Trello action JSON → kind + stored fields |
+| `Features/Settings/SettingsIntegrationsTab.swift` | Settings ▸ Integrations (between Labels & Tags and Account) |
+| `Features/LiveSession/LiveTrelloSection.swift` | Live session list (newest first) + status line + "check now" |
+| `Features/SessionDetail/DetailTrelloSection.swift` | Session detail section (open, copy, Remove from Session) |
+| `Shared/TrelloActivityRow.swift` | `TrelloActivityRow` and `TrelloActivityActions` (open / copy / remove → `SessionEditor.deleteTrelloActivity`) |
+| `WorklogTests/TrelloTests.swift` | Mapper fixtures, board filter, dedupe, export round trip, old-archive decode |
+
+### 15.2 Model (additive, CloudKit-safe)
+
+```swift
+@Model final class TrelloActivity {
+    var uuid: UUID = UUID()
+    var actionID: String = ""                  // Trello action id (dedupe)
+    var occurredAt: Date = Date()              // Trello's timestamp
+    var kindRaw: String = "other"              // TrelloActivityKind raw value (a literal default for the macro)
+    @Attribute(.allowsCloudEncryption) var cardName: String = ""
+    var cardShortLink: String = ""             // → https://trello.com/c/<shortLink>
+    @Attribute(.allowsCloudEncryption) var boardName: String = ""
+    @Attribute(.allowsCloudEncryption) var listName: String = ""
+    @Attribute(.allowsCloudEncryption) var fromListName: String = ""   // moves only
+    @Attribute(.allowsCloudEncryption) var detail: String = ""         // checklist item / comment excerpt (≤ 200 chars), old name for renames
+    var session: WorkSession?
+}
+enum TrelloActivityKind: String { case created, moved, completed, reopened, archived, unarchived, commented,
+                                       checkedItem, uncheckedItem, renamed, deleted, movedToBoard, copied, other }
+// extension: kind (unknown raw → .other), summary (one line, curly quotes), cardURL (nil without shortLink), systemImage
+```
+
+- `WorkSession.trelloActivities: [TrelloActivity]?` (`deleteRule: .cascade`, inverse `\TrelloActivity.session`), plus `sortedTrelloActivities` (live rows by `occurredAt`; an action ID logged twice is listed once).
+- `TrelloActivity.self` is in `WorklogSchemaV1.models` and in every list of model types (delete-all, dedupe, preview data).
+- CloudKit: new record type `CD_TrelloActivity` with a `CD_session` field. Run `-initializeCloudKitSchema` and deploy to Production **before** shipping (README › release checklist).
+
+### 15.3 Service and auth
+
+- State: `connection` (`.notConfigured`, `.disconnected`, `.connecting`, `.connected(name:)`, `.failed(String)`), `isLoggingEnabled`, `watchedBoardIDs` (empty = all boards), `boards`, `isChecking`, `lastCheckedAt`, `lastError`, `isTrackingActiveSession`. Views use only this API.
+- Persisted in `settings.defaults`: `trello.loggingEnabled` (default true), `trello.watchedBoardIDs`, `trello.pendingFinalSessionIDs`. Per session: `trello.cursor.<session uuid>` (§15.4). Keychain (same `KeychainStore` service as auth): `trelloToken`, and the member's display name under `trelloMemberName`. The token is never logged (nor are URLs, which carry it).
+- Auth: `connect()` runs `ASWebAuthenticationSession` on `https://trello.com/1/authorize?expiration=never&name=Diptychon&scope=read&response_type=token&key=…&callback_method=fragment&return_url=diptychon-trello://auth`; the token arrives as `#token=…`. Fallback `manualAuthorizeURL` (same URL without the callback) → Trello shows the token → `connect(pastedToken:)` checks it with `GET /1/members/me`.
+- Disconnect: `DELETE /1/tokens/{token}` (best effort), then the Keychain item is deleted. Logged entries stay.
+- `AppServices` creates `trello` after the engine and calls `trello.start()` only when not in memory; `withAppServices` injects it. Previews and tests never touch the network.
+
+### 15.4 Polling
+
+- A 60 s main-actor timer runs while logging is on, Trello is connected, and there is something to fetch: the engine's active session owned by this Mac (`engine.isOwnedByThisDevice`), or a pending final fetch. A session running on another Mac is never polled here. `TrelloService` follows `engine.activeSession` with `withObservationTracking` (and re-checks at every tick).
+- Each tick: `GET /1/members/me/actions?filter=createCard,updateCard,commentCard,updateCheckItemStateOnCard,deleteCard,moveCardToBoard,copyCard,convertToCardFromCheckItem&since=<cursor − 60 s>&limit=1000` (+ `before=<endedAt + 60 s>` for an ended session), paging with `before=<oldest action id>` while 1000 come back (at most 10 pages). Only the user's own actions.
+- Cursor: persisted per session in `trello.cursor.<session uuid>` (seconds since 1970) = the end of the last fully successful fetch window; it starts at `startedAt` and only advances after a successful fetch and save. The 60 s overlap catches actions Trello lists a little late. Actions in [`startedAt`, `endedAt` or now] are attached, paused time included. Board filter: keep actions whose `data.board.id` is in `watchedBoardIDs` (unless empty).
+- Dedupe: an `actionID` the session already has, or that the previous fetch returned (in memory, covers the overlap), is never inserted, so a removed entry isn't re-added.
+- Saving: rows are inserted and saved at once with a plain `context.save()` (not `SafeSave`, which would roll back unrelated changes); on failure only the new rows are removed and the next tick retries. Nothing here changes a session's times.
+- Session end: the session goes to `trello.pendingFinalSessionIDs`; a final fetch up to its `endedAt` runs 5 s later (Trello can list an action a moment late) and at every tick until it succeeds, then its cursor is removed. Pending finals survive a relaunch. A session deleted meanwhile is dropped; one resumed from the review is tracked live again. At launch, a leftover cursor of a session that ended while the app wasn't running gets a final fetch too; other stale cursors are removed. Disconnect clears pending finals and cursors.
+- Errors: 401 → token deleted, `.failed("Trello disconnected. Connect again.")`, polling stops. 429, 5xx, offline → state kept, short `lastError`, retry next tick. `checkNow()` runs a tick at once.
+
+### 15.5 Export, backup, search
+
+- `SessionDTO.trelloActivities: [TrelloActivityDTO]?` (optional: old archives decode, old builds ignore it). `currentFormatVersion` stays **2**, so older builds can still restore new backups.
+- `TrelloActivityDTO`: `id`, `actionID`, `occurredAt`, `kind`, `cardName`, `cardShortLink`, `boardName`, `listName`, `fromListName`, `detail`.
+- Import follows the per-session child rules of notes and learning points. Merge dedupes by uuid and also skips an `actionID` the session already has. Restore brings entries back.
+- `SearchService`: a session matches when one of its Trello card names matches (no snippet for that field: the row shows none, as for a title match).
+
+### 15.6 Privacy
+
+- Optional and off until connected. Read-only scope. Requests go from the Mac straight to `trello.com` / `api.trello.com`; nothing goes to the developer. The App Store answer stays *Data Not Collected*; `PrivacyInfo.xcprivacy` is unchanged.
+- Token only in this Mac's Keychain. Entries are stored with their session (on the Mac and in the user's iCloud), names and excerpts encrypted. Entries can be removed per row ("Remove from Session") or with the session.
+- `PRIVACY.md`, `site/privacy.html` and `site/index.html` describe this; keep them in step with the code.

@@ -4,7 +4,7 @@ import SwiftUI
 /// Sections of the in-app Settings page. Raw values are persisted (`settingsWindow.selectedTab`) and used by
 /// `WindowRouter.showSettings(tab:)`, so they never change.
 enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
-    case general, appearance, overlay, shortcuts, profiles, labels, account, data
+    case general, appearance, overlay, shortcuts, profiles, labels, integrations, account, data
 
     var id: String { rawValue }
 
@@ -16,6 +16,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
         case .shortcuts: "Shortcuts"
         case .profiles: "Profiles"
         case .labels: "Labels & Tags"
+        case .integrations: "Integrations"
         case .account: "Account"
         case .data: "Data"
         }
@@ -29,6 +30,7 @@ enum SettingsTab: String, CaseIterable, Identifiable, Hashable {
         case .shortcuts: "keyboard"
         case .profiles: "person.crop.rectangle.stack"
         case .labels: "tag"
+        case .integrations: "puzzlepiece.extension"
         case .account: "person.crop.circle"
         case .data: "externaldrive"
         }
@@ -101,6 +103,8 @@ struct SettingsView: View {
             SettingsPage(maxWidth: nil) { SettingsProfilesTab() }
         case .labels:
             SettingsPage(maxWidth: nil) { SettingsLabelsTab() }
+        case .integrations:
+            SettingsPage { SettingsIntegrationsTab() }
         case .account:
             SettingsPage { SettingsAccountTab() }
         case .data:

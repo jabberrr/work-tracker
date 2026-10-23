@@ -8,6 +8,10 @@ import SwiftUI
 /// Profiles: everything here follows the *panel profile*, the running session's profile while active, else the
 /// quick start profile (`ProfileStore.quickStartProfile`, Settings ▸ Profiles). Start, the label picker, the
 /// takeaway and today's total all use it; a `ProfileBadge` names it when there are 2 or more profiles.
+///
+/// Label & tags: the current segment's label badge is a native label menu (`LiveCurrentLabelMenu`); its tags sit
+/// under it, edited in place with a native tag menu (`LiveCurrentTagsMenu`). Idle, start tags can be picked under
+/// the start label, as on Today.
 @MainActor
 struct MenuBarPanelView: View {
     @Environment(SessionEngine.self) private var engine
@@ -21,6 +25,7 @@ struct MenuBarPanelView: View {
 
     @State private var isSplitting = false
     @State private var startLabel: WorkLabel?
+    @State private var startTags: [WorkTag] = []
     @State private var didLoadDefaults = false
     /// The quick start profile `startLabel` was chosen for (the panel may be closed when it changes).
     @State private var startLabelProfileID: UUID?
@@ -51,6 +56,8 @@ struct MenuBarPanelView: View {
         .onAppear(perform: onAppear)
         .onChange(of: engine.isActive) { _, isActive in
             if !isActive { isSplitting = false }
+            // Started anywhere (Today, the overlay, a shortcut): the picked start tags were for that start.
+            if isActive { startTags = [] }
         }
         .onChange(of: profiles.quickStartProfileID) { _, _ in
             resetStartLabel()
@@ -78,9 +85,17 @@ struct MenuBarPanelView: View {
             // Never loaded (no labels yet at first open), or deleted/merged/archived/re-scoped in Settings since.
             resetStartLabel()
         }
+        let usableTags = LiveStartChoice.tags(startTags, in: profileID)
+        if usableTags.count != startTags.count {
+            startTags = usableTags
+        }
     }
 
+    /// Also clears the start tags when the quick start profile changed (they may not be offered there).
     private func resetStartLabel() {
+        if startLabelProfileID != profiles.quickStartProfileID {
+            startTags = []
+        }
         startLabelProfileID = profiles.quickStartProfileID
         startLabel = engine.defaultLabel(for: profiles.quickStartProfile)
     }
@@ -107,8 +122,10 @@ struct MenuBarPanelView: View {
                         .fixedSize()
                 }
                 Spacer(minLength: theme.spacingS)
-                LabelBadge(label: engine.currentLabel, size: .small)
+                LiveCurrentLabelMenu()
             }
+
+            currentTagsRow
 
             if engine.isActiveSessionOnAnotherMac {
                 LiveOtherMacHint()
@@ -183,6 +200,18 @@ struct MenuBarPanelView: View {
         }
     }
 
+    /// Under the label: the segment's tags (one line, "+N" for the rest) and the tag menu; "Add tags" when none.
+    private var currentTagsRow: some View {
+        let tags = LiveCurrentSegmentTags.editable(engine)
+        return HStack(spacing: theme.spacingXS) {
+            Spacer(minLength: 0)
+            TagChipsLine(tags: tags)
+            LiveCurrentTagsMenu(showsSummary: tags.isEmpty)
+                .controlSize(.small)
+                .layoutPriority(1)
+        }
+    }
+
     private var focusText: String {
         let focus = engine.currentSegment?.focus.trimmed ?? ""
         if !focus.isEmpty { return focus }
@@ -240,14 +269,18 @@ struct MenuBarPanelView: View {
                 .controlSize(.small)
                 .help("Start session")
             }
+            LiveTagMenu(selection: $startTags, scopeLabel: startLabel, profileID: profiles.quickStartProfileID)
+                .controlSize(.small)
         }
     }
 
     private func startSession() {
-        // The picked label may have been deleted, merged or archived in Settings since it was chosen.
+        // The picked label/tags may have been deleted, merged or archived in Settings since they were chosen.
         let profile = profiles.quickStartProfile
         _ = engine.start(label: LiveStartChoice.label(startLabel, engine: engine, profile: profile),
+                         tags: LiveStartChoice.tags(startTags, in: profile?.uuid),
                          profile: profile)
+        startTags = []
     }
 
     // MARK: Takeaway + today

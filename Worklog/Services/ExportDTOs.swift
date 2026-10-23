@@ -1,6 +1,7 @@
 import Foundation
 
-/// Format history: 1 = round 1–2; 2 = round 3 (profiles). Every v2 addition is optional, so v1 archives decode
+/// Format history: 1 = round 1–2; 2 = round 3 (profiles; later also `SessionDTO.trelloActivities`, optional, so the
+/// version wasn't bumped and older builds can still restore newer backups). Every v2 addition is optional, so v1 archives decode
 /// (synthesized Decodable uses decodeIfPresent for optionals): a v1 import puts sessions in the home profile and
 /// labels/tags become global.
 struct ExportArchive: Codable {
@@ -82,6 +83,9 @@ struct SessionDTO: Codable {
     /// The Mac that last controlled the session while it was running ("" = unknown). Lets an import keep this Mac's
     /// own running session running and end any other (see `ExportService.importArchive`). Optional (older files).
     var ownerDeviceID: String? = nil
+    /// Trello card actions logged with the session. Optional: archives without the key decode (nil), and older app
+    /// versions ignore it, so the format version stays 2.
+    var trelloActivities: [TrelloActivityDTO]? = nil
 }
 struct SegmentDTO: Codable {
     var id: UUID; var startedAt: Date; var endedAt: Date?; var sortIndex: Int
@@ -98,6 +102,12 @@ struct AttachmentDTO: Codable {
 }
 struct LearningPointDTO: Codable {
     var id: UUID; var createdAt: Date; var text: String; var sortIndex: Int; var mastery: Int; var tagIDs: [UUID]
+}
+/// `kind` is the `TrelloActivityKind` raw value (unknown values import as-is and read as `.other`).
+struct TrelloActivityDTO: Codable, Hashable {
+    var id: UUID; var actionID: String; var occurredAt: Date; var kind: String
+    var cardName: String; var cardShortLink: String; var boardName: String; var listName: String
+    var fromListName: String; var detail: String
 }
 
 extension ExportArchive {

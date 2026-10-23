@@ -97,6 +97,13 @@ popovers, the menu bar panel and the overlay all follow.
 dynamic system color. `onAccent` becomes near-black for Orange/Yellow/Green/Graphite (white fails contrast
 there), white otherwise. In Graphite the running timer follows the accent. Label colors are unaffected.
 
+Where the accent reaches (Theme Default = the theme's own accent, never the macOS system accent):
+- `worklogThemed` applies `.tint(theme.accent)` at every scene root (main window, menu bar panel, overlay).
+  Every sheet and popover re-applies it with the theme: `.environment(\.theme, theme).tint(theme.accent)`.
+- AppKit-drawn selection ignores `.tint`: a `List`'s selection highlight and `.sidebar` Label icons use the
+  system `controlAccentColor`. So the main sidebar draws its own rows (§10.1), and `.sidebar` Lists with Label
+  icons add `.listItemTint(theme.accent)`. Menus, text selection and native focus rings stay system-colored.
+
 ---
 
 ## 3. Color roles
@@ -348,16 +355,20 @@ text truncates (`lineLimit(1)` + tail) instead of using a horizontal `.fixedSize
 │              │                                                              │
 │              │                                                              │
 │ ● 1:12:40    │  ┐                                                           │
-│   Deep work  │  │ pinned footer: .safeAreaInset(edge: .bottom) on the List, │
+│   Deep work  │  │ pinned footer: .safeAreaInset(edge: .bottom) on the rows, │
 │──────────────│  │ filled with sidebarBackground                             │
 │ ◯ Guest   ⚙  │  ┘                                                           │
 └──────────────┴──────────────────────────────────────────────────────────────┘
 ```
-- **Sidebar rows** are `SidebarItem.primaryItems` (Today, History, Learning, Stats) in a `.sidebar` List.
+- **Sidebar rows** are `SidebarItem.primaryItems` (Today, History, Learning, Stats), drawn by `RootView`
+  (`SidebarNavList`), not a `.sidebar` List, so the selection follows the app accent (§2.5). Row: `radiusS`,
+  28 pt at Standard, accent icon + `textPrimary` title, hover `textPrimary.opacity(0.06)`. Selected: accent
+  tint fill + accent icon/title; while the sidebar has keyboard focus (a click focuses it), solid accent fill +
+  `onAccent`. ↑/↓ move the selection; VoiceOver sees a "Sidebar" group of buttons with `.isSelected`.
 - **Footer (pinned):** mini status row (`LiveDot` + `TimerText(.compact)` + label name in `captionFont`
   `textSecondary`; help "Show session"), a hairline, then the account icon + name (one plain button → Settings ▸
   Account, help "Account") and the **Settings gear**. The footer is a `.safeAreaInset(edge: .bottom, spacing: 0)`
-  of the List, not a VStack sibling, so nothing in the detail can push it off-screen.
+  of the sidebar rows, not a VStack sibling, so nothing in the detail can push it off-screen.
 - **Settings is a detail destination** (`SidebarItem.settings`), not a window. The gear is
   `IconButtonStyle(size: 24)`: `gearshape` in `textSecondary`, or `gearshape.fill` in `accent` with the
   `.isSelected` trait while Settings shows (then no List row is selected); help and a11y label "Settings".
@@ -517,8 +528,17 @@ Built to be finished in about ten seconds: the essentials up front, everything e
   │ Quit Worklog                       ⌘Q  │
   └────────────────────────────────────────┘
 ```
+- **Label:** the label badge is itself a native label menu (`LiveCurrentLabelMenu`, no indicator, help and
+  VoiceOver "Change label"): the labels the split form offers in the session's profile, the current one checked.
+  Picking one saves it on the current segment at once (`engine.updateCurrentSegment`, tags and focus kept; a later
+  segment that inherits the session's label keeps inheriting when the same label is written back).
+- **Tags:** under the label, the current segment's tags as one line of `TagChip`s (`TagChipsLine`: as many as
+  fit, then "+N") and a native tag menu (`LiveCurrentTagsMenu`, `#` icon; "Add tags" when there are none).
+  Toggling a tag saves it on the current segment at once (`engine.updateCurrentSegment`, label and focus kept).
+  Native menus never take key status, so the panel stays open.
 - Idle: status line "Not tracking", LabelPicker (`.labelsHidden()`) + `[ ▶ Start · Deep work ]` (the
-  Start button names the label it will use). "Show overlay" while idle with "hide when idle" on adds the
+  Start button names the label it will use), then a start-tags menu (`LiveTagMenu`) as on Today: the tags go
+  on the first segment; changing the quick start profile, or a session starting anywhere, clears them. "Show overlay" while idle with "hide when idle" on adds the
   hint "Appears when a session starts".
 - Takeaway row has the same Done control (`checkmark`, 20) as Today; "Running on another Mac" hint under
   the timer when it applies.
@@ -545,8 +565,14 @@ Built to be finished in about ten seconds: the essentials up front, everything e
 ```
 **Layout model (round 4: a grid).** The overlay is a **6-column grid** of elements,
 `AppSettings.overlayGrid: OverlayGridLayout` (ARCHITECTURE §13). Each element has one cell: a row, a starting
-column and a **span** of 1–6 columns; elements are always one row high. Elements: Label, Timer, Segment focus,
-Controls, Split, Today’s total, Quick note, Takeaway.
+column and a **span** of 1–6 columns; elements are always one row high. Elements: Label & tags, Timer, Segment
+focus, Controls, Split, Today’s total, Quick note, Takeaway.
+- **Label & tags** (raw value `label`, so saved layouts keep it): `LabelBadge(.small)`, then the current
+  segment's tags (`TagChipsLine`: chips, then "+N"; the label keeps its width first), then a `#` menu
+  (`LiveCurrentTagsMenu`, icon only) that toggles tags on the current segment in place. While a session runs the
+  badge is itself the label menu (`LiveCurrentLabelMenu`, same look, "Change label"; as in the menu bar). Native
+  menus, so they work from the non-activating panel without making it key or activating the app.
+  Preview/editor: a plain badge, a sample "parser" chip and a static `#`.
 - **Columns** span the content width (276 pt regular, 204 compact) with a `spacingXS` (4 pt) gutter, so spans
   1 / 2 / 3 / 6 are 42.7 / 89.3 / 136 / 276 pt (compact 30.7 / 65.3 / 100 / 204). Free columns stay empty space.
 - **Rows** are as tall as their tallest element; row spacing as before (`spacingS`, compact `spacingXS + 2`).
@@ -674,11 +700,13 @@ Direct manipulation, in the spirit of iPhone Control Center: what you see is the
 - Row: title `headlineFont` (1 line) + duration `timerCompactFont` trailing; second line `LabelBadge(.small)`
   + up to 3 `TagChip`s + "+2"; optional `ProportionBar(height: 3)` of segments; search snippet
   `captionFont` `textSecondary`, 2 lines.
+- Live row ("Live session", links to Today): under the title the current label (`LabelBadge(.small)`) and the
+  current segment's tags (`TagChipsLine`: chips, then "+N"; the label keeps its width first). Read-only here.
 - Sort menu (`IconButtonStyle`, `arrow.up.arrow.down`) with checkmarked options: Newest first, Oldest
   first, Longest, Shortest, Label A–Z.
 - **Label filter:** `FilterChip`s ("All" without a dot, then one per label with its color dot), `.help(title)`,
   `HStack(spacing: 6)` in a horizontal `ScrollView(showsIndicators: false)`, vertical padding 2.
-- Selection uses the native List highlight (tinted by accent). ⌫ deletes with confirm ("Delete this
+- Selection uses the native List highlight (AppKit draws it in the macOS system accent, not `theme.accent`). ⌫ deletes with confirm ("Delete this
   session?" / "This can’t be undone."). The Find in History shortcut (default ⌘F) focuses search; the
   search field's help is "Search".
 - Empty states: §12.
@@ -746,6 +774,13 @@ Direct manipulation, in the spirit of iPhone Control Center: what you see is the
 - Timeline: month headers via `SectionHeader`; point text `bodyFont`; meta line `captionFont`
   `textTertiary`; session title link in `accent` → `router.showSession`. Context quote `calloutFont`
   `textSecondary` with a 2 pt `separator` leading bar.
+- What's listed: every learning point, plus one "Session notes" entry per session with its own notes ("What I
+  learned" and/or the takeaway, italic with `quote.opening`; the takeaway on its own line when both exist). Notes
+  have no tags, so they count under All and Untagged; a filter's count is always the number of rows it lists.
+  Tags count as they are on the point (archived, or local to another profile, included). The context quote and
+  the "Session context" toggle appear only where a point's session notes aren't listed themselves (tag views,
+  searches). Profile scope follows each session's effective profile (unassigned included, as in History); a point
+  without a session shows in the home profile.
 
 ### 10.10 Stats (C: `StatsView`)
 
@@ -798,11 +833,11 @@ Settings is a page in the main window's detail column (§10.1), not a separate w
   └─────────────────────────────────────────────────────────────────────────────┘
 ```
 (The icons in the bar are SF Symbols: `gearshape`, `paintpalette`, `rectangle.inset.topright.filled`,
-`keyboard`, `tag`, `person.crop.circle`, `externaldrive`.)
-- **Sections:** General, Appearance, Overlay, Shortcuts, Labels & Tags, Account, Data, switched by a
+`keyboard`, `person.crop.rectangle.stack`, `tag`, `puzzlepiece.extension`, `person.crop.circle`, `externaldrive`.)
+- **Sections:** General, Appearance, Overlay, Shortcuts, Profiles, Labels & Tags, Integrations (§18), Account, Data, switched by a
   `PillTabBar` (icon-only pills with tooltips when the column is narrow; scrolls only if even that doesn't fit). The selection persists
   (`settingsWindow.selectedTab`); `router.showSettings(tab:)` opens a given section.
-- **Width:** each section is wrapped in `SettingsPage(maxWidth:)`: 720 for General, Appearance, Shortcuts,
+- **Width:** each section is wrapped in `SettingsPage(maxWidth:)`: 720 for General, Appearance, Shortcuts, Integrations,
   Account and Data; 760 for Overlay (room for the layout editor); full width (`nil`) for Labels & Tags (two
   columns). Forms fill that width; the page is centred and top-aligned on `themedBackground()`.
 - **Value sentences:** a setting whose value is a number or a short choice reads as a sentence with the value
@@ -1408,3 +1443,45 @@ Summary (details in the sections named; where they and an earlier rule disagree,
 | Editor footnote | "Drag to move; drag the right edge to resize." |
 | (+) disabled | help "All elements shown" |
 | Switcher list | "Profiles" (container) · "New Profile…" · "Manage Profiles…" · hints "Shows the profile list." / "Hides the profile list." |
+
+## 18. Trello activity
+
+Optional: the user connects Trello in Settings ▸ Integrations, and while a session runs on this Mac Diptychon logs
+their own card activity (`TrelloService`, read-only) and attaches each entry to the session. One symbol stands for
+Trello everywhere: `list.bullet.rectangle`. Entries use the kind's own symbol (`TrelloActivity.systemImage`).
+
+### 18.1 Components
+
+| Component | Behaviour |
+|---|---|
+| `TrelloActivityRow(activity:isCompact:)` (`Worklog/Shared`) | Like `NoteRow`: time (`captionFont`, tabular, `textTertiary`, min 54) · kind symbol (`captionFont`, `textSecondary`) · summary (`bodyFont`, 3 lines; compact: `calloutFont`, 1 line) · caption (comment excerpt in curly quotes · board name; `textTertiary`). One VoiceOver element. Read-only; renders nothing for a deleted entry. |
+| `TrelloActivityActions` | `open(_:)` (card in the browser, `NSWorkspace`), `copy(_:)` (summary + card link), `remove(_:in:)` (detach, delete, touch, `SafeSave`). |
+
+### 18.2 Screens
+
+- **Settings ▸ Integrations ▸ Trello** (`SettingsIntegrationsTab`, `SettingsPage` 720): without an API key only the
+  footnote "Trello isn’t set up in this build." Not connected: `[ Connect Trello… ]` (browser sign-in, spinner while
+  connecting), an error `InlineBanner` after a failure, and a "Paste a token instead" disclosure (`( Open Trello )`,
+  a `SecureField` "Token", `( Connect )`, "That token didn’t work." in `danger` caption). Connected: status row
+  (`checkmark.circle.fill` accent, "Connected as *Name*", "Read-only access. Diptychon never changes your boards."),
+  a warning banner for `lastError`, Toggle "Log Trello activity during sessions", value sentence "Log activity from
+  **all boards** ⌄" / "**chosen boards**" (`ValuePicker`); chosen: checkbox per open board, refresh `⊡` (22), "With
+  none chosen, all boards are logged."; `( Disconnect… )` → "Disconnect Trello?" / "Logged activity stays with your
+  sessions." Footnote: "Only your own card activity is logged, while a session runs on this Mac."
+- **Today (active)**: a "Trello" section under Notes, only while this Mac logs the session or it has entries.
+  Header: count + `⊡ arrow.clockwise` (24, help "Check now", a11y "Check Trello now"). Status line (`captionFont`,
+  every 30 s): "Checking…" / "Checked just now" / "Checked 3 minutes ago" / "Checks every minute", then
+  `lastError` in `textSecondary` after a `warning` triangle. Entries **newest first**, compact, the latest 8 in a
+  `surface` box ("5 earlier entries" below). Empty: "Card activity appears here." Context menu: Open in Trello, Copy.
+- **End-of-session sheet**: "▸ Trello (n)" disclosure after Notes, collapsed, only when n > 0; compact rows,
+  oldest first. Entries from the final check after Stop appear while the sheet is open.
+- **Session detail**: "TRELLO" section after Images, only when there are entries; count trailing; rows oldest
+  first; a row with a card link is a plain button (help "Open in Trello"). ⋯ menu and context menu: Open in Trello,
+  Copy, Divider, Remove from Session (no confirmation: it only removes the log entry).
+
+### 18.3 Do / Don't
+
+- Do read entries through `session.sortedTrelloActivities` (live, deduplicated); don't read a held entry without
+  `ModelLiveness`.
+- Don't show the Trello section on the overlay or the menu bar panel; don't color entries by kind.
+- Don't say "Worklog" or "Power-Up" in copy; it is "Trello" and "Diptychon".

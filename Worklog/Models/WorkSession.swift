@@ -38,6 +38,9 @@ final class WorkSession {
     var attachments: [Attachment]? = []
     @Relationship(deleteRule: .cascade, inverse: \LearningPoint.session)
     var learningPoints: [LearningPoint]? = []
+    /// Trello card actions logged while the session ran (`TrelloService`). Additive (optional, cascade).
+    @Relationship(deleteRule: .cascade, inverse: \TrelloActivity.session)
+    var trelloActivities: [TrelloActivity]? = []
     /// The profile this session belongs to. nil = unassigned (legacy, from an older app version on another Mac, or
     /// its profile was deleted remotely). Unassigned sessions are shown in `ProfileOps.effectiveProfile(of:)`; the
     /// relationship is written on the next user edit (`ProfileOps.assignProfileIfUnassigned`) or, in a local-only
@@ -106,6 +109,15 @@ extension WorkSession {
     var sortedAttachments: [Attachment] { (attachments ?? []).sorted { $0.createdAt < $1.createdAt } }
     var sortedLearningPoints: [LearningPoint] {
         (learningPoints ?? []).sorted { ($0.sortIndex, $0.createdAt) < ($1.sortIndex, $1.createdAt) }
+    }
+    /// Live Trello activities, oldest first (by occurredAt, then uuid). A Trello action logged twice (two Macs before
+    /// sync met) is listed once.
+    var sortedTrelloActivities: [TrelloActivity] {
+        let sorted = ModelLiveness.live(trelloActivities ?? []).sorted {
+            ($0.occurredAt, $0.uuid.uuidString) < ($1.occurredAt, $1.uuid.uuidString)
+        }
+        var seen = Set<String>()
+        return sorted.filter { $0.actionID.isEmpty || seen.insert($0.actionID).inserted }
     }
     var tagList: [WorkTag] {
         get { tags ?? [] }

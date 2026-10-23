@@ -262,6 +262,9 @@ final class ExportService {
         for point in try context.fetch(FetchDescriptor<LearningPoint>()) where !point.isDeleted {
             context.delete(point)
         }
+        for activity in try context.fetch(FetchDescriptor<TrelloActivity>()) where !activity.isDeleted {
+            context.delete(activity)
+        }
         for tag in try context.fetch(FetchDescriptor<WorkTag>()) where !tag.isDeleted {
             context.delete(tag)
         }

@@ -207,6 +207,7 @@ struct SettingsLabelEditor: View {
                 showsDeleteSheet = false
                 onDeleted()
             }
+            .tint(theme.accent)
         }
         .confirmationDialog(
             mergeTitle,

@@ -55,8 +55,25 @@ extension ExportService {
                                  sortIndex: point.sortIndex, mastery: point.mastery, tagIDs: point.tagList.map(\.uuid))
             },
             profileID: ModelLiveness.live(session.profile)?.uuid,
-            ownerDeviceID: session.ownerDeviceID.isEmpty ? nil : session.ownerDeviceID
+            ownerDeviceID: session.ownerDeviceID.isEmpty ? nil : session.ownerDeviceID,
+            trelloActivities: trelloActivityDTOs(of: session)
         )
+    }
+
+    /// Every live row (also an action logged twice by two Macs: export never drops data), oldest first; nil when
+    /// the session has none, so archives without Trello data look like before.
+    static func trelloActivityDTOs(of session: WorkSession) -> [TrelloActivityDTO]? {
+        let activities = ModelLiveness.live(session.trelloActivities ?? []).sorted {
+            ($0.occurredAt, $0.uuid.uuidString) < ($1.occurredAt, $1.uuid.uuidString)
+        }
+        guard !activities.isEmpty else { return nil }
+        return activities.map { activity in
+            TrelloActivityDTO(id: activity.uuid, actionID: activity.actionID, occurredAt: activity.occurredAt,
+                              kind: activity.kindRaw, cardName: activity.cardName,
+                              cardShortLink: activity.cardShortLink, boardName: activity.boardName,
+                              listName: activity.listName, fromListName: activity.fromListName,
+                              detail: activity.detail)
+        }
     }
 
     // MARK: CSV helpers

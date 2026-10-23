@@ -15,7 +15,8 @@ enum LearningPageGrouping: String, CaseIterable, Identifiable {
     var title: String { self == .month ? "Month" : "Week" }
 }
 
-/// One row of the timeline: a learning point, or the free-text "What I learned" of a session that has no points.
+/// One row of the timeline: a learning point, or a session's own notes (its free-text "What I learned" and/or its
+/// takeaway). Every session with notes gets one notes entry, whether or not it also has points.
 struct LearningPageEntry: Identifiable {
     enum Kind {
         case point(LearningPoint)
@@ -26,12 +27,12 @@ struct LearningPageEntry: Identifiable {
     let kind: Kind
     /// Timeline date: the session's start (else the point's createdAt).
     let date: Date
-    /// Tie-breaker inside one session.
+    /// Tie-breaker inside one session (notes come first).
     let order: Int
 
     var session: WorkSession? {
         switch kind {
-        case .point(let point): return point.session
+        case .point(let point): return ModelLiveness.live(point.session)
         case .reflection(let session): return session
         }
     }
@@ -39,6 +40,19 @@ struct LearningPageEntry: Identifiable {
     var point: LearningPoint? {
         if case .point(let point) = kind { return point }
         return nil
+    }
+
+    /// Live tags of a point; session notes carry none.
+    var tags: [WorkTag] {
+        guard let point else { return [] }
+        return LearningPageIndex.liveTags(of: point)
+    }
+
+    /// Listed under "Untagged": points without a (live) tag, and every session's notes.
+    var isUntagged: Bool { tags.isEmpty }
+
+    func hasTag(_ id: UUID) -> Bool {
+        tags.contains { $0.uuid == id }
     }
 }
 
@@ -58,7 +72,11 @@ struct LearningPageGroup: Identifiable {
 }
 
 /// Derived, search-filtered view of the learning data. Built from @Query results (no fetching); linear in the
-/// number of points.
+/// number of points and sessions.
+///
+/// Counts and `entries(for:)` share one rule (`LearningPageEntry.isUntagged` / `hasTag`), so a filter's count is
+/// always the number of rows it lists. Tags are counted as they are on the point, archived or local to another
+/// profile included (tag rows derive from the points, not from the tags the profile offers).
 struct LearningPageIndex {
     /// Every matching entry, newest first.
     let entries: [LearningPageEntry]
@@ -67,46 +85,38 @@ struct LearningPageIndex {
     let tagRows: [LearningPageTagRow]
     /// Total number of learning points (ignores search).
     let totalPointCount: Int
+    /// Total number of sessions with notes (ignores search).
+    let totalReflectionCount: Int
     /// Points with at least one tag exist (ignores search).
     let hasTaggedPoints: Bool
     let isSearching: Bool
+
+    /// Nothing at all to show (ignores search).
+    var isEmpty: Bool { totalPointCount == 0 && totalReflectionCount == 0 }
 
     init(points: [LearningPoint], reflectionSessions: [WorkSession], query: String) {
         let terms = SearchService.terms(from: query)
         isSearching = !terms.isEmpty
 
         var entries: [LearningPageEntry] = []
-        var untagged = 0
-        var counts: [UUID: (tag: WorkTag, count: Int)] = [:]
         var anyTagged = false
-        var total = 0
+        var pointTotal = 0
+        var reflectionTotal = 0
 
         for point in points where ModelLiveness.isLive(point) {
-            total += 1
-            let tags = point.tagList
-            if !tags.isEmpty { anyTagged = true }
+            pointTotal += 1
+            if !Self.liveTags(of: point).isEmpty { anyTagged = true }
             guard terms.isEmpty || SearchService.matches(point, terms: terms) else { continue }
+            let date = ModelLiveness.live(point.session)?.startedAt ?? point.createdAt
             entries.append(LearningPageEntry(id: point.persistentModelID, kind: .point(point),
-                                             date: point.effectiveDate, order: point.sortIndex))
-            if tags.isEmpty {
-                untagged += 1
-            } else {
-                var seen = Set<UUID>()
-                for tag in tags where seen.insert(tag.uuid).inserted {
-                    if let existing = counts[tag.uuid] {
-                        counts[tag.uuid] = (existing.tag, existing.count + 1)
-                    } else {
-                        counts[tag.uuid] = (tag, 1)
-                    }
-                }
-            }
+                                             date: date, order: point.sortIndex))
         }
 
-        for session in reflectionSessions where ModelLiveness.isLive(session) {
-            guard !session.learningText.isBlank, (session.learningPoints ?? []).isEmpty else { continue }
+        for session in reflectionSessions where ModelLiveness.isLive(session) && Self.hasNotes(session) {
+            reflectionTotal += 1
             guard terms.isEmpty || Self.matches(session, terms: terms) else { continue }
             entries.append(LearningPageEntry(id: session.persistentModelID, kind: .reflection(session),
-                                             date: session.startedAt, order: -1))
+                                             date: session.startedAt, order: Int.min))
         }
 
         entries.sort { a, b in
@@ -115,32 +125,90 @@ struct LearningPageIndex {
         }
         self.entries = entries
         allCount = entries.count
-        untaggedCount = untagged
-        totalPointCount = total
+        untaggedCount = entries.filter(\.isUntagged).count
+        totalPointCount = pointTotal
+        totalReflectionCount = reflectionTotal
         hasTaggedPoints = anyTagged
-        tagRows = counts.values
+        tagRows = Self.tagRows(for: entries)
+    }
+
+    /// Entries for a filter, newest first. Session notes have no tags: they appear under "All" and "Untagged".
+    func entries(for filter: LearningPageFilter) -> [LearningPageEntry] {
+        switch filter {
+        case .all: return entries
+        case .untagged: return entries.filter(\.isUntagged)
+        case .tag(let id): return entries.filter { $0.hasTag(id) }
+        }
+    }
+
+    // MARK: - Rules
+
+    /// A point's live tags (a tag deleted but not yet saved is skipped), once per uuid.
+    static func liveTags(of point: LearningPoint) -> [WorkTag] {
+        var seen = Set<UUID>()
+        return ModelLiveness.live(point.tagList).filter { seen.insert($0.uuid).inserted }
+    }
+
+    /// The session's free-text learning, trimmed; nil when blank.
+    static func notesText(of session: WorkSession) -> String? { session.learningText.nilIfBlank }
+
+    /// The session's takeaway for next time, trimmed; nil when blank.
+    static func takeaway(of session: WorkSession) -> String? { session.overlaySummary.nilIfBlank }
+
+    /// The session has notes of its own: "What I learned" or a takeaway.
+    static func hasNotes(_ session: WorkSession) -> Bool {
+        notesText(of: session) != nil || takeaway(of: session) != nil
+    }
+
+    /// Sessions whose points are listed in `entries` while their notes entry is not (a tag view, or a search that
+    /// matched only the points): their notes can be shown as context under their first point.
+    static func sessionsNeedingContext(in entries: [LearningPageEntry]) -> Set<PersistentIdentifier> {
+        var listedNotes = Set<PersistentIdentifier>()
+        var withPoints: [WorkSession] = []
+        for entry in entries {
+            switch entry.kind {
+            case .reflection(let session): listedNotes.insert(session.persistentModelID)
+            case .point: if let session = entry.session { withPoints.append(session) }
+            }
+        }
+        return Set(withPoints.filter { !listedNotes.contains($0.persistentModelID) && hasNotes($0) }
+            .map(\.persistentModelID))
+    }
+
+    /// Points in `scope`. A point whose session is missing (e.g. synced before its session) has no profile; like an
+    /// unassigned session it is shown in the home profile. `homeProfileID` is only asked when such a point exists.
+    @MainActor
+    static func scopedPoints(_ points: [LearningPoint], in scope: ProfileScope,
+                             homeProfileID: () -> UUID?) -> [LearningPoint] {
+        guard !scope.isAllProfiles else { return points.filter { scope.contains($0) } }
+        var homeID: UUID?
+        var didResolveHome = false
+        return points.filter { point in
+            if scope.contains(point) { return true }
+            // A session deleted but not yet saved takes its points with it (cascade): not an orphan.
+            guard ModelLiveness.isLive(point), point.session == nil else { return false }
+            if !didResolveHome {
+                homeID = homeProfileID()
+                didResolveHome = true
+            }
+            return homeID == scope.profileID
+        }
+    }
+
+    private static func tagRows(for entries: [LearningPageEntry]) -> [LearningPageTagRow] {
+        var counts: [UUID: (tag: WorkTag, count: Int)] = [:]
+        for entry in entries {
+            for tag in entry.tags {
+                let existing = counts[tag.uuid]
+                counts[tag.uuid] = (existing?.tag ?? tag, (existing?.count ?? 0) + 1)
+            }
+        }
+        return counts.values
             .map { LearningPageTagRow(tag: $0.tag, count: $0.count) }
             .sorted { a, b in
                 if a.count != b.count { return a.count > b.count }
                 return a.tag.name.localizedCaseInsensitiveCompare(b.tag.name) == .orderedAscending
             }
-    }
-
-    /// Entries for a filter, newest first. Reflections (no tags) only appear under "All".
-    func entries(for filter: LearningPageFilter) -> [LearningPageEntry] {
-        switch filter {
-        case .all:
-            return entries
-        case .untagged:
-            return entries.filter { entry in
-                guard let point = entry.point else { return false }
-                return point.tagList.isEmpty
-            }
-        case .tag(let id):
-            return entries.filter { entry in
-                entry.point?.tagList.contains(where: { $0.uuid == id }) ?? false
-            }
-        }
     }
 
     /// Groups entries (already filtered) by month or week, preserving the requested order.
@@ -190,9 +258,9 @@ struct LearningPageIndex {
         }
     }
 
-    /// Search over a session's free-text learning and title (same folding as SearchService).
+    /// Search over a session's free-text learning, takeaway and title (same folding as SearchService).
     private static func matches(_ session: WorkSession, terms: [String]) -> Bool {
-        let haystack = [session.learningText, session.title].map {
+        let haystack = [session.learningText, session.overlaySummary, session.title].map {
             $0.folding(options: [.caseInsensitive, .diacriticInsensitive, .widthInsensitive], locale: nil).lowercased()
         }
         return terms.allSatisfy { term in haystack.contains { $0.contains(term) } }

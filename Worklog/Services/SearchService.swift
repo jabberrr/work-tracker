@@ -39,19 +39,21 @@ enum SearchService {
 
     /// AND across terms; each term must match (case/diacritic-insensitive substring) at least one of: title, label name,
     /// session tags, segment labels/tags/focus, note texts, learningText, overlaySummary, learning point texts + tags,
-    /// attachment captions/filenames.
+    /// attachment captions/filenames, Trello card names. (Trello card names match but give no snippet: rows then show
+    /// none, as for a title match.)
     static func matches(_ session: WorkSession, terms: [String]) -> Bool {
         guard !terms.isEmpty else { return true }
         let haystack = searchableTexts(of: session).map(fold)
         return terms.allSatisfy { term in haystack.contains { $0.contains(term) } }
     }
 
-    /// text, tags, session title
+    /// text, tags, session title (deleted tags/sessions are skipped; a deleted point never matches)
     static func matches(_ point: LearningPoint, terms: [String]) -> Bool {
         guard !terms.isEmpty else { return true }
+        guard ModelLiveness.isLive(point) else { return false }
         var texts = [point.text]
-        texts += point.tagList.map(\.name)
-        if let title = point.session?.title { texts.append(title) }
+        texts += ModelLiveness.live(point.tagList).map(\.name)
+        if let title = ModelLiveness.live(point.session)?.title { texts.append(title) }
         let haystack = texts.map(fold)
         return terms.allSatisfy { term in haystack.contains { $0.contains(term) } }
     }
@@ -90,7 +92,9 @@ enum SearchService {
     }
 
     private static func searchableTexts(of session: WorkSession) -> [String] {
-        [session.title] + fieldTexts(of: session).flatMap { $0.1 }
+        let cardNames: [String] = ModelLiveness.live(session.trelloActivities ?? []).map { $0.cardName }
+            .filter { !$0.isEmpty }
+        return [session.title] + fieldTexts(of: session).flatMap { $0.1 } + cardNames
     }
 
     /// Snippet fields in priority order (title excluded).

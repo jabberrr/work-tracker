@@ -1,3 +1,4 @@
+import AppKit
 import SwiftData
 import SwiftUI
 
@@ -113,7 +114,7 @@ struct LiveSegmentForm: View {
         case .edit:
             focus = current?.focus ?? ""
             label = current?.effectiveLabel ?? engine.currentLabel
-            tags = editableTags(current)
+            tags = LiveCurrentSegmentTags.editable(engine)
         }
         // Give the hosting window a moment to become key before focusing the field.
         Task { @MainActor in
@@ -134,35 +135,170 @@ struct LiveSegmentForm: View {
         case .split:
             engine.split(label: safeLabel, tags: safeTags, focus: focus)
         case .edit:
-            let movesSessionTags = sessionTagsFollowSegment
-            engine.updateCurrentSegment(label: safeLabel ?? LiveStartChoice.splitLabel(engine.currentLabel),
+            let movesSessionTags = LiveCurrentSegmentTags.sessionTagsFollowSegment(engine)
+            let picked = safeLabel ?? LiveStartChoice.splitLabel(engine.currentLabel)
+            engine.updateCurrentSegment(label: LiveCurrentSegmentTags.labelToWrite(picked, engine: engine),
                                         tags: safeTags, focus: focus)
-            if movesSessionTags, let session = ModelLiveness.live(engine.activeSession) {
-                // The form showed them as this segment's tags (now saved there): drop the session-level copy so a
-                // tag removed here is really gone.
-                session.tagList = []
-                session.touch()
-                engine.save()
+            if movesSessionTags {
+                LiveCurrentSegmentTags.dropSessionTags(engine)
             }
         }
         onFinish()
     }
+}
 
+// MARK: - Current segment's tags
+
+/// The running segment's tags as the edit form and the panels' tag menus show them, and the in-place saves behind
+/// the panels' tag and label menus. Writes go through `engine.updateCurrentSegment(label:tags:focus:)`.
+@MainActor
+enum LiveCurrentSegmentTags {
     /// One-segment session with session-level tags (sessions started before start tags moved to the first
-    /// segment): those tags are this segment's too, so the edit form shows and edits them with it.
-    private var sessionTagsFollowSegment: Bool {
+    /// segment): those tags are this segment's too, so they are shown and edited with it.
+    static func sessionTagsFollowSegment(_ engine: SessionEngine) -> Bool {
         guard let session = ModelLiveness.live(engine.activeSession) else { return false }
         return (session.segments ?? []).count == 1 && !session.tagList.isEmpty
     }
 
-    /// The current segment's tags, plus the session's own tags when they follow this segment (see above).
-    private func editableTags(_ segment: Segment?) -> [WorkTag] {
-        let segmentTags = segment?.tagList ?? []
-        guard sessionTagsFollowSegment, let session = ModelLiveness.live(engine.activeSession) else {
-            return segmentTags
+    /// The current segment's live tags, plus the session's own tags when they follow this segment (see above).
+    /// Empty when idle.
+    static func editable(_ engine: SessionEngine) -> [WorkTag] {
+        guard let segment = engine.currentSegment else { return [] }
+        let segmentTags = segment.tagList
+        guard sessionTagsFollowSegment(engine), let session = ModelLiveness.live(engine.activeSession) else {
+            return ModelLiveness.live(segmentTags)
         }
         var seen = Set<UUID>()
         return (segmentTags + session.tagList).filter { ModelLiveness.isLive($0) && seen.insert($0.uuid).inserted }
+    }
+
+    /// Sets the current segment's tags in place, keeping its label and focus. No-op when idle.
+    static func save(_ tags: [WorkTag], engine: SessionEngine) {
+        guard let segment = engine.currentSegment else { return }
+        let movesSessionTags = sessionTagsFollowSegment(engine)
+        engine.updateCurrentSegment(label: labelToWrite(engine.currentLabel, engine: engine),
+                                    tags: ModelLiveness.live(tags), focus: segment.focus)
+        if movesSessionTags {
+            dropSessionTags(engine)
+        }
+    }
+
+    /// Sets the current segment's label in place, keeping its tags (session-level ones stay where they are) and
+    /// focus. No-op when idle or when `label` is gone.
+    static func saveLabel(_ label: WorkLabel, engine: SessionEngine) {
+        guard let segment = engine.currentSegment, ModelLiveness.isLive(label) else { return }
+        engine.updateCurrentSegment(label: labelToWrite(label, engine: engine),
+                                    tags: ModelLiveness.live(segment.tagList), focus: segment.focus)
+    }
+
+    /// What to hand `updateCurrentSegment` for `label`: a later segment that inherits the session's label
+    /// (`segment.label` nil) keeps inheriting when `label` is that same inherited label, instead of being pinned
+    /// to it. A one-segment session gets `label` as is (the engine also writes it to the session, so nil would
+    /// clear the session's label).
+    static func labelToWrite(_ label: WorkLabel?, engine: SessionEngine) -> WorkLabel? {
+        guard let session = ModelLiveness.live(engine.activeSession), let segment = engine.currentSegment,
+              (session.segments ?? []).count > 1, ModelLiveness.live(segment.label) == nil,
+              let label, let inherited = ModelLiveness.live(session.label),
+              inherited.persistentModelID == label.persistentModelID else { return label }
+        return nil
+    }
+
+    /// The session-level tags were shown as this segment's (now saved there): drop that copy so a tag removed
+    /// from the segment is really gone.
+    static func dropSessionTags(_ engine: SessionEngine) {
+        guard let session = ModelLiveness.live(engine.activeSession) else { return }
+        session.tagList = []
+        session.touch()
+        engine.save()
+    }
+}
+
+/// The running segment's tags as a `LiveTagMenu`, saved as soon as a tag is toggled
+/// (`LiveCurrentSegmentTags.save`). For the menu bar panel and the overlay. `showsSummary` false: just the
+/// tag icon (the caller shows the chips).
+@MainActor
+struct LiveCurrentTagsMenu: View {
+    @Environment(SessionEngine.self) private var engine
+    private let showsSummary: Bool
+
+    init(showsSummary: Bool) {
+        self.showsSummary = showsSummary
+    }
+
+    var body: some View {
+        LiveTagMenu(selection: selection, scopeLabel: engine.currentLabel,
+                    profileID: engine.activeSessionProfileID, showsSummary: showsSummary)
+    }
+
+    private var selection: Binding<[WorkTag]> {
+        Binding(
+            get: { LiveCurrentSegmentTags.editable(engine) },
+            set: { LiveCurrentSegmentTags.save($0, engine: engine) }
+        )
+    }
+}
+
+/// The running segment's label as a native pull-down whose button is the `LabelBadge` itself (no indicator), for
+/// the menu bar panel and the overlay. Lists the labels the split form offers (non-archived, offered in the
+/// session's profile, by sort order; plus the current one when it is archived or not offered), with a checkmark
+/// on the current one. Picking one saves at once (`LiveCurrentSegmentTags.saveLabel`); tags and focus stay.
+/// Native menus never take key status, so this is safe in the menu bar window and the non-activating overlay.
+@MainActor
+struct LiveCurrentLabelMenu: View {
+    @Environment(SessionEngine.self) private var engine
+    @Query(sort: \WorkLabel.sortIndex) private var allLabels: [WorkLabel]
+
+    init() {}
+
+    var body: some View {
+        let current = engine.currentLabel
+        let scope = ProfileScope(profileID: engine.activeSessionProfileID)
+        let items = options(current: current, in: scope)
+        let currentID = current?.persistentModelID
+
+        Menu {
+            ForEach(items) { label in
+                item(for: label, isCurrent: label.persistentModelID == currentID, in: scope)
+            }
+            if items.isEmpty {
+                Text("No labels yet")
+            }
+        } label: {
+            LabelBadge(label: current, size: .small)
+                .contentShape(Rectangle())
+        }
+        .menuStyle(.button)
+        .buttonStyle(.plain)
+        .menuIndicator(.hidden)
+        .fixedSize(horizontal: false, vertical: true)
+        .help("Change label")
+        .accessibilityLabel("Change label")
+        .accessibilityValue(current?.name ?? "Unlabeled")
+    }
+
+    /// Offered active labels, plus the current one when it is archived or not offered (so it shows checked).
+    private func options(current: WorkLabel?, in scope: ProfileScope) -> [WorkLabel] {
+        var list = ModelLiveness.live(allLabels).filter { !$0.isArchived && scope.offers($0) }
+        if let current, !list.contains(where: { $0.persistentModelID == current.persistentModelID }) {
+            list.append(current)
+        }
+        return list
+    }
+
+    private func item(for label: WorkLabel, isCurrent: Bool, in scope: ProfileScope) -> some View {
+        Toggle(isOn: Binding(
+            get: { isCurrent },
+            set: { isOn in
+                if isOn { LiveCurrentSegmentTags.saveLabel(label, engine: engine) }
+            }
+        )) {
+            Label {
+                Text(ScopedItemTitle.title(for: label, in: scope))
+            } icon: {
+                Image(nsImage: LabelMenuIcon.image(symbol: label.symbolName, hex: label.colorHex))
+                    .renderingMode(.original)
+            }
+        }
     }
 }
 
@@ -171,6 +307,8 @@ struct LiveSegmentForm: View {
 /// Native pull-down menu of tags with checkmarks: label-scoped tags first, then global tags, then other labels'
 /// tags in a submenu. Only tags offered in `profileID` are listed (plus any selected tag that isn't, so it can be
 /// removed). Native menus never take key status, so this is safe inside the menu bar window/overlay.
+/// `showsSummary` false: the button is just the tag icon (no names, no indicator); the names stay in the help
+/// and accessibility value.
 @MainActor
 struct LiveTagMenu: View {
     @Environment(\.theme) private var theme
@@ -178,11 +316,13 @@ struct LiveTagMenu: View {
     @Binding private var selection: [WorkTag]
     private let scopeLabel: WorkLabel?
     private let profileID: UUID?
+    private let showsSummary: Bool
 
-    init(selection: Binding<[WorkTag]>, scopeLabel: WorkLabel?, profileID: UUID?) {
+    init(selection: Binding<[WorkTag]>, scopeLabel: WorkLabel?, profileID: UUID?, showsSummary: Bool = true) {
         self._selection = selection
         self.scopeLabel = scopeLabel
         self.profileID = profileID
+        self.showsSummary = showsSummary
     }
 
     var body: some View {
@@ -225,17 +365,21 @@ struct LiveTagMenu: View {
                 Button("Clear tags") { selection = [] }
             }
         } label: {
-            Label(summary, systemImage: "number")
-                .lineLimit(1)
+            if showsSummary {
+                Label(summary, systemImage: "number")
+                    .lineLimit(1)
+            } else {
+                Image(systemName: "number")
+            }
         }
         .menuStyle(.button)
         .buttonStyle(.borderless)
-        .menuIndicator(.visible)
-        .fixedSize(horizontal: false, vertical: true)
+        .menuIndicator(showsSummary ? .visible : .hidden)
+        .fixedSize(horizontal: !showsSummary, vertical: true)
         .foregroundStyle(theme.textSecondary)
         .accessibilityLabel("Tags")
         .accessibilityValue(liveSelection.isEmpty ? "None" : summary)
-        .help("Tags")
+        .help(showsSummary || liveSelection.isEmpty ? "Tags" : "Tags: \(summary)")
     }
 
     /// Never read a tag deleted or merged in Settings while this menu was on screen.

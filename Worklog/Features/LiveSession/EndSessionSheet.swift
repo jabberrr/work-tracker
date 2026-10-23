@@ -58,6 +58,7 @@ private struct EndSessionForm: View {
 
     @State private var confirmDiscard = false
     @State private var showsNotes = false
+    @State private var showsTrello = false
     @State private var showsSegments = false
     @State private var showsLearnings = false
     @FocusState private var titleFocused: Bool
@@ -83,6 +84,7 @@ private struct EndSessionForm: View {
                     fields
                     segmentsReview
                     notesReview
+                    trelloReview
                     learningsReview
                 }
                 .padding(theme.spacingXL)
@@ -333,6 +335,27 @@ private struct EndSessionForm: View {
         }
     }
 
+    /// Trello card activity logged during the session (oldest first), only when there is some. The final check after
+    /// Stop can add entries while the sheet is up; the count follows.
+    @ViewBuilder
+    private var trelloReview: some View {
+        let activities = ModelLiveness.isLive(session) ? ModelLiveness.live(session.sortedTrelloActivities) : []
+        if !activities.isEmpty {
+            DisclosureGroup(isExpanded: $showsTrello) {
+                VStack(alignment: .leading, spacing: theme.spacingXS) {
+                    ForEach(activities, id: \.uuid) { activity in
+                        TrelloActivityRow(activity: activity, isCompact: true)
+                    }
+                }
+                .padding(.top, theme.spacingS)
+            } label: {
+                Label("Trello (\(activities.count))", systemImage: "list.bullet.rectangle")
+                    .font(theme.calloutFont.weight(.medium))
+                    .foregroundStyle(theme.textSecondary)
+            }
+        }
+    }
+
     /// What I learned + learning points (B's editor), collapsed by default.
     private var learningsReview: some View {
         let hasLearnings = !session.learningText.isBlank || !(session.learningPoints ?? []).isEmpty
@@ -428,6 +451,14 @@ private struct EndSessionSegmentRow: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .help(segment.displayFocus)
+                if let tagsText {
+                    Text(tagsText)
+                        .font(theme.captionFont)
+                        .foregroundStyle(theme.textSecondary)
+                        .lineLimit(1)
+                        .truncationMode(.tail)
+                        .help(tagsText)
+                }
                 Spacer(minLength: theme.spacingS)
                 Text(segment.activeDuration().formattedShort)
                     .font(theme.timerCompactFont)
@@ -437,6 +468,12 @@ private struct EndSessionSegmentRow: View {
             .padding(.vertical, theme.spacingXS)
             .accessibilityElement(children: .combine)
         }
+    }
+
+    /// "#bugfix #review", or nil without (live) tags.
+    private var tagsText: String? {
+        let tags = ModelLiveness.live(segment.tagList)
+        return tags.isEmpty ? nil : tags.map { "#\($0.name)" }.joined(separator: " ")
     }
 
     private var timeRange: String {

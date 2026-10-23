@@ -66,6 +66,7 @@ struct SessionDetailView: View {
                         .id(DetailAnchor.notes)
                     DetailAttachmentsSection(session: session)
                         .id(DetailAnchor.images)
+                    DetailTrelloSection(session: session)
                     VStack(alignment: .leading, spacing: theme.spacingS) {
                         SectionHeader("Learnings", systemImage: "lightbulb")
                         LearningsEditor(session: session, style: .full)

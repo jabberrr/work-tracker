@@ -67,12 +67,14 @@ struct SettingsDataTab: View {
         .onAppear { backups.refreshList() }
         .sheet(item: $recoveryRequest) { request in
             SettingsRecoverySheet(request: request)
+                .tint(theme.accent)
         }
         .sheet(item: $pendingImport) { pending in
             SettingsImportSheet(pending: pending) { result in
                 pendingImport = nil
                 message = result
             }
+            .tint(theme.accent)
         }
         .alert(message?.title ?? "", isPresented: Binding(get: { message != nil }, set: { if !$0 { message = nil } }),
                presenting: message) { _ in

@@ -20,6 +20,8 @@ final class AppServices {
     /// The current profile and the profile lists (ARCHITECTURE §12).
     let profiles: ProfileStore
     let engine: SessionEngine
+    /// Optional Trello activity logging (polls only while connected and a session runs on this Mac).
+    let trello: TrelloService
     let exporter: ExportService
     let backups: BackupService
     let overlay: OverlayPanelController
@@ -29,7 +31,7 @@ final class AppServices {
     private var adoptsCloudData = false
 
     /// Order: settings → shortcuts(defaults:) → persistence(cloudSyncEnabled: settings.iCloudSyncEnabled, inMemory:) → sync → themeManager →
-    /// auth → router → profiles(context:settings:) → engine(context:settings:profiles:) → exporter → backups →
+    /// auth → router → profiles(context:settings:) → engine(context:settings:profiles:) → trello → exporter → backups →
     /// overlay(settings:); then data setup:
     /// - previews/tests (`inMemory`): PreviewData.populate;
     /// - store failed to open (in-memory fallback): default labels so the session is usable; on quit, changed data is
@@ -44,7 +46,8 @@ final class AppServices {
     /// stores; with CloudKit `SeedData.isSessionProfileRepairDisplayOnly` makes it display-only; *provisional* when
     /// CloudKit is on and the first import hasn't completed) and deduplicate.
     /// Then profiles.reload(); router.profiles = profiles; router.auth = auth; engine.restoreActiveSession(); profiles.startObserving();
-    /// the provisional-profile follow-up (see `resolveProvisionalProfile`); sync.start(); overlay.install(services: self).
+    /// the provisional-profile follow-up (see `resolveProvisionalProfile`); sync.start(); overlay.install(services: self);
+    /// trello.start() (not for in-memory instances: previews/tests never touch the network or the Keychain token).
     ///
     /// In-memory instances (previews/tests) use a separate UserDefaults suite (emptied at creation) so they never read or change
     /// the user's preferences, and they don't install the overlay panel.
@@ -63,6 +66,7 @@ final class AppServices {
         router = WindowRouter()
         profiles = ProfileStore(context: persistence.mainContext, settings: settings)
         engine = SessionEngine(context: persistence.mainContext, settings: settings, profiles: profiles)
+        trello = TrelloService(context: persistence.mainContext, settings: settings, engine: engine)
         exporter = ExportService(container: persistence.container)
         exporter.localDeviceID = engine.deviceID
         backups = BackupService(exporter: exporter, settings: settings)
@@ -103,6 +107,7 @@ final class AppServices {
             sync.start()
             overlay.install(services: self)
             scheduleShrinkageCheckAfterFirstImport()
+            trello.start()
         }
     }
 
@@ -382,6 +387,7 @@ extension View {
             .environment(services.router)
             .environment(services.profiles)
             .environment(services.engine)
+            .environment(services.trello)
             .environment(services.exporter)
             .environment(services.backups)
             .environment(services.overlay)

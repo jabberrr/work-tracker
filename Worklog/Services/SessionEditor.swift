@@ -308,6 +308,18 @@ enum SessionEditError: LocalizedError {
         if let session { finish(session, in: context) } else { save(context) }
     }
 
+    // MARK: - Trello activity
+
+    /// "Remove from Session": deletes one logged Trello action (it isn't fetched again: `TrelloService` keeps a
+    /// per-session cursor and skips actions it already saw).
+    static func deleteTrelloActivity(_ activity: TrelloActivity, in context: ModelContext) {
+        guard ModelLiveness.isLive(activity) else { return }
+        let session = ModelLiveness.live(activity.session)
+        activity.session = nil
+        context.delete(activity)
+        if let session { finish(session, in: context) } else { save(context) }
+    }
+
     // MARK: - Learning points
 
     /// sortIndex = max+1.

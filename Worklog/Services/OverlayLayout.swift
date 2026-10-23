@@ -8,10 +8,10 @@ enum OverlayElement: String, CaseIterable, Identifiable, Codable, Hashable, Send
 
     var id: String { rawValue }
 
-    /// "Label", "Timer", "Segment focus", "Controls", "Split", "Today’s total", "Quick note", "Takeaway"
+    /// "Label & tags", "Timer", "Segment focus", "Controls", "Split", "Today’s total", "Quick note", "Takeaway"
     var title: String {
         switch self {
-        case .label: "Label"
+        case .label: "Label & tags"
         case .timer: "Timer"
         case .segmentFocus: "Segment focus"
         case .controls: "Controls"

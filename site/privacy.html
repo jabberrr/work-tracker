@@ -93,15 +93,15 @@
   <header>
     <div class="app">Diptychon for Mac</div>
     <h1>Privacy Policy</h1>
-    <p class="meta">Effective October 20, 2026</p>
+    <p class="meta">Effective October 23, 2026</p>
   </header>
 
   <div class="glance" role="note">
     <h2>In short</h2>
     <ul>
-      <li>Diptychon doesn't collect any of your data. The developer can't see your sessions, notes, images or account.</li>
+      <li>Diptychon doesn't collect any of your data. The developer can't see your sessions, notes, images, Trello activity or account.</li>
       <li>Your data stays on your Mac and, if you turn on iCloud sync, in your own private iCloud.</li>
-      <li>No analytics, no ads, no tracking, no third-party services.</li>
+      <li>No analytics, no ads, no tracking. No third-party services unless you connect Trello, and then your Mac talks to Trello directly.</li>
     </ul>
   </div>
 
@@ -112,15 +112,15 @@
 
   <section>
     <h2>Information I collect</h2>
-    <p><strong>None.</strong> Diptychon doesn't send anything you create, or anything about how you use the app, to me or to anyone else. There are no analytics or advertising tools and no third-party code that collects data, and the app doesn't track you across apps or websites.</p>
+    <p><strong>None.</strong> Diptychon doesn't send anything you create, or anything about how you use the app, to me. It doesn't send anything you create to anyone else either. If you connect Trello, Diptychon asks Trello for your card activity while a session runs, so Trello can see when those requests are made; it never sends your sessions, notes or anything else you write to Trello (see <em>Trello</em> below). There are no analytics or advertising tools and no third-party code that collects data, and the app doesn't track you across apps or websites.</p>
   </section>
 
   <section>
     <h2>Where your data is kept</h2>
-    <p>Everything you create in Diptychon stays on your devices or in your iCloud. That includes sessions, segments, titles, labels, tags, profiles, notes, learnings, takeaways and images.</p>
+    <p>Everything you create in Diptychon stays on your devices or in your iCloud. That includes sessions, segments, titles, labels, tags, profiles, notes, learnings, takeaways, images and any Trello activity it logged.</p>
     <ul class="list">
       <li><strong>On your Mac.</strong> Data is saved in Diptychon's private app container, which other apps can't read.</li>
-      <li><strong>In your iCloud, if you turn on sync.</strong> Diptychon uses Apple's CloudKit to keep your Macs in sync through the private database of your Apple Account. Only you can access that database; I can't. Text you write (titles, notes, learnings, takeaways and image captions) is also encrypted with keys from your iCloud Keychain. Apple's <a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener">Privacy Policy</a> covers how iCloud stores data.</li>
+      <li><strong>In your iCloud, if you turn on sync.</strong> Diptychon uses Apple's CloudKit to keep your Macs in sync through the private database of your Apple Account. Only you can access that database; I can't. Text you write (titles, notes, learnings, takeaways and image captions) and the text of logged Trello activity are also encrypted with keys from your iCloud Keychain. Apple's <a href="https://www.apple.com/legal/privacy/" target="_blank" rel="noopener">Privacy Policy</a> covers how iCloud stores data.</li>
       <li><strong>Backups and exports.</strong> Automatic backups are saved on your Mac inside Diptychon's container. Exports are saved only where you choose.</li>
     </ul>
   </section>
@@ -129,6 +129,18 @@
     <h2>Sign in with Apple</h2>
     <p>Signing in is optional. If you sign in, Apple gives Diptychon an anonymous user identifier. The first time you sign in, it may also share your name and email (or a private relay address if you choose <strong>Hide My Email</strong>). Diptychon stores these only in your Mac's Keychain, to show who is signed in. They are never sent to me or to any server.</p>
     <p>Signing out removes the identifier from Diptychon. You can also stop using Sign in with Apple for Diptychon in <span class="path">System Settings › Apple Account › Sign in with Apple</span>.</p>
+  </section>
+
+  <section>
+    <h2>Trello (optional)</h2>
+    <p>Connecting Trello is optional. Nothing is sent to Trello until you connect it in <span class="path">Settings › Integrations › Trello</span>. When you connect, Trello asks you to allow <strong>read-only</strong> access and gives Diptychon a token. Diptychon stores the token only in your Mac's Keychain and never sends it to me.</p>
+    <p>While a session runs on this Mac, Diptychon asks Trello about once a minute for your own card activity: cards you added, moved, completed, archived, renamed or deleted, checklist items you checked, and your comments. You can limit this to some boards. These requests go from your Mac straight to Trello (<span class="path">trello.com</span> and <span class="path">api.trello.com</span>) with your token. Like any visit to Trello, Trello sees each request, including when it's made and your IP address. Diptychon never changes your boards or cards.</p>
+    <p>The entries it logs (card, board and list names, and a short excerpt of a comment or checklist item) are saved with that session on your Mac and, if you turn on sync, in your iCloud, encrypted like your notes. They're also in your backups and exports. None of it reaches me, so Diptychon's App Store privacy answer stays accurate: <strong>Data Not Collected</strong>.</p>
+    <ul class="list">
+      <li>To remove one entry, right-click it in the session and choose <strong>Remove from Session</strong>. Deleting a session removes its entries.</li>
+      <li><strong>Disconnect…</strong> in <span class="path">Settings › Integrations › Trello</span> deletes the token from your Mac and asks Trello to revoke it. Entries already logged stay with your sessions.</li>
+    </ul>
+    <p>Trello's own <a href="https://www.atlassian.com/legal/privacy-policy" target="_blank" rel="noopener">Privacy Policy</a> covers what Trello does with your Trello data.</p>
   </section>
 
   <section>
@@ -142,6 +154,7 @@
     <ul class="list">
       <li><span class="path">Settings › Data › Delete All Data</span> removes every session, label and tag. With iCloud sync on, the deletion syncs to your other Macs and your iCloud.</li>
       <li>Delete Diptychon's backups from the backups list in <span class="path">Settings › Data</span>.</li>
+      <li>To remove the Trello token, click <strong>Disconnect…</strong> in <span class="path">Settings › Integrations › Trello</span>.</li>
       <li>To remove Diptychon's iCloud data, use <span class="path">System Settings › Apple Account › iCloud › Manage</span>.</li>
     </ul>
     <p>Since I don't hold any of your data, there is nothing for me to delete on my side.</p>

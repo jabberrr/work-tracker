@@ -346,6 +346,7 @@ struct OverlayLayoutEditor: View {
         .popover(isPresented: $isAddPresented, arrowEdge: .bottom) {
             addList
                 .environment(\.theme, theme)
+                .tint(theme.accent)
         }
     }
 

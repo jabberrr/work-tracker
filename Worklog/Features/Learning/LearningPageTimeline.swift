@@ -8,7 +8,9 @@ struct LearningPageTimeline: View {
     let groups: [LearningPageGroup]
     /// Tag currently shown (hidden from each row's chips).
     let focusedTagID: UUID?
-    let showsContext: Bool
+    /// Sessions whose notes are quoted under their first point (`LearningPageIndex.sessionsNeedingContext`); empty
+    /// when "Session context" is off.
+    let contextSessionIDs: Set<PersistentIdentifier>
 
     var body: some View {
         LazyVStack(alignment: .leading, spacing: theme.spacingXL) {
@@ -23,7 +25,7 @@ struct LearningPageTimeline: View {
                         LearningPageRow(
                             entry: entry,
                             focusedTagID: focusedTagID,
-                            showsContext: showsContext && isFirstOfSession(entry, at: index, in: group.entries)
+                            showsContext: quotesContext(for: entry, at: index, in: group.entries)
                         )
                     }
                 }
@@ -31,15 +33,17 @@ struct LearningPageTimeline: View {
         }
     }
 
-    /// Context (the session's "What I learned" text) is shown once per session within a group.
-    private func isFirstOfSession(_ entry: LearningPageEntry, at index: Int, in entries: [LearningPageEntry]) -> Bool {
-        guard let session = entry.session else { return false }
+    /// Context (the session's notes) is shown once per session within a group, and only when its notes entry isn't
+    /// listed itself.
+    private func quotesContext(for entry: LearningPageEntry, at index: Int, in entries: [LearningPageEntry]) -> Bool {
+        guard entry.point != nil, let session = entry.session else { return false }
         let id = session.persistentModelID
+        guard contextSessionIDs.contains(id) else { return false }
         return !entries[..<index].contains { $0.session?.persistentModelID == id }
     }
 }
 
-/// One learning point (or a session's free-text learning) on the timeline.
+/// One learning point (or a session's own notes) on the timeline.
 @MainActor
 struct LearningPageRow: View {
     @Environment(\.theme) private var theme
@@ -56,8 +60,17 @@ struct LearningPageRow: View {
     private var text: String {
         switch entry.kind {
         case .point(let point): return point.text.trimmed
-        case .reflection(let session): return session.learningText.trimmed
+        case .reflection(let session):
+            return LearningPageIndex.notesText(of: session) ?? LearningPageIndex.takeaway(of: session) ?? ""
         }
+    }
+
+    /// Notes entry with both texts: the takeaway goes on its own line below "What I learned".
+    private var extraTakeaway: String? {
+        guard case .reflection(let session) = entry.kind, LearningPageIndex.notesText(of: session) != nil else {
+            return nil
+        }
+        return LearningPageIndex.takeaway(of: session)
     }
 
     /// Heuristic: long enough that 6 lines might truncate.
@@ -76,6 +89,9 @@ struct LearningPageRow: View {
 
             VStack(alignment: .leading, spacing: theme.spacingXS + 2) {
                 mainText
+                if let takeaway = extraTakeaway {
+                    takeawayLine(takeaway)
+                }
                 metaLine
                 if showsContext, let context = contextText {
                     contextQuote(context)
@@ -131,9 +147,18 @@ struct LearningPageRow: View {
         }
     }
 
+    private func takeawayLine(_ takeaway: String) -> some View {
+        Label(takeaway, systemImage: "arrow.turn.down.right")
+            .font(theme.calloutFont)
+            .foregroundStyle(theme.textSecondary)
+            .fixedSize(horizontal: false, vertical: true)
+            .textSelection(.enabled)
+            .help("Takeaway for next time")
+            .accessibilityLabel("Takeaway: \(takeaway)")
+    }
+
     private var otherTags: [WorkTag] {
-        guard let point = entry.point else { return [] }
-        return point.tagList
+        entry.tags
             .filter { $0.uuid != focusedTagID }
             .sorted { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
     }
@@ -176,7 +201,7 @@ struct LearningPageRow: View {
 
     private var contextText: String? {
         guard case .point = entry.kind, let session = entry.session else { return nil }
-        return session.learningText.nilIfBlank
+        return LearningPageIndex.notesText(of: session) ?? LearningPageIndex.takeaway(of: session)
     }
 
     private func contextQuote(_ context: String) -> some View {

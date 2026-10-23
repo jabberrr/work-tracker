@@ -85,7 +85,8 @@ struct OverlayView: View {
             isOnAnotherMac: engine.isActiveSessionOnAnotherMac,
             profileName: profile.name,
             profileColorHex: profile.colorHex,
-            longSessionHours: LiveLongSessionRule.warningHours(engine: engine, settings: settings, now: date)
+            longSessionHours: LiveLongSessionRule.warningHours(engine: engine, settings: settings, now: date),
+            tags: LiveCurrentSegmentTags.editable(engine)
         )
     }
 

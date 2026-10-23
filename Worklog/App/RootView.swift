@@ -53,6 +53,7 @@ struct RootView: View {
             engine.finishPendingDiscard()
         }) { session in
             EndSessionSheet(session: session)
+                .tint(theme.accent)
                 .onAppear { isEndSheetVisible = true }
         }
         .onChange(of: engine.pendingEndSession?.uuid) { _, newValue in
@@ -170,25 +171,13 @@ struct RootView: View {
         }
     }
 
-    /// The List's selection. nil while Settings (not a List row) is shown, so no row stays highlighted.
-    private var sidebarSelection: Binding<SidebarItem?> {
-        Binding(
-            get: { router.selection == .settings ? nil : router.selection },
-            set: { newValue in
-                if let newValue { router.selection = newValue }
-            }
-        )
-    }
-
     private var sidebar: some View {
-        List(selection: sidebarSelection) {
-            ForEach(SidebarItem.primaryItems) { item in
-                Label(item.title, systemImage: item.systemImage)
-                    .tag(item)
-            }
+        // nil while Settings (not a row) is shown, so no row stays highlighted.
+        SidebarNavList(selection: router.selection == .settings ? nil : router.selection) { item in
+            collapseProfileList()
+            router.selection = item
         }
-        .listStyle(.sidebar)
-        // A click in the List area also collapses the inline profile list, without swallowing the click: the
+        // A click in the row area also collapses the inline profile list, without swallowing the click: the
         // gesture is simultaneous, so row selection still happens (and `onChange(of: router.selection)` collapses
         // too). Applied BEFORE safeAreaInset, so clicks in the switcher, the mini status row or the footer don't
         // reach it.
@@ -494,5 +483,135 @@ struct RootView: View {
             text = first.lowercased() + text.dropFirst()
         }
         return text
+    }
+}
+
+// MARK: - Sidebar navigation
+
+/// The main sidebar rows (`SidebarItem.primaryItems`), drawn by the app instead of a `.sidebar` List: on macOS a
+/// List's selection highlight (and its Label icon tint) is AppKit's `controlAccentColor`, which ignores `.tint`, so
+/// the chosen accent never reached it. Selected: accent tint fill, accent icon + title; while the sidebar has keyboard
+/// focus, a solid accent fill with `onAccent` content (like a focused native sidebar). Unselected: accent icon,
+/// `textPrimary` title, hover `textPrimary.opacity(0.06)`. ↑/↓ move the selection while focused (a click focuses it);
+/// the View menu shortcuts work anywhere. VoiceOver: a "Sidebar" group of buttons, the current one `.isSelected`.
+@MainActor
+private struct SidebarNavList: View {
+    let selection: SidebarItem?
+    let onSelect: (SidebarItem) -> Void
+    @Environment(\.theme) private var theme
+    @FocusState private var isFocused: Bool
+
+    init(selection: SidebarItem?, onSelect: @escaping (SidebarItem) -> Void) {
+        self.selection = selection
+        self.onSelect = onSelect
+    }
+
+    var body: some View {
+        ScrollView(.vertical) {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(SidebarItem.primaryItems) { item in
+                    row(item)
+                }
+            }
+            .padding(.horizontal, theme.spacingS)
+            .padding(.vertical, theme.spacingXS)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .scrollBounceBehavior(.basedOnSize)
+        .contentShape(Rectangle())
+        // `.edit`: a click focuses it (like a native List), so ↑/↓ work right away; plain `.focusable()` on macOS
+        // may only join the key view loop with Full Keyboard Access on.
+        .focusable(interactions: .edit)
+        .focusEffectDisabled()
+        .focused($isFocused)
+        .onKeyPress(keys: [.upArrow, .downArrow]) { press in
+            move(by: press.key == .upArrow ? -1 : 1)
+            return .handled
+        }
+        .accessibilityElement(children: .contain)
+        .accessibilityLabel("Sidebar")
+    }
+
+    private func row(_ item: SidebarItem) -> some View {
+        let isSelected = item == selection
+        let isEmphasized = isSelected && isFocused
+        return Button {
+            isFocused = true
+            onSelect(item)
+        } label: {
+            HStack(spacing: theme.spacingS) {
+                Image(systemName: item.systemImage)
+                    .foregroundStyle(isEmphasized ? theme.onAccent : theme.accent)
+                    .frame(width: 18 * theme.textScale)
+                    .accessibilityHidden(true)
+                Text(item.title)
+                    .foregroundStyle(isEmphasized ? theme.onAccent : (isSelected ? theme.accent : theme.textPrimary))
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+                Spacer(minLength: 0)
+            }
+        }
+        .buttonStyle(SidebarNavRowStyle(isSelected: isSelected, isEmphasized: isEmphasized))
+        .accessibilityLabel(item.title)
+        .accessibilityAddTraits(isSelected ? .isSelected : [])
+    }
+
+    /// ↑/↓: the neighbouring row (clamped). With no row selected (Settings shows), ↓ picks the first, ↑ the last.
+    private func move(by delta: Int) {
+        let items = SidebarItem.primaryItems
+        guard !items.isEmpty else { return }
+        let target: Int
+        if let current = selection, let index = items.firstIndex(of: current) {
+            target = min(max(index + delta, 0), items.count - 1)
+        } else {
+            target = delta > 0 ? 0 : items.count - 1
+        }
+        guard items[target] != selection else { return }
+        onSelect(items[target])
+    }
+}
+
+/// A sidebar row's fill: `radiusS`, full width, at least 18 pt × `textScale` tall + 2 × 5 pt padding (28 pt at
+/// Standard, like a native sidebar row).
+private struct SidebarNavRowStyle: ButtonStyle {
+    let isSelected: Bool
+    let isEmphasized: Bool
+
+    func makeBody(configuration: Configuration) -> some View {
+        SidebarNavRowBody(configuration: configuration, isSelected: isSelected, isEmphasized: isEmphasized)
+    }
+}
+
+private struct SidebarNavRowBody: View {
+    let configuration: ButtonStyleConfiguration
+    let isSelected: Bool
+    let isEmphasized: Bool
+    @Environment(\.theme) private var theme
+    @State private var isHovering = false
+
+    init(configuration: ButtonStyleConfiguration, isSelected: Bool, isEmphasized: Bool) {
+        self.configuration = configuration
+        self.isSelected = isSelected
+        self.isEmphasized = isEmphasized
+    }
+
+    var body: some View {
+        let shape = RoundedRectangle(cornerRadius: theme.radiusS, style: .continuous)
+        configuration.label
+            .frame(minHeight: 18 * theme.textScale)
+            .padding(.horizontal, theme.spacingS)
+            .padding(.vertical, 5)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(shape.fill(fill))
+            .contentShape(shape)
+            .onHover { isHovering = $0 }
+    }
+
+    private var fill: Color {
+        let pressed = configuration.isPressed
+        if isEmphasized { return theme.accent.opacity(pressed ? 0.85 : 1) }
+        if isSelected { return theme.accent.opacity(theme.tintOpacity + (pressed ? 0.06 : 0)) }
+        if pressed { return theme.textPrimary.opacity(0.10) }
+        return isHovering ? theme.textPrimary.opacity(0.06) : Color.clear
     }
 }

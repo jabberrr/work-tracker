@@ -5,17 +5,21 @@ import SwiftUI
 ///
 /// Left: search + "All" / "Untagged" / tags with counts. Right: the selected tag's points per week (+ average
 /// mastery), then a chronological timeline grouped by month or week, each point linking to its session.
+/// A session's own notes ("What I learned", takeaway) are one untagged entry, listed under "All" and "Untagged".
 ///
-/// Scoped to the current profile: only points and reflections of its sessions (tag rows derive from those).
+/// Scoped to the current profile by each session's effective profile (unassigned sessions included, as in History);
+/// points without a session show in the home profile. Tag rows derive from the listed points.
 @MainActor
 struct LearningView: View {
     @Environment(\.theme) private var theme
     @Environment(AppSettings.self) private var settings
     @Environment(ProfileStore.self) private var profileStore
+    @Environment(\.modelContext) private var modelContext
 
     @Query(sort: \LearningPoint.createdAt, order: .reverse) private var points: [LearningPoint]
-    /// Sessions with free-text learnings (shown under "All" when the session has no learning points).
-    @Query(filter: #Predicate<WorkSession> { $0.learningText != "" }, sort: \WorkSession.startedAt, order: .reverse)
+    /// Sessions with notes of their own: free-text "What I learned" or a takeaway (one entry each).
+    @Query(filter: #Predicate<WorkSession> { $0.learningText != "" || $0.overlaySummary != "" },
+           sort: \WorkSession.startedAt, order: .reverse)
     private var reflectionSessions: [WorkSession]
     @Query private var allTags: [WorkTag]
 
@@ -30,11 +34,13 @@ struct LearningView: View {
 
     var body: some View {
         let scope = profileStore.activeScope
-        let scopedPoints = points.filter { scope.contains($0) }
-        let scopedReflections = scope.filter(reflectionSessions)
-        let index = LearningPageIndex(points: scopedPoints, reflectionSessions: scopedReflections, query: appliedQuery)
+        let scopedPoints = LearningPageIndex.scopedPoints(points, in: scope) {
+            ProfileOps.homeProfile(in: modelContext)?.uuid
+        }
+        let index = LearningPageIndex(points: scopedPoints, reflectionSessions: scope.filter(reflectionSessions),
+                                      query: appliedQuery)
         Group {
-            if index.totalPointCount == 0 && scopedReflections.allSatisfy({ $0.learningText.isBlank }) {
+            if index.isEmpty {
                 LearningPageEmptyState()
             } else {
                 HStack(spacing: 0) {
@@ -100,6 +106,8 @@ struct LearningView: View {
                 }
             }
             .listStyle(.sidebar)
+            // Sidebar Label icons ("All", "Untagged") take the list item tint, not `.tint`.
+            .listItemTint(theme.accent)
         }
         .themedBackground(.sidebar)
     }
@@ -156,6 +164,7 @@ struct LearningView: View {
     private func detail(_ index: LearningPageIndex) -> some View {
         let filter = currentFilter
         let entries = index.entries(for: filter)
+        let contextSessionIDs = LearningPageIndex.sessionsNeedingContext(in: entries)
         let focusedTag: WorkTag? = {
             if case .tag(let id) = filter { return tag(for: id) }
             return nil
@@ -181,13 +190,13 @@ struct LearningView: View {
                     if entries.contains(where: { $0.point != nil }) {
                         LearningPageActivityChart(entries: entries, mondayFirst: settings.weekStartsOnMonday)
                     }
-                    timelineControls
+                    timelineControls(offersContext: !contextSessionIDs.isEmpty)
                     LearningPageTimeline(
                         groups: LearningPageIndex.groups(entries, by: grouping,
                                                          mondayFirst: settings.weekStartsOnMonday,
                                                          newestFirst: newestFirst),
                         focusedTagID: focusedTag?.uuid,
-                        showsContext: showsContext
+                        contextSessionIDs: showsContext ? contextSessionIDs : []
                     )
                 }
                 .padding(theme.spacingXL)
@@ -217,17 +226,19 @@ struct LearningView: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                     .accessibilityAddTraits(.isHeader)
-                if let parent = tag?.label {
+                if let parent = ModelLiveness.live(tag?.label) {
                     LabelBadge(label: parent, size: .small)
                 }
                 Spacer(minLength: theme.spacingS)
-                Text("\(pointCount) \(pointCount == 1 ? "point" : "points")")
+                Text(pointCount > 0 || reflectionCount == 0
+                     ? Self.counted(pointCount, "point", "points")
+                     : Self.counted(reflectionCount, "session note", "session notes"))
                     .font(theme.calloutFont)
                     .monospacedDigit()
                     .foregroundStyle(theme.textSecondary)
             }
             if let first = dates.min(), let last = dates.max() {
-                Text(spanDescription(first: first, last: last, reflections: reflectionCount))
+                Text(spanDescription(first: first, last: last, reflections: pointCount > 0 ? reflectionCount : 0))
                     .font(theme.captionFont)
                     .foregroundStyle(theme.textTertiary)
             }
@@ -240,12 +251,17 @@ struct LearningView: View {
             ? first.formatted(style)
             : "\(first.formatted(style)) – \(last.formatted(style))"
         if reflections > 0 {
-            text += " · \(reflections) \(reflections == 1 ? "session note" : "session notes")"
+            text += " · " + Self.counted(reflections, "session note", "session notes")
         }
         return text
     }
 
-    private var timelineControls: some View {
+    private static func counted(_ count: Int, _ singular: String, _ plural: String) -> String {
+        "\(count) \(count == 1 ? singular : plural)"
+    }
+
+    /// - Parameter offersContext: some listed point has session notes that aren't listed themselves.
+    private func timelineControls(offersContext: Bool) -> some View {
         HStack(spacing: theme.spacingM) {
             Picker("Group by", selection: $grouping) {
                 ForEach(LearningPageGrouping.allCases) { item in
@@ -270,9 +286,11 @@ struct LearningView: View {
 
             Spacer(minLength: theme.spacingS)
 
-            Toggle("Session context", isOn: $showsContext)
-                .toggleStyle(.checkbox)
-                .help("Show session context")
+            if offersContext {
+                Toggle("Session context", isOn: $showsContext)
+                    .toggleStyle(.checkbox)
+                    .help("Show each session’s notes under its first point")
+            }
         }
         .font(theme.calloutFont)
     }

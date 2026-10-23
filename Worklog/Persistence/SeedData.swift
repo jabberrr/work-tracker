@@ -154,7 +154,8 @@ import SwiftData
     ///
     /// Order: profiles (identity by the label rules; the attributes of the most recently modified copy win; sessions,
     /// labels and tags of a duplicate move to the survivor) → labels → tags (copies scoped to different profiles: the
-    /// survivor becomes global) → sessions → `repairSessionProfilesIfAllowed` (skipped in CloudKit mode) → save if
+    /// survivor becomes global) → sessions → Trello activities (one row per action id within a session) →
+    /// `repairSessionProfilesIfAllowed` (skipped in CloudKit mode) → save if
     /// anything changed. Nothing here touches a session's modifiedAt.
     static func deduplicate(in context: ModelContext) {
         var changed = false
@@ -162,6 +163,7 @@ import SwiftData
         changed = deduplicateLabels(in: context) || changed
         changed = deduplicateTags(in: context) || changed
         changed = deduplicateSessions(in: context) || changed
+        changed = deduplicateTrelloActivities(in: context) || changed
         changed = repairSessionProfilesIfAllowed(in: context) > 0 || changed
         guard changed else { return }
         ProfileOps.invalidateHomeProfileCache()
@@ -329,9 +331,34 @@ import SwiftData
         return changed
     }
 
-    /// Re-parents to `survivor` the notes, learning points and images of `duplicate` whose uuid the survivor doesn't
-    /// have, and fills image bytes the survivor's same-uuid attachment is missing. Never touches either session's
-    /// modifiedAt. Does not save. (Internal for tests.)
+    /// The same Trello action logged twice in one session (e.g. by two Macs before their copies synced): keeps one
+    /// row per action id. The survivor is the smallest uuid (a synced value, so every Mac keeps the same row); when
+    /// the two best copies share a uuid nothing is deleted (see the identical-copies rule above).
+    private static func deduplicateTrelloActivities(in context: ModelContext) -> Bool {
+        let activities = ModelLiveness.live((try? context.fetch(FetchDescriptor<TrelloActivity>())) ?? [])
+        struct Key: Hashable { var session: ObjectIdentifier; var actionID: String }
+        var groups: [Key: [TrelloActivity]] = [:]
+        for activity in activities where !activity.actionID.isEmpty {
+            guard let session = ModelLiveness.live(activity.session) else { continue }
+            groups[Key(session: ObjectIdentifier(session), actionID: activity.actionID), default: []].append(activity)
+        }
+        var changed = false
+        for group in groups.values where group.count > 1 {
+            guard let pick = pickSurvivor(group, precedes: { (lhs: TrelloActivity, rhs: TrelloActivity) -> Bool? in
+                lhs.uuid == rhs.uuid ? nil : (lhs.uuid.uuidString < rhs.uuid.uuidString)
+            }) else { continue }
+            for duplicate in pick.duplicates where duplicate.uuid != pick.survivor.uuid {
+                duplicate.session = nil
+                context.delete(duplicate)
+                changed = true
+            }
+        }
+        return changed
+    }
+
+    /// Re-parents to `survivor` the notes, learning points, images and Trello activities (also skipping an action id
+    /// the survivor has) of `duplicate` whose uuid the survivor doesn't have, and fills image bytes the survivor's
+    /// same-uuid attachment is missing. Never touches either session's modifiedAt. Does not save. (Internal for tests.)
     static func absorbChildren(of duplicate: WorkSession, into survivor: WorkSession) {
         var survivorAttachments: [UUID: Attachment] = [:]
         for attachment in ModelLiveness.live(survivor.attachments ?? []) where survivorAttachments[attachment.uuid] == nil {
@@ -365,6 +392,16 @@ import SwiftData
         for point in ModelLiveness.live(duplicate.learningPoints ?? []) where !pointIDs.contains(point.uuid) {
             point.session = survivor
             pointIDs.insert(point.uuid)
+        }
+
+        let survivorActivities = ModelLiveness.live(survivor.trelloActivities ?? [])
+        var activityIDs = Set(survivorActivities.map(\.uuid))
+        var actionIDs = Set(survivorActivities.map(\.actionID).filter { !$0.isEmpty })
+        for activity in ModelLiveness.live(duplicate.trelloActivities ?? [])
+        where !activityIDs.contains(activity.uuid) && (activity.actionID.isEmpty || !actionIDs.contains(activity.actionID)) {
+            activity.session = survivor
+            activityIDs.insert(activity.uuid)
+            if !activity.actionID.isEmpty { actionIDs.insert(activity.actionID) }
         }
     }
 

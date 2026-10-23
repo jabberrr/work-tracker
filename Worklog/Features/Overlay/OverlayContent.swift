@@ -45,6 +45,10 @@ struct OverlayDisplayData {
     var profileColorHex: String? = nil
     /// Live only: whole hours of a session past the long-session threshold ("Still working?"), else nil.
     var longSessionHours: Int? = nil
+    /// The current segment's tags (`LiveCurrentSegmentTags.editable`), shown with the label.
+    var tags: [WorkTag] = []
+    /// Preview only: a sample tag chip shown with the label (the sample has no real tags).
+    var previewTagName: String? = nil
 
     var isActive: Bool { status != .idle }
     var isPaused: Bool { status == .paused }
@@ -56,7 +60,7 @@ struct OverlayDisplayData {
         return (profile.displayName, profile.colorHex)
     }
 
-    /// Preview data: 1:12:40 elapsed, segment 24:10, focus "Refactor parser", today 2h 15m.
+    /// Preview data: 1:12:40 elapsed, segment 24:10, focus "Refactor parser", tag "parser", today 2h 15m.
     /// `takeaway` nil uses a sample takeaway, so the preview always shows that element.
     static func sample(status: Status, label: WorkLabel?, takeaway: SessionTakeaway?,
                        profileName: String? = nil, profileColorHex: String? = nil) -> OverlayDisplayData {
@@ -72,7 +76,8 @@ struct OverlayDisplayData {
             hasPendingReview: false,
             isOnAnotherMac: false,
             profileName: profileName,
-            profileColorHex: profileColorHex
+            profileColorHex: profileColorHex,
+            previewTagName: "parser"
         )
     }
 
@@ -442,7 +447,7 @@ struct OverlayElementView: View {
     private var content: some View {
         switch element {
         case .label:
-            LabelBadge(label: data.label, size: .small)
+            labelAndTags
         case .timer:
             timer
         case .segmentFocus:
@@ -471,6 +476,35 @@ struct OverlayElementView: View {
     }
 
     // MARK: Pieces
+
+    /// The label, then the segment's tags as chips that give way to "+N", then (live) the tag menu. Live and
+    /// active, the label badge is itself the label menu ("Change label"). Both are native menus, so they work from
+    /// the non-activating panel without taking key status.
+    private var labelAndTags: some View {
+        HStack(spacing: theme.spacingXS) {
+            Group {
+                if isLive && data.isActive {
+                    LiveCurrentLabelMenu()
+                } else {
+                    LabelBadge(label: data.label, size: .small)
+                }
+            }
+            .layoutPriority(1)
+            if !data.tags.isEmpty {
+                TagChipsLine(tags: data.tags)
+            } else if let name = data.previewTagName {
+                TagChip(name: name, colorHex: LabelPalette.defaultTagHex)
+            }
+            if isLive && data.isActive {
+                LiveCurrentTagsMenu(showsSummary: false)
+                    .layoutPriority(2)
+            } else if !isLive {
+                Image(systemName: "number")
+                    .foregroundStyle(theme.textSecondary)
+                    .accessibilityHidden(true)
+            }
+        }
+    }
 
     private var focusText: String {
         let focus = data.focus.trimmed
